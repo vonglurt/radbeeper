@@ -1121,3 +1121,90 @@ class TestBarRows(unittest.TestCase):
     def test_all_zeroes_do_not_divide_by_zero(self):
         rows = radbeeper.bar_rows(self.samples([0, 0, 0]), 3, 4)
         self.assertEqual(rows, [" " * 3] * 4)
+
+
+class TestSpectrumLadder(unittest.TestCase):
+    """Several windows at once, so resolution grows with observation time.
+
+    Frequency resolution is 1/T and there is no way round it: a long window
+    resolves finely and waits a long time to say anything. Running them side
+    by side gives up neither.
+    """
+
+    def test_the_short_rung_answers_first(self):
+        lad = radbeeper.SpectrumLadder(windows=(8, 32))
+        for _ in range(8):
+            lad.add(1)
+        self.assertEqual(lad.best().window, 8)
+
+    def test_the_fine_rung_takes_over_once_it_has_enough(self):
+        lad = radbeeper.SpectrumLadder(windows=(8, 32))
+        for i in range(200):
+            lad.add(i % 3)
+        self.assertEqual(lad.best().window, 32)
+
+    def test_before_anything_has_closed_it_offers_the_soonest(self):
+        lad = radbeeper.SpectrumLadder(windows=(8, 32))
+        lad.add(1)
+        best = lad.best()
+        self.assertEqual(best.window, 8)
+        self.assertGreater(best.wait(), 0)
+
+    def test_every_rung_sees_every_sample(self):
+        lad = radbeeper.SpectrumLadder(windows=(8, 16))
+        for _ in range(64):
+            lad.add(2)
+        self.assertTrue(all(r.runs > 0 for r in lad.rungs))
+        # 64 samples, half-overlapped: 8-wide closes far more often than 16.
+        self.assertGreater(lad.rungs[0].runs, lad.rungs[1].runs)
+
+
+class TestOverlapAndSignificance(unittest.TestCase):
+    def test_half_overlap_gets_two_averages_from_one_window(self):
+        # Welch rather than Bartlett: the buffer keeps its second half, so a
+        # window's worth of new data closes two windows, not one.
+        spec = radbeeper.Spectrum(window=16)
+        for _ in range(16):
+            spec.add(1)
+        self.assertEqual(spec.runs, 1)
+        for _ in range(8):
+            spec.add(1)
+        self.assertEqual(spec.runs, 2)
+
+    def test_significance_needs_no_stored_variance(self):
+        # Each bin of one periodogram of white noise is exponential, so the
+        # average of N has relative scatter 1/sqrt(N) exactly -- arithmetic on
+        # the count of windows, not a variance accumulated beside it.
+        spec = radbeeper.Spectrum(window=16)
+        spec.runs = 100
+        self.assertAlmostEqual(spec.independent(), 100 * 9.0 / 11.0)
+        # Twice the mean, after 100 windows, is many sigma.
+        self.assertGreater(spec.sigma(2.0), 9.0)
+        # The same excess after one window is not.
+        spec.runs = 1
+        self.assertLess(spec.sigma(2.0), 1.5)
+
+
+class TestBigNumber(unittest.TestCase):
+    """Six-row digits, for the number read from across the room."""
+
+    def test_every_digit_is_six_rows(self):
+        for ch in "0123456789":
+            self.assertEqual(len(radbeeper.big_number(ch)), 6)
+
+    def test_the_rows_of_one_number_are_all_the_same_width(self):
+        rows = radbeeper.big_number("1234.5")
+        self.assertEqual(len(set(len(r) for r in rows)), 1)
+
+    def test_digits_are_drawn_and_gaps_are_not(self):
+        rows = radbeeper.big_number("8")
+        self.assertTrue(all("█" in r for r in rows))
+        self.assertNotIn("█", "".join(radbeeper.big_number(" ")))
+
+    def test_a_dash_is_a_middle_bar_and_nothing_else(self):
+        rows = radbeeper.big_number("-")
+        self.assertEqual([bool("█" in r) for r in rows],
+                         [False, False, True, False, False, False])
+
+    def test_unknown_characters_are_skipped_not_crashed_on(self):
+        self.assertEqual(radbeeper.big_number("9x9"), radbeeper.big_number("99"))

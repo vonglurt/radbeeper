@@ -94,10 +94,16 @@ FLASH_SIZES = {"GMC-320": 0x100000, "GMC-300": 0x10000, "GMC-500": 0x100000,
                "GMC-600": 0x100000}
 SPIR_CHUNK = 2048
 
-# The accumulating spectrum. 128 samples at one a second is a window of just
-# over two minutes, resolving periods from 2 seconds to 128; a longer window
-# resolves slower things but waits longer before it can say anything at all.
-SPECTRUM_WINDOW = 128
+# The accumulating spectrum. 512 samples at one a second resolves periods from
+# 2 seconds to 512, in 255 bins -- about two per column of a wide terminal.
+#
+# RESOLUTION COSTS TIME AND THERE IS NO WAY ROUND IT. You cannot resolve a
+# 512-second period in 128 seconds of listening; frequency resolution is 1/T
+# for an observation of length T, and that is physics rather than a limitation
+# of the code. So a longer window is strictly better in the end and strictly
+# slower to say anything, and the first answer here arrives after eight and a
+# half minutes. --spectrum-window trades one for the other.
+SPECTRUM_WINDOW = 512
 
 # The service log: tab-separated, one row per LOG_EVERY seconds, one file per
 # month. LOG_NAME is the single undated file older versions wrote; it is
@@ -683,6 +689,23 @@ class Spectrum:
                       for i in range(window)]
 
     def add(self, counts):
+        """One sample in. True when that closed a window.
+
+        THE MEMORY IS FIXED AND SMALL, whatever the run length. One window of
+        samples and one float per bin -- about six kilobytes at the default,
+        the same after five minutes as after five weeks. There is nothing to
+        keep per elapsed hour: a running sum of periodograms IS the average,
+        given the count of them, so the whole history compresses into the
+        numbers already there.
+
+        HALF-OVERLAPPED WINDOWS, which is Welch's method rather than
+        Bartlett's. Dropping only half the buffer and transforming again gets
+        two averages out of every window's worth of data instead of one, so
+        the noise settles about 1.4 times faster for the same waiting. The
+        segments share half their samples so they are not quite independent --
+        the scatter falls as though there were 9/11 as many, which is what
+        `independent` below reports and what the significance is judged on.
+        """
         self.buf.append(float(counts))
         if len(self.buf) < self.window:
             return False
@@ -692,12 +715,39 @@ class Spectrum:
         for i in range(self.bins):
             self.power[i] += abs(spec[i]) ** 2
         self.runs += 1
-        self.buf = []
+        del self.buf[:self.window // 2]
         return True
+
+    def independent(self):
+        """Effective number of independent averages, for the overlap."""
+        return self.runs * 9.0 / 11.0 if self.runs > 1 else self.runs
+
+    def sigma(self, rel):
+        """How many standard deviations above flat a relative power is.
+
+        NO EXTRA STATE IS NEEDED FOR THIS, which is the pleasant part. Each
+        bin of one periodogram of white noise is exponentially distributed --
+        its standard deviation equals its own mean -- so the average of N has
+        a relative scatter of exactly 1/sqrt(N). The threshold is arithmetic
+        on the number of windows, not a variance that has to be accumulated
+        alongside.
+        """
+        n = self.independent()
+        if n < 1:
+            return 0.0
+        return (rel - 1.0) * math.sqrt(n)
 
     def wait(self):
         """Samples still needed before the first window closes."""
         return 0 if self.runs else self.window - len(self.buf)
+
+    def loudest(self):
+        """(relative power, bin index) of the biggest bin, or (0, 0)."""
+        rel = self.relative()
+        if not rel:
+            return 0.0, 0
+        top = max(rel)
+        return top, rel.index(top)
 
     def averaged(self):
         """Mean power per bin, DC dropped. Empty until a window has closed."""
@@ -726,6 +776,47 @@ class Spectrum:
         return self.window / (k * rate)
 
 
+class SpectrumLadder:
+    """Several windows at once, so resolution grows with observation time.
+
+    THE TENSION THIS RESOLVES. Frequency resolution is 1/T for an observation
+    of length T -- you cannot resolve a 512-second period in 128 seconds of
+    listening, and that is physics, not an implementation. So a long window is
+    strictly better in the end and strictly slower to say anything at all, and
+    picking one means picking which of those to give up.
+
+    Running them side by side gives up neither. The 128-second window answers
+    after two minutes; the 512-second one takes eight and a half but resolves
+    four times as finely, and by the time it has anything to say it is the
+    better answer. The display shows the finest window that has enough
+    averages to be worth believing and falls back as far as it must.
+
+    It costs one buffer and one float per bin per rung -- about ten kilobytes
+    for the three of them, fixed for the life of the process. Each rung sees
+    the same samples; nothing is copied per elapsed hour.
+    """
+
+    def __init__(self, windows=(128, 256, 512)):
+        self.rungs = [Spectrum(w) for w in sorted(windows)]
+
+    def add(self, counts):
+        closed = False
+        for rung in self.rungs:
+            closed = rung.add(counts) or closed
+        return closed
+
+    def best(self, least=2):
+        """The finest rung with `least` windows behind it, else the coarsest
+        that has any, else the one closest to saying something."""
+        for rung in reversed(self.rungs):
+            if rung.runs >= least:
+                return rung
+        for rung in reversed(self.rungs):
+            if rung.runs:
+                return rung
+        return min(self.rungs, key=lambda r: r.wait())
+
+
 def spectrum_columns(rel, width):
     """Fold the bins onto the columns the screen actually has.
 
@@ -750,9 +841,16 @@ class Windows:
     """Counts per second in, three running CPM averages out.
 
     A deque per window would be three copies of the same data. One list of
-    (time, counts) covering the longest window serves all three, and each
-    average is a sum over its own tail -- 300 samples is nothing to walk once
-    a second, and the alternative is three ring buffers that can disagree.
+    (time, counts) covering the longest window serves all three.
+
+    EACH WINDOW KEEPS A RUNNING SUM rather than re-adding its samples. The
+    obvious version -- sum the tail on every call -- is O(samples x window),
+    which nobody notices at one sample a second and which cost sixteen and a
+    half seconds when a backfill pushed 850,000 samples through it: 765
+    million additions to produce 28,000 rows. Adding the new sample and
+    subtracting the ones that fell out the back is O(1) per window per sample,
+    and the same work drops to under a second. The number that made this worth
+    doing was measured, not guessed.
     """
 
     def __init__(self, spans=(3, 30, 300)):
@@ -761,16 +859,35 @@ class Windows:
         self.samples = []
         self.total = 0
         self.started = None
+        # Per span: the running sum, and an absolute index of the oldest
+        # sample still inside it. Absolute, because the front of the list is
+        # discarded as it ages -- `base` is how many have gone.
+        self.sums = [0] * len(self.spans)
+        self.heads = [0] * len(self.spans)
+        self.base = 0
 
     def add(self, when, counts):
         if self.started is None:
             self.started = when
         self.samples.append((when, counts))
         self.total += counts
-        cutoff = when - self.longest
-        # Keep one sample beyond the window so a full window is recognisable.
-        while len(self.samples) > 2 and self.samples[0][0] < cutoff:
-            self.samples.pop(0)
+        for i, span in enumerate(self.spans):
+            self.sums[i] += counts
+            cutoff = when - span
+            head = self.heads[i]
+            while head - self.base < len(self.samples):
+                t, c = self.samples[head - self.base]
+                if t > cutoff:
+                    break
+                self.sums[i] -= c
+                head += 1
+            self.heads[i] = head
+        # Discard what no window can still reach. One sample beyond the
+        # longest is kept so a full window is recognisable.
+        keep = min(self.heads) - 1
+        if keep > self.base:
+            del self.samples[:keep - self.base]
+            self.base = keep
 
     def elapsed(self):
         if self.started is None:
@@ -786,10 +903,7 @@ class Windows:
         """
         if not self.samples or self.elapsed() < span:
             return None
-        now = self.samples[-1][0]
-        cutoff = now - span
-        counts = sum(c for t, c in self.samples if t > cutoff)
-        return counts * 60.0 / span
+        return self.sums[self.spans.index(span)] * 60.0 / span
 
     def usvh(self, span, cpm_per_usvh):
         cpm = self.average(span)
@@ -954,6 +1068,40 @@ def sparkline(samples, width):
                    for _t, c in tail)
 
 
+# A six-row digit, four columns wide, so the number somebody actually reads
+# across the room is legible from across the room. Rendered from the same
+# block glyph the charts use, which is the only reason it needs no font.
+BIG_DIGITS = {
+    "0": ("1111", "1001", "1001", "1001", "1001", "1111"),
+    "1": ("0010", "0110", "0010", "0010", "0010", "0111"),
+    "2": ("1111", "0001", "0001", "1111", "1000", "1111"),
+    "3": ("1111", "0001", "0111", "0001", "0001", "1111"),
+    "4": ("1001", "1001", "1111", "0001", "0001", "0001"),
+    "5": ("1111", "1000", "1111", "0001", "0001", "1111"),
+    "6": ("1111", "1000", "1111", "1001", "1001", "1111"),
+    "7": ("1111", "0001", "0010", "0010", "0100", "0100"),
+    "8": ("1111", "1001", "1111", "1001", "1001", "1111"),
+    "9": ("1111", "1001", "1111", "0001", "0001", "1111"),
+    ".": ("00", "00", "00", "00", "00", "11"),
+    "-": ("0000", "0000", "1111", "0000", "0000", "0000"),
+    " ": ("00", "00", "00", "00", "00", "00"),
+}
+BIG_ROWS = 6
+
+
+def big_number(text, on="\u2588", off=" "):
+    """`text` as six rows of block glyphs. Unknown characters are skipped."""
+    rows = [""] * BIG_ROWS
+    for ch in text:
+        glyph = BIG_DIGITS.get(ch)
+        if glyph is None:
+            continue
+        for r in range(BIG_ROWS):
+            rows[r] += "".join(on if bit == "1" else off for bit in glyph[r])
+            rows[r] += off
+    return rows
+
+
 def bar_rows(samples, width, height=4):
     """The counts as a column chart `height` terminal rows tall.
 
@@ -981,7 +1129,7 @@ def bar_rows(samples, width, height=4):
 def run_curses(counter, w, args):
     import curses
 
-    spec = Spectrum()
+    ladder = SpectrumLadder()
 
     def draw(stdscr):
         curses.curs_set(0)
@@ -1004,7 +1152,8 @@ def run_curses(counter, w, args):
 
         for when, counts in counter.samples():
             w.add(when, counts)
-            spec.add(counts)
+            ladder.add(counts)
+            spec = ladder.best()
             stdscr.erase()
             h, width = stdscr.getmaxyx()
             title = "radbeeper %s -- %s" % (VERSION, counter.version)
@@ -1036,74 +1185,101 @@ def run_curses(counter, w, args):
             row += 1
             stdscr.addnstr(row, 0, "run  %d counts in %ds"
                            % (w.total, int(w.elapsed())), width - 1)
+
+            # THE NUMBER, BIG, to the right of the three small ones. The 30s
+            # window is the one to put in six-row digits: 3s is too jumpy to
+            # read as a headline and 300s is too slow to react to anything
+            # somebody is doing with their hands.
+            headline = w.average(30) if 30 in w.spans else w.average(w.spans[-1])
+            digits = big_number("--" if headline is None
+                                else "%.0f" % headline)
+            wide = max(len(d) for d in digits)
+            # Clear of the serial on the line above, which runs to about 50.
+            left = 54
+            if width > left + wide + 6 and h > 2 + BIG_ROWS:
+                attr = band(headline) if headline is not None else curses.A_DIM
+                for i, line in enumerate(digits):
+                    stdscr.addnstr(1 + i, left, line, width - left - 1, attr)
+                stdscr.addnstr(1 + BIG_ROWS, left,
+                               "CPM over %ds"
+                               % (30 if 30 in w.spans else w.spans[-1]),
+                               width - left - 1, curses.A_DIM)
             row += 2
             if width > 20:
-                # As tall as there is room for, up to four rows, so the shape
-                # of the last few minutes is readable and not just present.
-                tall = max(1, min(4, h - row - 7))
+                # COLOURED BY WHAT IT MEANS, not by what it is. A column is
+                # one second, so its count times sixty is the rate it implies,
+                # and it takes the same calm/raised/high bands as the numbers
+                # above -- a spike that would read red up there reads red down
+                # here, without anybody converting in their head.
+                tail = w.samples[-(width - 1):]
+                tall = max(1, min(4, h - row - 9))
                 for i, line in enumerate(bar_rows(w.samples, width - 1, tall)):
-                    stdscr.addnstr(row + i, 0, line, width - 1,
-                                   curses.color_pair(4) if use_colour else 0)
+                    for x, glyph in enumerate(line):
+                        if glyph == " ":
+                            continue
+                        c = tail[x][1] if x < len(tail) else 0
+                        pair = (curses.color_pair(
+                            {"calm": 4, "raised": 2, "high": 3}[level(c * 60.0)])
+                            if use_colour else 0)
+                        try:
+                            stdscr.addstr(row + i, x, glyph, pair)
+                        except curses.error:
+                            break
                 row += tall
-            row += 2
+            row += 1
 
             # The spectrum, which is flat when everything is well. See the
-            # Spectrum class for why that is the useful answer and not a
-            # missing feature.
-            if h > row + 3 and width > 30:
+            # Spectrum class for why that is the useful answer.
+            if h > row + 5 and width > 30:
                 rel = spec.relative()
                 if not rel:
                     left = spec.wait()
                     stdscr.addnstr(row, 0,
                                    "spectrum   accumulating, %ds to the first"
-                                   " window" % left, width - 1, curses.A_DIM)
+                                   " window of %d" % (left, spec.window),
+                                   width - 1, curses.A_DIM)
                 else:
                     cols = spectrum_columns(rel, width - 1)
-                    top = max(cols)
-                    where = cols.index(top)
-                    bins = len(rel)
-                    secs = spec.period(int(where * bins / max(1, len(cols))))
-                    if top < 3.0:
+                    top, where = spec.loudest()
+                    z = spec.sigma(top)
+                    secs = spec.period(where)
+                    if z < 3.0:
                         verdict = ("flat -- arrivals look random, as decay "
                                    "should")
                         attr = curses.A_DIM
                     else:
-                        verdict = ("peak at %.0fs, %.1fx the mean -- something"
-                                   " periodic" % (secs, top))
-                        attr = (curses.color_pair(2 if top < 6 else 3)
-                                | curses.A_BOLD) if use_colour \
-                            else curses.A_BOLD
+                        verdict = ("peak at %.0fs, %.1fx the mean, %.1f sigma"
+                                   % (secs, top, z))
+                        attr = ((curses.color_pair(2 if z < 5 else 3)
+                                 | curses.A_BOLD) if use_colour
+                                else curses.A_BOLD)
                     stdscr.addnstr(row, 0, "spectrum   %s (%d windows)"
                                    % (verdict, spec.runs), width - 1, attr)
                     row += 1
-                    # One column per screen column, height by log power and
-                    # colour by how far above flat it is.
-                    for i, v in enumerate(cols):
-                        # NOT `level`: that is a module-level function this
-                        # same closure calls through band(), and binding the
-                        # name here makes it a local of draw() for the whole
-                        # function -- so band() raises NameError on the first
-                        # row it colours, long before this loop is reached.
-                        height = min(len(SPARK) - 1,
-                                     int(math.log(max(v, 0.05), 2) + 3))
-                        glyph = SPARK[max(0, height)]
-                        if not use_colour:
-                            pair = 0
-                        elif v >= 6.0:
-                            pair = curses.color_pair(3) | curses.A_BOLD
-                        elif v >= 3.0:
-                            pair = curses.color_pair(2)
-                        else:
-                            pair = curses.color_pair(4)
-                        try:
-                            stdscr.addstr(row, i, glyph, pair)
-                        except curses.error:
-                            break
-                    row += 1
+                    # Four rows here too, and coloured by significance rather
+                    # than by height: a bin twice the mean is exciting after
+                    # fifty windows and meaningless after two, and the colour
+                    # is the only place that difference can show.
+                    tall = max(1, min(4, h - row - 3))
+                    fake = [(0.0, v) for v in cols]
+                    for i, line in enumerate(bar_rows(fake, len(cols), tall)):
+                        for x, glyph in enumerate(line):
+                            if glyph == " ":
+                                continue
+                            zc = spec.sigma(cols[x])
+                            pair = (curses.color_pair(
+                                3 if zc >= 5 else 2 if zc >= 3 else 4)
+                                if use_colour else 0)
+                            if use_colour and zc >= 5:
+                                pair |= curses.A_BOLD
+                            try:
+                                stdscr.addstr(row + i, x, glyph, pair)
+                            except curses.error:
+                                break
+                    row += tall
                     if h > row + 1:
-                        # Bin 1 is the slowest thing the window can see and
-                        # the last bin is the fastest, so the axis runs from
-                        # long periods on the left to short ones on the right.
+                        # Bin 1 is the slowest thing the window can see and the
+                        # last bin the fastest, so the axis runs long to short.
                         lo = "%ds" % spec.window
                         hi = "2s"
                         gap = max(1, (width - 1) - len(lo) - len(hi))
@@ -2545,6 +2721,9 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
       "every window reached since the last one, so a source that came and "
       "went between two rows still leaves a trace.</p>")
     shot("log-output", "the log on disk, and what a row holds")
+    a("<p>Tabs are invisible, and that matters here: an <strong>empty field is "
+      "not a zero</strong>, it is a window that was not full yet.</p>")
+    shot("log-tabs", "the same rows with every tab made visible")
     a("<p>The counter also records to its own flash whether or not anything "
       "is listening. <code>radbeeper backfill</code> reads that back and "
       "fills the gaps &mdash; one row per slot, never over a live "
@@ -2588,7 +2767,7 @@ def cmd_export(args):
     # images.
     shots = {}
     for name in ("probe", "watch", "watch-filling", "watch-spectrum",
-                 "watch-plain", "log-output", "commands"):
+                 "watch-plain", "log-output", "log-tabs", "commands"):
         rel = os.path.join("docs", "screenshots", name + ".png")
         if os.path.exists(os.path.join(out_dir, rel)):
             shots[name] = rel.replace(os.sep, "/")

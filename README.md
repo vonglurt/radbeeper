@@ -104,21 +104,48 @@ connector chattering, firmware that batches its reporting. In the time domain
 all of those look exactly like more counts, and no amount of staring at a CPM
 number separates them from noise.
 
-It **accumulates**, which is what makes it readable: a single 128-sample
-periodogram of a Poisson process is flat in expectation and violently noisy in
-fact — every bin an exponential variable with standard deviation equal to its
-own mean. Averaging *N* of them divides that scatter by √*N*, so a real line
-climbs out of the grass while the grass settles. Ten minutes is five windows;
-an hour is twenty-eight, and by then a peak at twice the mean is worth
-believing.
+It **accumulates**, which is what makes it readable: a single periodogram of a
+Poisson process is flat in expectation and violently noisy in fact — every bin
+an exponential variable whose standard deviation equals its own mean. Averaging
+*N* of them divides that scatter by √*N*, so a real line climbs out of the grass
+while the grass settles.
 
-The axis runs from long periods on the left (128 s, the window) to short on the
-right (2 s, the Nyquist limit). The headline says which it is:
+That also means the significance needs **no extra state kept alongside**. The
+scatter of white noise averaged *N* times is exactly 1/√*N*, so how many sigma a
+bin stands above flat is arithmetic on the number of windows:
 
 ```
 spectrum   flat -- arrivals look random, as decay should (28 windows)
-spectrum   peak at 8s, 9.4x the mean -- something periodic (28 windows)
+spectrum   peak at 8s, 9.4x the mean, 7.2 sigma (28 windows)
 ```
+
+Windows are **half-overlapped** (Welch rather than Bartlett), which gets two
+averages out of each window's worth of data instead of one — the noise settles
+about 1.4× faster for the same waiting. The segments share half their samples,
+so the scatter falls as though there were 9/11 as many, and that is what the
+sigma is judged on.
+
+### Resolution grows with time, because it has to
+
+Frequency resolution is 1/*T* for an observation of length *T*. You cannot
+resolve a 512-second period in 128 seconds of listening — that is physics, not a
+limitation of the program — so a long window is strictly better in the end and
+strictly slower to say anything at all.
+
+Rather than pick one, RadBeeper runs a **ladder**: 128, 256 and 512 seconds side
+by side, all fed the same samples. The 128 answers after two minutes; the 512
+takes eight and a half but resolves four times as finely, and by the time it has
+anything to say it is the better answer. The display shows the finest rung with
+enough averages behind it and falls back as far as it must. It costs about ten
+kilobytes, fixed for the life of the process — a running sum of periodograms
+*is* the average, given the count of them, so nothing accumulates per hour.
+
+The axis runs from long periods on the left (the window) to short on the right
+(2 s, the Nyquist limit). Both charts are **coloured by what they mean**: the
+counts by the same calm / raised / high bands as the numbers above them, and the
+spectrum by significance — because a bin at twice the mean is exciting after
+fifty windows and meaningless after two, and the colour is the only place that
+difference can show.
 
 ### Line output, for a pipe or a log
 
@@ -166,6 +193,11 @@ One row every 30 seconds into a dated file per counter:
 **The peaks are the point.** A row carrying only the averages as they stood at
 the instant it was written would miss a source that came and went between two
 rows — which is the one event actually worth having a log for.
+
+Tabs are invisible and that matters here, because an **empty field is not a
+zero** — it is a window that was not full yet. Made visible:
+
+![the log with its tabs shown](docs/screenshots/log-tabs.png)
 
 State lives in `/var/log/radbeeper` when that is writable and
 `~/.local/share/radbeeper` when it is not. Files rotate by month and by counter
@@ -299,6 +331,17 @@ by itself when you close the monitor.
 | `site` | where a counter is, and where it has been |
 | `export` | build `index.html` from the logs |
 | `log info` / `log pull` | how much history flash, and download it |
+
+### Speed
+
+The monitor's budget is one sample a second and it uses a fraction of a percent
+of it — a 512-point FFT is 0.5 ms, once every few minutes. The one place that
+ever mattered was `backfill`, and it turned out to be an algorithm rather than a
+language: each window re-summed its own tail on every sample, which is
+O(samples × window) and cost 16.5 s to turn 850,000 samples into 28,000 rows —
+765 million additions. Keeping a running sum per window and subtracting what
+falls out the back is O(1) per sample. **Same output, byte for byte, in 2.3 s
+instead of 16.5.**
 
 Useful options: `--source sim`, `--sim-cpm`, `--seed`, `--spans 3,30,300`,
 `--cpm-per-usvh`, `--log-every`, `--duration`, `--clock-offset`,
