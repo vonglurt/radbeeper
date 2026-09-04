@@ -16,6 +16,7 @@ radbeeper probe            # find the counter and say what it is
 radbeeper watch            # the monitor: 3s / 30s / 300s at once
 radbeeper service          # log to disk, a row every 30 seconds
 radbeeper backfill         # fill the log's gaps from the counter's own flash
+radbeeper random           # 256 bits of hex, out of decay timing
 radbeeper site             # where this counter is, and where it has been
 radbeeper export           # build index.html from the logs
 radbeeper log pull         # download the raw history to .bin and .csv
@@ -160,6 +161,61 @@ counts by the same calm / raised / high bands as the numbers above them, and the
 spectrum by significance — because a bin at twice the mean is exciting after
 fifty windows and meaningless after two, and the colour is the only place that
 difference can show.
+
+### Random numbers out of decay
+
+The moment a nucleus decays is not determined by anything, which makes a
+Geiger counter the textbook hardware entropy source. The monitor pools the
+per-second counts and, once it has earned them, prints 256 bits as 64 hex
+characters — about one line every five minutes at background.
+
+```sh
+radbeeper random
+```
+
+```
+5c0c1b4f 9a2e7d31 0846b2ac ef5519d7 3b6a0f82 c41d9e60 78a3f5bb 2ed70941
+
+  256 bits, min-entropy 261, from 268 seconds at 0.68 counts/s
+  spectrum flat -- the source looks like decay
+```
+
+**Three ways this normally goes wrong, and what is done instead.**
+
+*Not from the FFT.* A transform is linear and invertible — it moves
+information about, it does not make any. Worse, these coefficients come from a
+mean-subtracted, Hann-tapered window, so neighbouring bins are correlated by
+construction. Bits pulled from them would look beautiful and carry far less
+than they appear to. The entropy is in the counts; the spectrum is a *view* of
+the counts.
+
+*Not by XOR and rotation.* Shifting and XOR-ing a block rearranges what is in
+it. A block holding twenty bits of entropy holds twenty bits after any amount
+of barrel-shifting, while looking more and more convincing. The standard tool
+for condensing a lot of weakly-random data into a little strongly-random data
+is a cryptographic hash — SHA-256 is in the standard library and is faster than
+the shifting would have been.
+
+*Not proven by a flat spectrum.* Flatness is necessary and nowhere near
+sufficient: a counter, an LFSR and a square wave at the Nyquist rate all pass
+it. It is used here as a **health check** — a peak means something periodic is
+contaminating the arrivals — and an emission is marked suspect when it fails.
+
+**The bits are counted, not assumed.** Min-entropy per sample is
+−log₂ max_k P(k) for Poisson at the observed rate — about 0.97 bits a second at
+40 CPM — and nothing is emitted until the pool exceeds what is being asked for.
+A dead counter never becomes ready, however long it sits there; an hour of
+zeroes is zero bits, not 3,600 samples of them.
+
+**Reproducible is not the same as predictable.** The counts behind each line
+are written beside it in `random-<serial>.tsv`, so anyone can recompute it and
+check it was not invented. That is an audit trail. It says nothing about the
+*next* line, which comes from decays that have not happened yet.
+
+> Treat this as a good physical entropy source, not as a certified one. It has
+> not been through a statistical test battery, and 256 bits of accounted
+> min-entropy is a claim about the model of the source, not a proof about the
+> output.
 
 ### Line output, for a pipe or a log
 
@@ -342,6 +398,7 @@ by itself when you close the monitor.
 | `service` | monitor and log; dormant when there is nothing to read |
 | `hotplug` | sit in the session, open the monitor on plug-in |
 | `backfill` | fill the log's gaps from the counter's flash |
+| `random` | 256 bits from decay timing, with the accounting for it |
 | `site` | where a counter is, and where it has been |
 | `export` | build `index.html` from the logs |
 | `log info` / `log pull` | how much history flash, and download it |

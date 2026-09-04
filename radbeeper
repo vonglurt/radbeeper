@@ -30,6 +30,7 @@
 #  goes looking for a leak.
 import argparse
 import cmath
+import hashlib
 import errno
 import fcntl
 import os
@@ -858,6 +859,163 @@ def spectrum_columns(rel, width):
     return out
 
 
+# ----------------------------------------------------------------- entropy ---
+#
+# RANDOM NUMBERS OUT OF DECAY, AND THE THREE WAYS THAT GOES WRONG.
+#
+# The physics is sound and old: the moment a nucleus decays is not determined
+# by anything, so the arrival times are the textbook hardware entropy source.
+# What goes wrong is everything between the tube and the hex.
+#
+#   1. NOT FROM THE FFT. A transform is linear and invertible -- it moves
+#      information about, it does not make any. Worse, the coefficients here
+#      come from a mean-subtracted, Hann-tapered window, so neighbouring bins
+#      are strongly correlated with each other by construction. Bits pulled
+#      out of them would look beautiful and carry far less than they appear
+#      to. The entropy is in the counts; the spectrum is a view of the counts.
+#
+#   2. NOT BY XOR AND ROTATION. Shifting and XOR-ing a block rearranges what
+#      is in it. A block holding twenty bits of entropy holds twenty bits
+#      after any amount of barrel-shifting, while looking more and more
+#      convincing. The standard tool for condensing a lot of weakly-random
+#      data into a little strongly-random data is a cryptographic hash, and
+#      SHA-256 is in the standard library and is faster than the shifting.
+#
+#   3. NOT PROVEN BY A FLAT SPECTRUM. Flatness is necessary and nowhere near
+#      sufficient: a counter, an LFSR and a square wave at the Nyquist rate
+#      all pass it. It is used here as a HEALTH CHECK on the source -- a peak
+#      means something periodic is contaminating the arrivals -- and the
+#      emission is marked when it fails. It is not the proof of anything.
+#
+# WHAT IS ACTUALLY DONE. Raw per-second counts go into a pool. Their
+# min-entropy is estimated from the observed rate -- for Poisson with mean L,
+# no outcome is more likely than the most likely one, so each sample is worth
+# -log2(max_k P(k)) bits and that is the honest budget. When the pool holds
+# more than the 256 bits being asked for, SHA-256 condenses it and the pool
+# starts again. At ordinary background, 40 CPM, that is about one bit a second
+# and so about 300 seconds a line -- which is where the cadence comes from
+# rather than a number picked to look tidy.
+#
+# REPRODUCIBLE, WHICH IS NOT THE SAME AS PREDICTABLE. The counts that fed each
+# emission are written beside it, so anybody can recompute the line and check
+# it. That is an audit trail, not a seed: nothing about it lets you predict
+# the NEXT line, because the next line comes from decays that have not
+# happened yet.
+ENTROPY_BITS = 256          # 64 hex characters
+ENTROPY_LABEL = b"radbeeper/entropy/1"
+
+
+def poisson_min_entropy(rate):
+    """Bits per sample for Poisson arrivals at `rate` per sample.
+
+    Min-entropy, not Shannon: the guessing that matters is guessing the most
+    likely outcome, so the worth of a sample is -log2 of that probability. It
+    is the conservative measure and the one an extractor is entitled to.
+    """
+    if rate <= 0:
+        return 0.0
+    # P(k) rises to its peak at k = floor(rate) and falls after; walk to it.
+    p = math.exp(-rate)
+    best = p
+    for k in range(1, int(rate) + 2):
+        p *= rate / k
+        best = max(best, p)
+    if best >= 1.0:
+        return 0.0
+    return -math.log(best, 2)
+
+
+class Entropy:
+    """Random bits from decay timing, with the accounting to justify them."""
+
+    def __init__(self, bits=ENTROPY_BITS):
+        self.want = bits
+        self.reset()
+        self.seq = 0
+
+    def reset(self):
+        self.counts = []
+        self.started = None
+        self.total = 0
+
+    def add(self, when, counts):
+        if self.started is None:
+            self.started = when
+        self.counts.append(int(counts))
+        self.total += int(counts)
+
+    def rate(self):
+        return self.total / float(len(self.counts)) if self.counts else 0.0
+
+    def bits(self):
+        """The pool's min-entropy, in bits, at the rate it was collected."""
+        return poisson_min_entropy(self.rate()) * len(self.counts)
+
+    def ready(self):
+        return self.bits() >= self.want
+
+    def wait(self):
+        """Seconds still needed, at the rate seen so far."""
+        per = poisson_min_entropy(self.rate())
+        if per <= 0:
+            return None
+        return max(0, int(math.ceil((self.want - self.bits()) / per)))
+
+    def digest(self, seq=None):
+        """The line, without consuming the pool. Deterministic in its input."""
+        h = hashlib.sha256()
+        h.update(ENTROPY_LABEL)
+        h.update(b"\x00%d\x00%d\x00" % (seq if seq is not None else self.seq,
+                                          int(self.started or 0)))
+        h.update(pack_counts(self.counts).encode("ascii"))
+        return h.hexdigest()
+
+    def draw(self):
+        """Take the line and start collecting again.
+
+        Returns (hex, record) where record is everything needed to recompute
+        it: the sequence number, when the pool opened, and the counts.
+        """
+        seq = self.seq
+        out = self.digest(seq)
+        record = {"seq": seq, "started": self.started, "seconds":
+                  len(self.counts), "bits": self.bits(), "rate": self.rate(),
+                  "counts": pack_counts(self.counts), "hex": out}
+        self.seq += 1
+        self.reset()
+        return out, record
+
+
+def pack_counts(counts):
+    """Per-second counts as hex nibbles, 15 meaning "15 or more".
+
+    Compact enough to write beside every emission -- three hundred seconds of
+    background is 300 characters -- and lossless over the range that carries
+    the entropy. A second with sixteen counts in it is not doing the work here
+    and clamping it changes the recomputation for nobody.
+    """
+    return "".join("%x" % min(15, max(0, int(c))) for c in counts)
+
+
+def unpack_counts(text):
+    return [int(ch, 16) for ch in text]
+
+
+def check_entropy_record(record):
+    """Recompute a line from the counts recorded beside it."""
+    e = Entropy()
+    e.started = record["started"]
+    e.counts = unpack_counts(record["counts"])
+    e.total = sum(e.counts)
+    return e.digest(record["seq"]) == record["hex"]
+
+
+def group_hex(text, size=8, sep=" "):
+    """Hex in blocks, because 64 undifferentiated characters cannot be read,
+    compared against a screen, or dictated down a phone."""
+    return sep.join(text[i:i + size] for i in range(0, len(text), size))
+
+
 # ---------------------------------------------------------------- averages ---
 class Windows:
     """Counts per second in, three running CPM averages out.
@@ -1090,38 +1248,69 @@ def sparkline(samples, width):
                    for _t, c in tail)
 
 
-# A nine-row digit, six columns wide -- the number somebody reads from across
-# the room, drawn from the same block glyph the charts use, which is the only
-# reason it needs no font. Seven-segment shapes: a bar across the top, three
-# rows of uprights, a bar across the middle, three more, a bar across the
-# bottom.
+# A twelve-row digit, six columns wide. Seven-segment shapes with the three
+# horizontal bars -- top, middle, bottom -- drawn TWO rows thick, because a
+# one-row bar between three-row uprights reads as a scratch rather than as a
+# stroke once the digit is this tall. Uprights stay one column: they are three
+# rows long and do not need the help.
+#
+# Drawn from the same block glyph the charts use, which is the only reason
+# this needs no font.
 BIG_DIGITS = {
-    "0": ("111111", "100001", "100001", "100001", "100001", "100001",
-          "100001", "100001", "111111"),
-    "1": ("000110", "001110", "010110", "000110", "000110", "000110",
-          "000110", "000110", "011111"),
-    "2": ("111111", "000001", "000001", "000001", "111111", "100000",
-          "100000", "100000", "111111"),
-    "3": ("111111", "000001", "000001", "000001", "011111", "000001",
-          "000001", "000001", "111111"),
-    "4": ("100001", "100001", "100001", "100001", "111111", "000001",
-          "000001", "000001", "000001"),
-    "5": ("111111", "100000", "100000", "100000", "111111", "000001",
-          "000001", "000001", "111111"),
-    "6": ("111111", "100000", "100000", "100000", "111111", "100001",
-          "100001", "100001", "111111"),
-    "7": ("111111", "000001", "000010", "000010", "000100", "000100",
-          "001000", "001000", "010000"),
-    "8": ("111111", "100001", "100001", "100001", "111111", "100001",
-          "100001", "100001", "111111"),
-    "9": ("111111", "100001", "100001", "100001", "111111", "000001",
-          "000001", "000001", "111111"),
-    ".": ("00", "00", "00", "00", "00", "00", "00", "11", "11"),
-    "-": ("000000", "000000", "000000", "000000", "111111", "000000",
-          "000000", "000000", "000000"),
-    " ": ("00", "00", "00", "00", "00", "00", "00", "00", "00"),
+    "0": ("111111", "111111",
+          "100001", "100001", "100001", "100001",
+          "100001", "100001", "100001", "100001",
+          "111111", "111111"),
+    "1": ("000110", "001110",
+          "010110", "000110", "000110", "000110",
+          "000110", "000110", "000110", "000110",
+          "011111", "011111"),
+    "2": ("111111", "111111",
+          "000001", "000001", "000001",
+          "111111", "111111",
+          "100000", "100000", "100000",
+          "111111", "111111"),
+    "3": ("111111", "111111",
+          "000001", "000001", "000001",
+          "111111", "111111",
+          "000001", "000001", "000001",
+          "111111", "111111"),
+    "4": ("100001", "100001", "100001", "100001", "100001",
+          "111111", "111111",
+          "000001", "000001", "000001", "000001", "000001"),
+    "5": ("111111", "111111",
+          "100000", "100000", "100000",
+          "111111", "111111",
+          "000001", "000001", "000001",
+          "111111", "111111"),
+    "6": ("111111", "111111",
+          "100000", "100000", "100000",
+          "111111", "111111",
+          "100001", "100001", "100001",
+          "111111", "111111"),
+    "7": ("111111", "111111",
+          "000001", "000010", "000010", "000100",
+          "000100", "001000", "001000", "010000",
+          "010000", "010000"),
+    "8": ("111111", "111111",
+          "100001", "100001", "100001",
+          "111111", "111111",
+          "100001", "100001", "100001",
+          "111111", "111111"),
+    "9": ("111111", "111111",
+          "100001", "100001", "100001",
+          "111111", "111111",
+          "000001", "000001", "000001",
+          "111111", "111111"),
+    ".": ("00", "00", "00", "00", "00", "00",
+          "00", "00", "00", "00", "11", "11"),
+    "-": ("000000", "000000", "000000", "000000", "000000",
+          "111111", "111111",
+          "000000", "000000", "000000", "000000", "000000"),
+    " ": ("00", "00", "00", "00", "00", "00",
+          "00", "00", "00", "00", "00", "00"),
 }
-BIG_ROWS = 9
+BIG_ROWS = 12
 
 
 def big_number(text, on="\u2588", off=" "):
@@ -1165,6 +1354,10 @@ def run_curses(counter, w, args):
     import curses
 
     ladder = SpectrumLadder()
+    pool = Entropy(args.entropy_bits)
+    # NOT `line`: the bar-drawing loops below both use that as their loop
+    # variable, and a name bound in this closure is one name for all of it.
+    shown = {"hex": None, "at": None, "suspect": False}
 
     def draw(stdscr):
         curses.curs_set(0)
@@ -1189,6 +1382,7 @@ def run_curses(counter, w, args):
             w.add(when, counts)
             ladder.add(counts)
             spec = ladder.best()
+            pool.add(when, counts)
             stdscr.erase()
             h, width = stdscr.getmaxyx()
             title = "radbeeper %s -- %s" % (VERSION, counter.version)
@@ -1243,7 +1437,7 @@ def run_curses(counter, w, args):
                 # above -- a spike that would read red up there reads red down
                 # here, without anybody converting in their head.
                 tail = w.samples[-(width - 1):]
-                tall = max(1, min(4, h - row - 9))
+                tall = max(1, min(5, h - row - 11))
                 for i, line in enumerate(bar_rows(w.samples, width - 1, tall)):
                     for x, glyph in enumerate(line):
                         if glyph == " ":
@@ -1295,7 +1489,7 @@ def run_curses(counter, w, args):
                     # than by height: a bin twice the mean is exciting after
                     # fifty windows and meaningless after two, and the colour
                     # is the only place that difference can show.
-                    tall = max(1, min(4, h - row - 3))
+                    tall = max(1, min(5, h - row - 4))
                     fake = [(0.0, v) for v in cols]
                     for i, line in enumerate(bar_rows(fake, len(cols), tall)):
                         for x, glyph in enumerate(line):
@@ -1321,6 +1515,39 @@ def run_curses(counter, w, args):
                         gap = max(1, (width - 1) - len(lo) - len(hi))
                         stdscr.addnstr(row, 0, lo + " " * gap + hi,
                                        width - 1, curses.A_DIM)
+            # The rotating line: 256 bits of decay, when the pool has earned
+            # them. See the Entropy class for what "earned" is doing there.
+            if h > row + 2 and width > 84:
+                row += 1
+                if pool.ready():
+                    top, _where = spec.loudest()
+                    suspect = bool(top and top >= spec.chance_max() * 1.25)
+                    text, record = pool.draw()
+                    shown["hex"], shown["suspect"] = text, suspect
+                    shown["at"] = time.strftime("%H:%M:%S")
+                    try:
+                        write_entropy(record, counter.serial_no, suspect)
+                    except OSError:
+                        pass
+                if shown["hex"]:
+                    stdscr.addnstr(row, 0, "random   " + group_hex(shown["hex"]),
+                                   width - 1,
+                                   curses.color_pair(4) if use_colour else 0)
+                    if h > row + 2:
+                        note = ("%d bits from decay at %s%s"
+                                % (args.entropy_bits, shown["at"],
+                                   "  -- SPECTRUM NOT FLAT, treat as suspect"
+                                   if shown["suspect"] else ""))
+                        stdscr.addnstr(row + 1, 9, note, width - 10,
+                                       (curses.color_pair(3) | curses.A_BOLD)
+                                       if (shown["suspect"] and use_colour)
+                                       else curses.A_DIM)
+                else:
+                    left = pool.wait()
+                    stdscr.addnstr(row, 0, "random   collecting, %s"
+                                   % ("%ds to go" % left if left is not None
+                                      else "no counts yet"),
+                                   width - 1, curses.A_DIM)
             if h > row + 1:
                 stdscr.addnstr(h - 1, 0, "q to quit", width - 1, curses.A_DIM)
             stdscr.refresh()
@@ -2220,6 +2447,79 @@ def cmd_backfill(args):
         return 0
     report = backfill(blob, args, offset, args.log, serial)
     say_backfill(report, offset)
+    return 0
+
+
+def write_entropy(record, serial, suspect):
+    """Append an emission and the counts that made it, so it can be checked.
+
+    An audit trail rather than a seed. Recomputing a past line from its counts
+    proves the line was not invented; it says nothing about the next one,
+    which comes from decays that have not happened.
+    """
+    path = os.path.join(state_dir(), "random-%s.tsv" % (serial or "unknown"))
+    fresh = not os.path.exists(path) or os.path.getsize(path) == 0
+    with open(path, "a") as f:
+        if fresh:
+            f.write("#seq\ttime\tseconds\trate\tbits\tflat\thex\tcounts\n")
+        f.write("%d\t%s\t%d\t%.4f\t%.1f\t%s\t%s\t%s\n"
+                % (record["seq"],
+                   time.strftime("%Y-%m-%dT%H:%M:%S",
+                                 time.localtime(record["started"] or 0)),
+                   record["seconds"], record["rate"], record["bits"],
+                   "no" if suspect else "yes", record["hex"],
+                   record["counts"]))
+    return path
+
+
+def cmd_random(args):
+    """Collect until the pool has earned the bits, then print one line."""
+    try:
+        counter = open_counter(args)
+    except NotFound as e:
+        print("%s: %s" % ("port busy" if e.busy else "no counter", e.reason),
+              file=sys.stderr)
+        return 1
+    pool = Entropy(args.entropy_bits)
+    ladder = SpectrumLadder()
+    print("radbeeper: collecting %d bits from %s"
+          % (args.entropy_bits, counter.path))
+    try:
+        for when, counts in counter.samples():
+            pool.add(when, counts)
+            ladder.add(counts)
+            if pool.ready():
+                break
+            if args.duration and when - (pool.started or when) >= args.duration:
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        counter.close()
+    if not pool.ready():
+        print("radbeeper: only %.0f of %d bits -- %s"
+              % (pool.bits(), args.entropy_bits,
+                 "stopped early" if args.duration else "interrupted"),
+              file=sys.stderr)
+        return 1
+    spec = ladder.best()
+    top, _where = spec.loudest()
+    suspect = bool(top and top >= spec.chance_max() * 1.25)
+    text, record = pool.draw()
+    print()
+    print(group_hex(text))
+    print()
+    print("  %d bits, min-entropy %.0f, from %d seconds at %.2f counts/s"
+          % (args.entropy_bits, record["bits"], record["seconds"],
+             record["rate"]))
+    print("  spectrum %s" % ("flat -- the source looks like decay"
+                             if not suspect else
+                             "NOT FLAT -- something periodic; treat as suspect"))
+    try:
+        print("  recorded in %s" % write_entropy(record, counter.serial_no,
+                                                 suspect))
+    except OSError as e:
+        print("  not recorded: %s" % e)
     return 0
 
 
@@ -3163,6 +3463,10 @@ def build_parser():
                    help="how much of the end of the history flash to read "
                         "(default %d; the whole megabyte is ten minutes of "
                         "reading)" % DEFAULT_BACKFILL_BYTES)
+    p.add_argument("--entropy-bits", type=int, default=ENTROPY_BITS,
+                   metavar="BITS",
+                   help="how many bits each random line carries (default "
+                        "%d, which is 64 hex characters)" % ENTROPY_BITS)
     p.add_argument("--max-gap", type=float, default=DEFAULT_MAX_GAP,
                    metavar="SECONDS",
                    help="a hole this long in a recording ends the running "
@@ -3217,6 +3521,8 @@ def build_parser():
                     help="where to write the page (default index.html)")
     ex.add_argument("--title", default="Radiation monitor",
                     help="the page's heading")
+    sub.add_parser("random", help="one line of random hex, out of decay "
+                                  "timing, with the accounting for it")
     st = sub.add_parser("site", help="where a counter is, and where it has "
                                      "been; naming all three moves it")
     st.add_argument("--serial", metavar="SERIAL",
@@ -3251,7 +3557,8 @@ def main(argv=None):
     handlers = {"probe": cmd_probe, "cpm": cmd_cpm, "watch": cmd_watch,
                 "log": cmd_log, "service": cmd_service, "window": cmd_window,
                 "hotplug": cmd_hotplug, "backfill": cmd_backfill,
-                "site": cmd_site, "export": cmd_export}
+                "site": cmd_site, "export": cmd_export,
+                "random": cmd_random}
     try:
         return handlers[args.command](args)
     except KeyboardInterrupt:

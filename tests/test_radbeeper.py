@@ -1186,11 +1186,11 @@ class TestOverlapAndSignificance(unittest.TestCase):
 
 
 class TestBigNumber(unittest.TestCase):
-    """Nine-row digits, for the number read from across the room."""
+    """Twelve-row digits, with the horizontal bars two rows thick."""
 
-    def test_every_digit_is_nine_rows(self):
+    def test_every_digit_is_twelve_rows(self):
         for ch in "0123456789":
-            self.assertEqual(len(radbeeper.big_number(ch)), 9)
+            self.assertEqual(len(radbeeper.big_number(ch)), 12)
 
     def test_the_rows_of_one_number_are_all_the_same_width(self):
         rows = radbeeper.big_number("1234.5")
@@ -1204,7 +1204,15 @@ class TestBigNumber(unittest.TestCase):
     def test_a_dash_is_a_middle_bar_and_nothing_else(self):
         rows = radbeeper.big_number("-")
         self.assertEqual([bool("█" in r) for r in rows],
-                         [False] * 4 + [True] + [False] * 4)
+                         [False] * 5 + [True] * 2 + [False] * 5)
+
+    def test_the_horizontal_bars_are_two_rows_thick(self):
+        # A one-row bar between three-row uprights reads as a scratch once
+        # the digit is this tall.
+        rows = radbeeper.big_number("8")
+        solid = [i for i, r in enumerate(rows) if r.strip("█ ") == ""
+                 and r.count("█") == 6]
+        self.assertEqual(solid, [0, 1, 5, 6, 10, 11])
 
     def test_unknown_characters_are_skipped_not_crashed_on(self):
         self.assertEqual(radbeeper.big_number("9x9"), radbeeper.big_number("99"))
@@ -1272,3 +1280,104 @@ class TestFalseAlarms(unittest.TestCase):
     def test_nothing_is_claimed_before_a_window_closes(self):
         spec = radbeeper.Spectrum(window=64)
         self.assertEqual(spec.chance_max(), float("inf"))
+
+
+class TestEntropy(unittest.TestCase):
+    """Random bits from decay, and the accounting that has to justify them.
+
+    The physics is sound and old -- the moment a nucleus decays is not
+    determined by anything. What goes wrong is everything between the tube
+    and the hex, so most of these tests are about the accounting rather than
+    about the bits.
+    """
+
+    def test_a_sample_is_worth_what_the_rate_says_it_is(self):
+        # Min-entropy, not Shannon: the worth of a sample is -log2 of its
+        # most likely outcome. At background, about one bit a second.
+        self.assertAlmostEqual(radbeeper.poisson_min_entropy(0.67), 0.97,
+                               places=1)
+        # A dead counter is worth nothing, however long you wait.
+        self.assertEqual(radbeeper.poisson_min_entropy(0.0), 0.0)
+        # A busier source is worth more per sample, but not without limit.
+        self.assertGreater(radbeeper.poisson_min_entropy(10.0),
+                           radbeeper.poisson_min_entropy(0.67))
+
+    def test_it_will_not_hand_over_bits_it_has_not_earned(self):
+        pool = radbeeper.Entropy(bits=256)
+        for i in range(50):
+            pool.add(float(i), 1)
+        self.assertFalse(pool.ready())
+        self.assertGreater(pool.wait(), 0)
+        for i in range(50, 400):
+            pool.add(float(i), 1)
+        self.assertTrue(pool.ready())
+
+    def test_a_dead_counter_never_becomes_ready(self):
+        # Zero counts for an hour is zero entropy, not 3600 samples of it.
+        pool = radbeeper.Entropy(bits=256)
+        for i in range(3600):
+            pool.add(float(i), 0)
+        self.assertFalse(pool.ready())
+        self.assertEqual(pool.bits(), 0.0)
+        self.assertIsNone(pool.wait())
+
+    def test_the_line_is_64_hex_characters(self):
+        pool = radbeeper.Entropy(bits=256)
+        for i in range(400):
+            pool.add(float(i), i % 3)
+        text, _record = pool.draw()
+        self.assertEqual(len(text), 64)
+        self.assertTrue(all(c in "0123456789abcdef" for c in text))
+
+    def test_a_line_can_be_recomputed_from_what_was_written_beside_it(self):
+        # An audit trail, not a seed: this proves a past line was not
+        # invented and says nothing about the next one.
+        pool = radbeeper.Entropy(bits=256)
+        for i in range(400):
+            pool.add(float(i), (i * 7) % 4)
+        _text, record = pool.draw()
+        self.assertTrue(radbeeper.check_entropy_record(record))
+        # Change one second's count and the line no longer follows from it.
+        first = record["counts"][0]
+        other = "1" if first != "1" else "2"
+        tampered = dict(record, counts=other + record["counts"][1:])
+        self.assertNotEqual(tampered["counts"], record["counts"])
+        self.assertFalse(radbeeper.check_entropy_record(tampered))
+
+    def test_different_counts_give_different_lines(self):
+        def line(seed):
+            rng = random.Random(seed)
+            pool = radbeeper.Entropy(bits=256)
+            for i in range(400):
+                pool.add(float(i), rng.randint(0, 3))
+            return pool.draw()[0]
+        self.assertNotEqual(line(1), line(2))
+
+    def test_the_pool_starts_again_after_a_draw(self):
+        pool = radbeeper.Entropy(bits=256)
+        for i in range(400):
+            pool.add(float(i), 1)
+        pool.draw()
+        self.assertFalse(pool.ready())
+        self.assertEqual(pool.counts, [])
+        self.assertEqual(pool.seq, 1)
+
+    def test_the_sequence_number_separates_identical_pools(self):
+        # Two pools of identical counts must not produce the same line, or a
+        # quiet counter would repeat itself.
+        a = radbeeper.Entropy(bits=256)
+        b = radbeeper.Entropy(bits=256)
+        b.seq = 1
+        for i in range(400):
+            a.add(float(i), 1)
+            b.add(float(i), 1)
+        self.assertNotEqual(a.draw()[0], b.draw()[0])
+
+    def test_counts_pack_and_unpack(self):
+        self.assertEqual(radbeeper.pack_counts([0, 1, 15, 200]), "01ff")
+        self.assertEqual(radbeeper.unpack_counts("01ff"), [0, 1, 15, 15])
+
+    def test_hex_is_grouped_so_a_person_can_read_it(self):
+        grouped = radbeeper.group_hex("a" * 64)
+        self.assertEqual(len(grouped.split(" ")), 8)
+        self.assertEqual(grouped.replace(" ", ""), "a" * 64)

@@ -8,6 +8,7 @@ masked heartbeat stream and the chunked SPIR download.
 import importlib.machinery
 import importlib.util
 import os
+import struct
 import sys
 import tempfile
 import time
@@ -281,7 +282,15 @@ class TestTheFullScreenMonitor(SerialCase):
         import subprocess
         import threading
 
+        import fcntl
+        import termios as tio
+
         master, slave = pty.openpty()
+        # A WIDE, TALL terminal. The default 80x24 is too small for the
+        # spectrum and the random line to be drawn at all, so the test that
+        # exists to exercise the draw loop was skipping most of it -- and a
+        # TypeError in the part it skipped shipped anyway.
+        fcntl.ioctl(slave, tio.TIOCSWINSZ, struct.pack("HHHH", 46, 132, 0, 0))
         prog = os.path.join(HERE, os.pardir, "radbeeper")
         env = dict(os.environ, TERM="xterm-256color")
         proc = subprocess.Popen(
