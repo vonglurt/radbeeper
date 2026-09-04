@@ -1,0 +1,1021 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 paulr@sdf.org
+#
+#  bleeper -- a GQ GMC Geiger-Muller counter on the desk.
+#
+#  Three things, in the order they were wanted:
+#
+#    1. find the counter on USB and say what it is       bleeper probe
+#    2. show what it is counting, now                    bleeper watch
+#    3. pull the history it recorded while unattended    bleeper log pull
+#
+#  WHY THERE IS NO pyserial HERE. The counter is a USB serial device and every
+#  example on the internet reaches for pyserial. Alpine packages it, but this
+#  program runs on a Pi Zero with 512 MB and on a fresh install with no network,
+#  and a serial port is thirty lines of termios. The stdlib is the whole
+#  dependency list: python3 and nothing else.
+#
+#  THE AVERAGES ARE OURS, NOT THE COUNTER'S. <GETCPM>> returns the device's own
+#  rolling 60-second count, which is one number with one time constant. What was
+#  asked for is three: 3 seconds to see a source come and go as you move it,
+#  30 seconds to read the room, 300 seconds to have a number worth writing down.
+#  Those cannot be derived from a single CPM reading, so bleeper counts the
+#  blips itself -- one counts-per-second sample every second, from the counter's
+#  own heartbeat -- and computes each window from the samples it kept.
+#
+#  A window is reported only once it is full. A "3-second CPM" made of one
+#  sample is a number twenty times noisier than it looks, and showing it as
+#  though it were settled is how a 25 CPM background reads as 60 and someone
+#  goes looking for a leak.
+import argparse
+import errno
+import fcntl
+import os
+import random
+import select
+import signal
+import stat
+import struct
+import sys
+import termios
+import time
+
+VERSION = "0.1.0"
+
+# ---------------------------------------------------------------- protocol ---
+#
+# GQ's RFC for the GMC series. Every command is <NAME>> in ASCII and the reply
+# is a fixed number of raw bytes with no framing, so the only way to stay in
+# step is to ask for exactly what you expect and time out rather than block.
+#
+#   <GETVER>>       14 bytes  e.g. "GMC-320Re 4.26"
+#   <GETSERIAL>>     7 bytes  BCD
+#   <GETCPM>>        2 bytes  big-endian, the device's own 60-second count
+#   <GETCPS>>        2 bytes  big-endian, mask 0x3FFF (top bits are flags)
+#   <HEARTBEAT1>>    -        then 2 bytes every second, same masking as CPS
+#   <HEARTBEAT0>>    -        stop the stream
+#   <GETVOLT>>       1 byte   battery, tenths of a volt
+#   <GETDATETIME>>   7 bytes  YY MM DD HH MM SS 0xAA
+#   <SPIR[aaa][ll]>> ll bytes history flash, 3-byte address, 2-byte length
+#
+# The heartbeat is the one that matters here: it is the only way to get a
+# per-second number out of the device without polling it faster than it
+# updates.
+CMD_VERSION = b"<GETVER>>"
+CMD_SERIAL = b"<GETSERIAL>>"
+CMD_CPM = b"<GETCPM>>"
+CMD_CPS = b"<GETCPS>>"
+CMD_VOLT = b"<GETVOLT>>"
+CMD_DATETIME = b"<GETDATETIME>>"
+CMD_HEARTBEAT_ON = b"<HEARTBEAT1>>"
+CMD_HEARTBEAT_OFF = b"<HEARTBEAT0>>"
+
+# The counter's own reading is masked: the top two bits of the 16-bit CPS and
+# heartbeat values are status flags on current firmware, not count.
+COUNT_MASK = 0x3FFF
+
+# Both rates GQ has shipped. The 320 is 115200; the 300 is 57600. Trying the
+# likely one first costs nothing and probing both costs one second.
+BAUD_RATES = (115200, 57600)
+
+# Tube conversion. The M4011 in a GMC-320 reads about 151.5 CPM per uSv/h, and
+# this number is a property of the TUBE, not the counter -- a 500 with a
+# different tube needs a different one, which is why it is a flag and not a
+# constant in the maths.
+DEFAULT_CPM_PER_USVH = 151.5
+
+# History flash. The 320 carries 1 MiB; the 300 carries 64 KiB. SPIR reads more
+# than 4096 bytes at a time unreliably on several firmwares, so the download is
+# chunked well under that.
+FLASH_SIZES = {"GMC-320": 0x100000, "GMC-300": 0x10000, "GMC-500": 0x100000,
+               "GMC-600": 0x100000}
+SPIR_CHUNK = 2048
+
+# Where the boot service leaves things. Under /var/log when it can write there
+# and under the home directory when it cannot, because a service that refuses
+# to run unprivileged is a service nobody runs.
+def state_dir():
+    for d in ("/var/log/bleeper", os.path.expanduser("~/.local/share/bleeper")):
+        try:
+            os.makedirs(d, exist_ok=True)
+            probe = os.path.join(d, ".writable")
+            with open(probe, "w"):
+                pass
+            os.unlink(probe)
+            return d
+        except OSError:
+            continue
+    return "."
+
+
+# ------------------------------------------------------------------ serial ---
+class Serial:
+    """A raw serial port, in termios rather than in pyserial.
+
+    Non-blocking with an explicit deadline everywhere: a counter that has been
+    unplugged mid-read must not wedge the monitor, and select() is the only
+    thing standing between this program and a hang with no output.
+    """
+
+    def __init__(self, path, baud=115200, timeout=1.0):
+        self.path = path
+        self.timeout = timeout
+        self.fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        try:
+            self._configure(baud)
+        except Exception:
+            os.close(self.fd)
+            raise
+
+    def _configure(self, baud):
+        speed = getattr(termios, "B%d" % baud, None)
+        if speed is None:
+            raise ValueError("no termios constant for %d baud" % baud)
+        a = termios.tcgetattr(self.fd)
+        iflag, oflag, cflag, lflag, ispeed, ospeed, cc = a
+        # cfmakeraw, spelled out: 8N1, no flow control, no echo, no line
+        # discipline of any kind. The counter speaks bytes, not lines, and a
+        # stray ICRNL turns a 0x0D in a count into a 0x0A and silently
+        # corrupts every reading that happens to contain one.
+        iflag &= ~(termios.IGNBRK | termios.BRKINT | termios.PARMRK
+                   | termios.ISTRIP | termios.INLCR | termios.IGNCR
+                   | termios.ICRNL | termios.IXON)
+        oflag &= ~termios.OPOST
+        lflag &= ~(termios.ECHO | termios.ECHONL | termios.ICANON
+                   | termios.ISIG | termios.IEXTEN)
+        cflag &= ~(termios.CSIZE | termios.PARENB | termios.CSTOPB
+                   | termios.CRTSCTS)
+        cflag |= termios.CS8 | termios.CREAD | termios.CLOCAL
+        cc = list(cc)
+        cc[termios.VMIN] = 0
+        cc[termios.VTIME] = 0
+        termios.tcsetattr(self.fd, termios.TCSANOW,
+                          [iflag, oflag, cflag, lflag, speed, speed, cc])
+        termios.tcflush(self.fd, termios.TCIOFLUSH)
+
+    def write(self, data):
+        total = 0
+        while total < len(data):
+            try:
+                total += os.write(self.fd, data[total:])
+            except OSError as e:
+                if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    select.select([], [self.fd], [], self.timeout)
+                    continue
+                raise
+
+    def read(self, count, timeout=None):
+        """Exactly count bytes, or fewer if the deadline passes."""
+        deadline = time.monotonic() + (self.timeout if timeout is None else timeout)
+        out = b""
+        while len(out) < count:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                break
+            r, _, _ = select.select([self.fd], [], [], left)
+            if not r:
+                break
+            try:
+                chunk = os.read(self.fd, count - len(out))
+            except OSError as e:
+                if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                    continue
+                raise
+            if not chunk:
+                break
+            out += chunk
+        return out
+
+    def flush_input(self):
+        termios.tcflush(self.fd, termios.TCIFLUSH)
+
+    def close(self):
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+
+
+# ------------------------------------------------------------------ device ---
+class Counter:
+    """A GQ GMC counter, found and identified."""
+
+    def __init__(self, port, version, serial_no, path, baud):
+        self.port = port
+        self.version = version
+        self.serial_no = serial_no
+        self.path = path
+        self.baud = baud
+
+    @property
+    def model(self):
+        # "GMC-320Re 4.26" -> "GMC-320". Everything downstream that cares about
+        # the model cares about the family, not the revision.
+        head = self.version.split()[0] if self.version else ""
+        for known in FLASH_SIZES:
+            if head.startswith(known):
+                return known
+        return head or "unknown"
+
+    @property
+    def flash_size(self):
+        return FLASH_SIZES.get(self.model, 0x10000)
+
+    def close(self):
+        try:
+            self.port.write(CMD_HEARTBEAT_OFF)
+        except OSError:
+            pass
+        self.port.close()
+
+    # -- the simple queries ------------------------------------------------
+    def _ask(self, cmd, count, timeout=1.0):
+        self.port.flush_input()
+        self.port.write(cmd)
+        return self.port.read(count, timeout)
+
+    def cpm(self):
+        b = self._ask(CMD_CPM, 2)
+        if len(b) != 2:
+            return None
+        return struct.unpack(">H", b)[0] & COUNT_MASK
+
+    def cps(self):
+        b = self._ask(CMD_CPS, 2)
+        if len(b) != 2:
+            return None
+        return struct.unpack(">H", b)[0] & COUNT_MASK
+
+    def voltage(self):
+        b = self._ask(CMD_VOLT, 1)
+        if len(b) != 1:
+            return None
+        return b[0] / 10.0
+
+    def datetime(self):
+        b = self._ask(CMD_DATETIME, 7)
+        if len(b) != 7:
+            return None
+        yy, mm, dd, hh, mi, ss = b[0], b[1], b[2], b[3], b[4], b[5]
+        try:
+            return "20%02d-%02d-%02d %02d:%02d:%02d" % (yy, mm, dd, hh, mi, ss)
+        except (TypeError, ValueError):
+            return None
+
+    # -- the per-second stream ---------------------------------------------
+    def heartbeat(self, on=True):
+        self.port.flush_input()
+        self.port.write(CMD_HEARTBEAT_ON if on else CMD_HEARTBEAT_OFF)
+        if not on:
+            # The device may already have queued a sample; drop it so the next
+            # command does not read a count where it expects its own reply.
+            time.sleep(0.2)
+            self.port.flush_input()
+
+    def samples(self):
+        """Yield (monotonic_time, counts) once a second, forever.
+
+        The device drives the clock. If it stops talking -- unplugged, asleep,
+        cable knocked -- the generator ends rather than blocking, and the
+        caller decides whether that is a retry or an exit.
+        """
+        self.heartbeat(True)
+        try:
+            while True:
+                b = self.port.read(2, timeout=3.0)
+                if len(b) != 2:
+                    return
+                yield time.monotonic(), struct.unpack(">H", b)[0] & COUNT_MASK
+        finally:
+            try:
+                self.heartbeat(False)
+            except OSError:
+                pass
+
+    # -- the history flash --------------------------------------------------
+    def read_history(self, address, length):
+        out = b""
+        while len(out) < length:
+            n = min(SPIR_CHUNK, length - len(out))
+            a = address + len(out)
+            cmd = b"<SPIR" + bytes([(a >> 16) & 0xFF, (a >> 8) & 0xFF, a & 0xFF,
+                                    (n >> 8) & 0xFF, n & 0xFF]) + b">>"
+            chunk = self._ask(cmd, n, timeout=5.0)
+            if not chunk:
+                break
+            out += chunk
+            if len(chunk) < n:
+                break
+        return out
+
+
+class SimCounter:
+    """A counter that is not there: a Poisson source at a background rate.
+
+    This exists because the hardware is not always on the desk, and a monitor
+    that can only be tested with a radioactive source in hand is a monitor
+    nobody tests. Radioactive decay IS a Poisson process, so a Poisson sample
+    per second is not a cartoon of the signal -- it has the real variance,
+    which is the thing that makes a 3-second average look alarming and a
+    300-second one look calm. Testing the display against a smooth fake would
+    prove nothing about either.
+    """
+
+    def __init__(self, cpm=25.0, seed=None):
+        self.rate = cpm / 60.0
+        self.random = random.Random(seed)
+        self.version = "SIM-000 %s" % VERSION
+        self.serial_no = "simulated"
+        self.path = "(simulated)"
+        self.baud = 0
+        self.model = "SIM"
+        self.flash_size = 0
+
+    def close(self):
+        pass
+
+    def _draw(self):
+        # Knuth's method. At background rates L is around 0.4, so this is two
+        # or three multiplies and is not worth optimising.
+        L = pow(2.718281828459045, -self.rate)
+        k, p = 0, 1.0
+        while True:
+            p *= self.random.random()
+            if p <= L:
+                return k
+            k += 1
+
+    def cpm(self):
+        return int(round(self.rate * 60))
+
+    def cps(self):
+        return self._draw()
+
+    def voltage(self):
+        return 3.9
+
+    def datetime(self):
+        return time.strftime("%Y-%m-%d %H:%M:%S")
+
+    def samples(self):
+        while True:
+            time.sleep(1.0)
+            yield time.monotonic(), self._draw()
+
+    def read_history(self, address, length):
+        return b"\xff" * length
+
+
+# --------------------------------------------------------------- discovery ---
+#
+# WHAT COUNTS AS "THE USB IS PRESENT". Three questions, and they fail in
+# different ways, so the answer says which one failed rather than "no device":
+#
+#   1. Is a serial device node there at all?  If not, either nothing is plugged
+#      in or -- the case that cost an afternoon -- the running kernel has no
+#      USB-serial driver. Alpine's linux-virt ships none: no ch341, no
+#      usbserial, nothing. The counter can be plugged into a VM running it and
+#      no ttyUSB will ever appear, and dmesg is silent because the device is
+#      never claimed. linux-lts and linux-rpi carry the drivers.
+#   2. Can this account open it?  The node is root:dialout, and a user not in
+#      that group gets EACCES. That is a fixable mistake, not an absent device.
+#   3. Does whatever is on the other end answer <GETVER>>?  A CH340 is a
+#      generic cable; plenty of things that are not Geiger counters use one.
+SERIAL_GLOBS = ("/dev/ttyUSB", "/dev/ttyACM")
+
+
+def candidate_ports():
+    out = []
+    for prefix in SERIAL_GLOBS:
+        base, name = os.path.split(prefix)
+        try:
+            entries = sorted(os.listdir(base))
+        except OSError:
+            continue
+        for e in entries:
+            if e.startswith(name):
+                out.append(os.path.join(base, e))
+    return out
+
+
+def usb_serial_driver_present():
+    """Whether the running kernel could bind a USB serial adapter at all."""
+    release = os.uname().release
+    root = "/lib/modules/%s" % release
+    names = ("usbserial", "ch341", "cp210x", "ftdi_sio", "pl2303", "cdc-acm",
+             "cdc_acm")
+    # Built in rather than modular is entirely possible, and /proc/config.gz is
+    # not on Alpine. A bound driver in sysfs settles it either way.
+    if os.path.isdir("/sys/bus/usb-serial/drivers"):
+        try:
+            if os.listdir("/sys/bus/usb-serial/drivers"):
+                return True
+        except OSError:
+            pass
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for f in filenames:
+            stem = f.split(".")[0]
+            if stem in names:
+                return True
+    return False
+
+
+def identify(path, baud=None, timeout=1.0):
+    """Open a port and ask what it is. None if it is not a GMC."""
+    rates = (baud,) if baud else BAUD_RATES
+    for rate in rates:
+        port = None
+        try:
+            port = Serial(path, rate, timeout)
+            # The device answers a version string; anything else on the line
+            # answers with silence or with something that is not GMC-shaped.
+            port.flush_input()
+            port.write(CMD_VERSION)
+            raw = port.read(14, timeout)
+            text = raw.decode("ascii", "replace").strip()
+            if not text or "GMC" not in text.upper():
+                port.close()
+                continue
+            port.flush_input()
+            port.write(CMD_SERIAL)
+            sraw = port.read(7, timeout)
+            serial_no = sraw.hex().upper() if len(sraw) == 7 else "unknown"
+            return Counter(port, text, serial_no, path, rate)
+        except OSError:
+            if port is not None:
+                port.close()
+            continue
+        except Exception:
+            if port is not None:
+                port.close()
+            raise
+    return None
+
+
+class NotFound(Exception):
+    """No counter, with a reason a person can act on."""
+
+    def __init__(self, reason, detail=""):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
+
+
+def find_counter(device=None, baud=None, source="auto", sim_cpm=25.0, seed=None):
+    if source == "sim":
+        return SimCounter(sim_cpm, seed)
+    ports = [device] if device else candidate_ports()
+    if not ports:
+        if not usb_serial_driver_present():
+            raise NotFound(
+                "no USB-serial driver in this kernel",
+                "Running %s. Alpine's linux-virt has no ch341/usbserial at all,\n"
+                "so a counter plugged in here can never appear as /dev/ttyUSB0.\n"
+                "linux-lts and linux-rpi carry the drivers."
+                % os.uname().release)
+        raise NotFound("no serial device is present",
+                       "Nothing matching /dev/ttyUSB* or /dev/ttyACM*.")
+    denied = []
+    for p in ports:
+        try:
+            found = identify(p, baud)
+        except PermissionError:
+            denied.append(p)
+            continue
+        except OSError as e:
+            denied.append("%s (%s)" % (p, e.strerror))
+            continue
+        if found is not None:
+            return found
+    if denied:
+        raise NotFound("the serial device cannot be opened by this account",
+                       "%s\nAdd yourself to the dialout group: "
+                       "doas adduser $USER dialout, then log in again."
+                       % ", ".join(denied))
+    raise NotFound("a serial device is present but is not a GMC counter",
+                   "Tried %s. None answered <GETVER>> with a GMC version."
+                   % ", ".join(ports))
+
+
+# ---------------------------------------------------------------- averages ---
+class Windows:
+    """Counts per second in, three running CPM averages out.
+
+    A deque per window would be three copies of the same data. One list of
+    (time, counts) covering the longest window serves all three, and each
+    average is a sum over its own tail -- 300 samples is nothing to walk once
+    a second, and the alternative is three ring buffers that can disagree.
+    """
+
+    def __init__(self, spans=(3, 30, 300)):
+        self.spans = tuple(spans)
+        self.longest = max(self.spans)
+        self.samples = []
+        self.total = 0
+        self.started = None
+
+    def add(self, when, counts):
+        if self.started is None:
+            self.started = when
+        self.samples.append((when, counts))
+        self.total += counts
+        cutoff = when - self.longest
+        # Keep one sample beyond the window so a full window is recognisable.
+        while len(self.samples) > 2 and self.samples[0][0] < cutoff:
+            self.samples.pop(0)
+
+    def elapsed(self):
+        if self.started is None:
+            return 0.0
+        return self.samples[-1][0] - self.started
+
+    def average(self, span):
+        """CPM over the last span seconds, or None until the window is full.
+
+        None is not a failure and must not be drawn as zero: it means "not
+        enough signal yet to say", and the difference matters most in the
+        first five minutes, which is exactly when someone is watching.
+        """
+        if not self.samples or self.elapsed() < span:
+            return None
+        now = self.samples[-1][0]
+        cutoff = now - span
+        counts = sum(c for t, c in self.samples if t > cutoff)
+        return counts * 60.0 / span
+
+    def usvh(self, span, cpm_per_usvh):
+        cpm = self.average(span)
+        if cpm is None or cpm_per_usvh <= 0:
+            return None
+        return cpm / cpm_per_usvh
+
+
+# ---------------------------------------------------------------- commands ---
+def open_counter(args):
+    return find_counter(args.device, args.baud, args.source, args.sim_cpm,
+                        args.seed)
+
+
+def cmd_probe(args):
+    try:
+        c = open_counter(args)
+    except NotFound as e:
+        print("no counter: %s" % e.reason)
+        if e.detail:
+            for line in e.detail.splitlines():
+                print("    %s" % line)
+        return 1
+    print("counter    %s" % c.version)
+    print("model      %s" % c.model)
+    print("serial     %s" % c.serial_no)
+    print("port       %s @ %s baud" % (c.path, c.baud or "n/a"))
+    v = c.voltage()
+    if v is not None:
+        print("battery    %.1f V" % v)
+    d = c.datetime()
+    if d:
+        print("its clock  %s   (this machine: %s)"
+              % (d, time.strftime("%Y-%m-%d %H:%M:%S")))
+    n = c.cpm()
+    if n is not None:
+        print("reading    %d CPM  (%.3f uSv/h at %.1f CPM per uSv/h)"
+              % (n, n / args.cpm_per_usvh, args.cpm_per_usvh))
+    if c.flash_size:
+        print("history    %d KiB of flash" % (c.flash_size // 1024))
+    c.close()
+    return 0
+
+
+def cmd_cpm(args):
+    try:
+        c = open_counter(args)
+    except NotFound as e:
+        print("no counter: %s" % e.reason, file=sys.stderr)
+        return 1
+    n = c.cpm()
+    c.close()
+    if n is None:
+        print("the counter did not answer", file=sys.stderr)
+        return 1
+    print("%d CPM   %.3f uSv/h" % (n, n / args.cpm_per_usvh))
+    return 0
+
+
+def format_line(w, args):
+    """One line of the three averages, for a log or a pipe."""
+    bits = []
+    for span in w.spans:
+        v = w.average(span)
+        bits.append("%3ds %s" % (span, "  --  " if v is None else "%6.1f" % v))
+    return "%s  |  %s  |  total %d in %ds" % (
+        time.strftime("%H:%M:%S"), "  ".join(bits), w.total, int(w.elapsed()))
+
+
+def run_plain(counter, w, args, out=sys.stdout):
+    for when, counts in counter.samples():
+        w.add(when, counts)
+        print(format_line(w, args), file=out, flush=True)
+        if args.duration and w.elapsed() >= args.duration:
+            return
+
+
+SPARK = " ▁▂▃▄▅▆▇█"
+
+# How loud a reading is, as a word rather than as a colour.
+#
+# This lives out here, and not inside the drawing code where it started,
+# because a threshold that can only be checked by looking at a screenshot is a
+# threshold nobody checks. The bands are deliberately wide: the job of colour
+# here is to catch an eye crossing the room, not to grade a dose. Background
+# with an M4011 at sea level is roughly 10-50 CPM.
+LEVEL_RAISED = 100.0
+LEVEL_HIGH = 300.0
+
+
+def level(cpm):
+    if cpm is None:
+        return "unknown"
+    if cpm >= LEVEL_HIGH:
+        return "high"
+    if cpm >= LEVEL_RAISED:
+        return "raised"
+    return "calm"
+
+
+def sparkline(samples, width):
+    tail = samples[-width:]
+    if not tail:
+        return ""
+    peak = max(c for _t, c in tail) or 1
+    return "".join(SPARK[min(len(SPARK) - 1, int(c * (len(SPARK) - 1) / peak))]
+                   for _t, c in tail)
+
+
+def run_curses(counter, w, args):
+    import curses
+
+    def draw(stdscr):
+        curses.curs_set(0)
+        stdscr.nodelay(True)
+        use_colour = curses.has_colors()
+        if use_colour:
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(1, curses.COLOR_GREEN, -1)
+            curses.init_pair(2, curses.COLOR_YELLOW, -1)
+            curses.init_pair(3, curses.COLOR_RED, -1)
+            curses.init_pair(4, curses.COLOR_CYAN, -1)
+
+        pairs = {"calm": 1, "raised": 2, "high": 3}
+
+        def band(cpm):
+            if not use_colour or cpm is None:
+                return curses.A_NORMAL
+            return curses.color_pair(pairs[level(cpm)]) | curses.A_BOLD
+
+        for when, counts in counter.samples():
+            w.add(when, counts)
+            stdscr.erase()
+            h, width = stdscr.getmaxyx()
+            title = "bleeper %s -- %s" % (VERSION, counter.version)
+            stdscr.addnstr(0, 0, title, width - 1,
+                           curses.color_pair(4) if use_colour else 0)
+            stdscr.addnstr(1, 0, "%s @ %s baud   serial %s"
+                           % (counter.path, counter.baud or "n/a",
+                              counter.serial_no), width - 1, curses.A_DIM)
+            row = 3
+            for span in w.spans:
+                cpm = w.average(span)
+                usvh = w.usvh(span, args.cpm_per_usvh)
+                label = "%4ds" % span
+                if cpm is None:
+                    left = int(span - w.elapsed()) + 1
+                    stdscr.addnstr(row, 0, "%s   filling, %ds to go"
+                                   % (label, max(0, left)), width - 1,
+                                   curses.A_DIM)
+                else:
+                    stdscr.addnstr(row, 0, label, width - 1, curses.A_DIM)
+                    stdscr.addnstr(row, 6, "%8.1f CPM" % cpm, width - 7,
+                                   band(cpm))
+                    stdscr.addnstr(row, 22, "%8.3f uSv/h" % usvh, width - 23,
+                                   curses.A_NORMAL)
+                row += 1
+            row += 1
+            stdscr.addnstr(row, 0, "now  %d counts this second" % counts,
+                           width - 1, curses.A_BOLD)
+            row += 1
+            stdscr.addnstr(row, 0, "run  %d counts in %ds"
+                           % (w.total, int(w.elapsed())), width - 1)
+            row += 2
+            if width > 20:
+                stdscr.addnstr(row, 0, sparkline(w.samples, width - 1),
+                               width - 1,
+                               curses.color_pair(4) if use_colour else 0)
+            if h > row + 2:
+                stdscr.addnstr(h - 1, 0, "q to quit", width - 1, curses.A_DIM)
+            stdscr.refresh()
+            ch = stdscr.getch()
+            if ch in (ord("q"), ord("Q"), 27):
+                return
+            if args.duration and w.elapsed() >= args.duration:
+                return
+
+    curses.wrapper(draw)
+
+
+def cmd_watch(args):
+    try:
+        counter = open_counter(args)
+    except NotFound as e:
+        print("no counter: %s" % e.reason, file=sys.stderr)
+        if e.detail:
+            for line in e.detail.splitlines():
+                print("    %s" % line, file=sys.stderr)
+        return 1
+    w = Windows(args.spans)
+    try:
+        if args.plain or not sys.stdout.isatty():
+            run_plain(counter, w, args)
+        else:
+            run_curses(counter, w, args)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        counter.close()
+    return 0
+
+
+# ----------------------------------------------------------------- history ---
+#
+# THE FORMAT IS BEST-EFFORT AND THE RAW BYTES ARE ALWAYS KEPT. GQ's history
+# encoding is a byte stream with 0x55 0xAA escape sequences, it has changed
+# between firmware revisions, and the only authority is a PDF that disagrees
+# with some shipped units. So the download writes the flash image to disk
+# first and decodes second: a decoder that mis-reads a marker costs a bad CSV,
+# never the data, and a better decoder can be run over the same image later.
+#
+#   55 AA 00 YY MM DD HH MM SS <mode>   a timestamp and the save interval
+#   55 AA 01 <hi> <lo>                  one count that did not fit in a byte
+#   55 AA 02 <len> <ascii...>           a note typed on the device
+#   FF                                  unwritten flash
+#   anything else                       one count, one byte
+SAVE_MODES = {0: "off", 1: "every second", 2: "every minute",
+              3: "every hour", 4: "every second (2-byte)",
+              5: "every minute (2-byte)"}
+
+
+def decode_history(blob):
+    """Yield (index, timestamp_or_None, mode_or_None, count_or_None, note)."""
+    i, n = 0, len(blob)
+    stamp, mode = None, None
+    while i < n:
+        b = blob[i]
+        if b == 0x55 and i + 2 < n and blob[i + 1] == 0xAA:
+            kind = blob[i + 2]
+            if kind == 0x00 and i + 9 < n:
+                yy, mm, dd, hh, mi, ss, md = blob[i + 3:i + 10]
+                stamp = "20%02d-%02d-%02d %02d:%02d:%02d" % (yy, mm, dd, hh, mi, ss)
+                mode = SAVE_MODES.get(md, "mode %d" % md)
+                yield i, stamp, mode, None, ""
+                i += 10
+                continue
+            if kind == 0x01 and i + 4 < n:
+                yield i, stamp, mode, struct.unpack(">H", blob[i + 3:i + 5])[0], ""
+                i += 5
+                continue
+            if kind == 0x02 and i + 3 < n:
+                ln = blob[i + 3]
+                note = blob[i + 4:i + 4 + ln].decode("ascii", "replace")
+                yield i, stamp, mode, None, note
+                i += 4 + ln
+                continue
+        if b == 0xFF:
+            i += 1
+            continue
+        yield i, stamp, mode, b, ""
+        i += 1
+
+
+def cmd_log(args):
+    try:
+        c = open_counter(args)
+    except NotFound as e:
+        print("no counter: %s" % e.reason, file=sys.stderr)
+        return 1
+    if args.log_action == "info":
+        print("model     %s" % c.model)
+        print("flash     %d KiB" % (c.flash_size // 1024))
+        print("pull it   bleeper log pull -o FILE")
+        c.close()
+        return 0
+
+    size = args.bytes or c.flash_size
+    stem = args.output or os.path.join(
+        state_dir(), "history-%s" % time.strftime("%Y%m%d-%H%M%S"))
+    raw_path = stem + ".bin"
+    csv_path = stem + ".csv"
+    print("reading %d KiB of history from %s" % (size // 1024, c.path))
+    got = b""
+    while len(got) < size:
+        chunk = c.read_history(len(got), min(SPIR_CHUNK * 8, size - len(got)))
+        if not chunk:
+            break
+        got += chunk
+        pct = 100 * len(got) // size
+        print("\r  %3d%%  %d KiB" % (pct, len(got) // 1024), end="", flush=True)
+    print()
+    c.close()
+    if not got:
+        print("the counter returned nothing", file=sys.stderr)
+        return 1
+    with open(raw_path, "wb") as f:
+        f.write(got)
+    print("raw    %s  (%d KiB)" % (raw_path, len(got) // 1024))
+    rows = 0
+    with open(csv_path, "w") as f:
+        f.write("offset,timestamp,save_mode,count,note\n")
+        for off, stamp, mode, count, note in decode_history(got):
+            f.write("%d,%s,%s,%s,%s\n" % (off, stamp or "", mode or "",
+                                          "" if count is None else count,
+                                          note.replace(",", " ")))
+            rows += 1
+    print("csv    %s  (%d rows)" % (csv_path, rows))
+    if rows == 0:
+        print("nothing was recorded -- the counter's history may be empty.")
+    return 0
+
+
+# ----------------------------------------------------------------- service ---
+#
+# WHAT THE BOOT SERVICE DOES WHEN THERE IS NO COUNTER, which was the explicit
+# requirement: it stops. Cleanly, exit 0, having written down why. It does not
+# retry in a loop, because a USB device that is not plugged in will not become
+# plugged in because a daemon asked again four seconds later, and a service
+# that respawns forever on a Pi Zero is a service that costs more than it
+# measures. The retry is the next boot -- or `rc-service bleeper start` the
+# moment the thing is plugged in.
+def write_status(text):
+    path = os.path.join(state_dir(), "status")
+    try:
+        with open(path, "w") as f:
+            f.write("%s  %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), text))
+    except OSError:
+        pass
+    return path
+
+
+def cmd_service(args):
+    try:
+        counter = open_counter(args)
+    except NotFound as e:
+        path = write_status("dormant: %s" % e.reason)
+        print("bleeper: dormant -- %s" % e.reason)
+        if e.detail:
+            for line in e.detail.splitlines():
+                print("    %s" % line)
+        print("    status: %s" % path)
+        print("    it will look again at the next boot, or when you run:"
+              " rc-service bleeper start")
+        return 0
+
+    log_path = os.path.join(state_dir(), "cpm.csv")
+    write_status("monitoring %s (%s)" % (counter.path, counter.version))
+    new = not os.path.exists(log_path)
+    w = Windows(args.spans)
+    stop = {"now": False}
+
+    def handler(_sig, _frame):
+        stop["now"] = True
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        signal.signal(sig, handler)
+
+    print("bleeper: monitoring %s -- %s" % (counter.path, counter.version))
+    print("bleeper: logging to %s" % log_path)
+    try:
+        with open(log_path, "a") as f:
+            if new:
+                f.write("iso_time,cps,cpm_%s\n"
+                        % ",cpm_".join(str(s) for s in w.spans))
+            for when, counts in counter.samples():
+                w.add(when, counts)
+                cols = ["" if w.average(s) is None else "%.1f" % w.average(s)
+                        for s in w.spans]
+                f.write("%s,%d,%s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                        counts, ",".join(cols)))
+                f.flush()
+                if stop["now"]:
+                    break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        counter.close()
+        write_status("stopped")
+    return 0
+
+
+def cmd_window(args):
+    """Open the monitor in a terminal, but only if there is something to watch.
+
+    The desktop autostart calls this. It is deliberately silent when there is
+    no counter: a window that opens at every login to say "nothing is plugged
+    in" gets closed at every login and then gets deleted.
+    """
+    try:
+        counter = open_counter(args)
+    except NotFound as e:
+        write_status("dormant: %s" % e.reason)
+        return 0
+    counter.close()
+    for term, flag in (("foot", "-e"), ("alacritty", "-e"), ("urxvt", "-e"),
+                       ("xterm", "-e"), ("st", "-e")):
+        path = None
+        for d in os.environ.get("PATH", "").split(os.pathsep):
+            p = os.path.join(d, term)
+            if os.path.isfile(p) and os.access(p, os.X_OK):
+                path = p
+                break
+        if path:
+            os.execv(path, [term, flag, sys.argv[0], "watch"])
+    print("no terminal emulator found; run: bleeper watch", file=sys.stderr)
+    return 1
+
+
+# -------------------------------------------------------------------- main ---
+def spans_arg(text):
+    try:
+        spans = tuple(int(x) for x in text.split(","))
+    except ValueError:
+        raise argparse.ArgumentTypeError("spans are whole seconds, comma separated")
+    if not spans or any(s <= 0 for s in spans):
+        raise argparse.ArgumentTypeError("every span must be a positive number of seconds")
+    return spans
+
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="bleeper",
+        description="A GQ GMC Geiger-Muller counter on the desk: find it, "
+                    "watch it, pull its log.",
+        epilog="With no counter plugged in, --source sim runs the whole "
+               "program against a Poisson background so the display and the "
+               "averages can be worked on without hardware.")
+    p.add_argument("--version", action="version",
+                   version="bleeper %s" % VERSION)
+    p.add_argument("-d", "--device", help="serial port (default: search "
+                                          "/dev/ttyUSB* and /dev/ttyACM*)")
+    p.add_argument("-b", "--baud", type=int,
+                   help="baud rate (default: try 115200 then 57600)")
+    p.add_argument("--source", choices=("auto", "sim"), default="auto",
+                   help="auto finds real hardware; sim is the built-in "
+                        "Poisson background")
+    p.add_argument("--sim-cpm", type=float, default=25.0,
+                   help="background rate for --source sim (default 25 CPM)")
+    p.add_argument("--seed", type=int, help="seed for --source sim, so a run "
+                                            "can be repeated exactly")
+    p.add_argument("--spans", type=spans_arg, default=(3, 30, 300),
+                   help="averaging windows in seconds (default 3,30,300)")
+    p.add_argument("--cpm-per-usvh", type=float, default=DEFAULT_CPM_PER_USVH,
+                   help="tube conversion factor (default %.1f, the M4011)"
+                        % DEFAULT_CPM_PER_USVH)
+    p.add_argument("--duration", type=float,
+                   help="stop after this many seconds (for tests)")
+    p.add_argument("--plain", action="store_true",
+                   help="line output instead of the full-screen monitor")
+    sub = p.add_subparsers(dest="command")
+    sub.add_parser("probe", help="find the counter and say what it is")
+    sub.add_parser("cpm", help="print the counter's own CPM once and exit")
+    sub.add_parser("watch", help="the monitor: 3s / 30s / 300s averages")
+    sub.add_parser("service", help="what the boot service runs: monitor if "
+                                   "present, dormant if not")
+    sub.add_parser("window", help="open the monitor in a terminal, silently "
+                                  "doing nothing if no counter is present")
+    lg = sub.add_parser("log", help="the counter's stored history")
+    lg.add_argument("log_action", choices=("pull", "info"), nargs="?",
+                    default="info")
+    lg.add_argument("-o", "--output", help="path stem for the .bin and .csv")
+    lg.add_argument("--bytes", type=int, help="how much flash to read "
+                                              "(default: the model's size)")
+    return p
+
+
+def main(argv=None):
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if not args.command:
+        parser.print_help()
+        return 0
+    for missing, default in (("log_action", "info"), ("output", None),
+                             ("bytes", None)):
+        if not hasattr(args, missing):
+            setattr(args, missing, default)
+    handlers = {"probe": cmd_probe, "cpm": cmd_cpm, "watch": cmd_watch,
+                "log": cmd_log, "service": cmd_service, "window": cmd_window}
+    try:
+        return handlers[args.command](args)
+    except KeyboardInterrupt:
+        return 130
+
+
+if __name__ == "__main__":
+    sys.exit(main())
