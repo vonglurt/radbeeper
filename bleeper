@@ -906,6 +906,11 @@ def cmd_service(args):
                 f.flush()
                 if stop["now"]:
                     break
+                # --duration is what makes this path testable at all: without
+                # it the only way to exercise the logger is to start a daemon
+                # and kill it, which is not something a test suite should do.
+                if args.duration and w.elapsed() >= args.duration:
+                    break
     except KeyboardInterrupt:
         pass
     finally:

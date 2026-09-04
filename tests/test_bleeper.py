@@ -203,3 +203,39 @@ class TestLevels(unittest.TestCase):
 
     def test_an_unfilled_window_is_not_a_reading(self):
         self.assertEqual(bleeper.level(None), "unknown")
+
+
+class TestService(unittest.TestCase):
+    """The two paths the boot service can take."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.real_state_dir = bleeper.state_dir
+        bleeper.state_dir = lambda: self.tmp
+
+    def tearDown(self):
+        bleeper.state_dir = self.real_state_dir
+
+    def test_no_counter_is_dormant_and_exits_zero(self):
+        # A service that cannot find its hardware must stop cleanly, not fail
+        # and not respawn. Exit 0 is the whole contract with OpenRC here.
+        rc = bleeper.main(["--device", "/dev/does-not-exist", "service"])
+        self.assertEqual(rc, 0)
+        with open(os.path.join(self.tmp, "status")) as f:
+            self.assertIn("dormant", f.read())
+
+    def test_a_counter_is_monitored_and_logged(self):
+        rc = bleeper.main(["--source", "sim", "--seed", "4", "--duration", "3",
+                           "service"])
+        self.assertEqual(rc, 0)
+        with open(os.path.join(self.tmp, "cpm.csv")) as f:
+            rows = f.read().strip().splitlines()
+        self.assertEqual(rows[0], "iso_time,cps,cpm_3,cpm_30,cpm_300")
+        self.assertGreaterEqual(len(rows), 3)
+        with open(os.path.join(self.tmp, "status")) as f:
+            self.assertIn("stopped", f.read())
+
+    def test_window_does_nothing_quietly_without_a_counter(self):
+        self.assertEqual(bleeper.main(["--device", "/dev/does-not-exist",
+                                       "window"]), 0)
