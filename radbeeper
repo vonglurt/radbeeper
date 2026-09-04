@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 paulr@sdf.org
 #
-#  bleeper -- a GQ GMC Geiger-Muller counter on the desk.
+#  radbeeper -- a GQ GMC Geiger-Muller counter on the desk.
 #
 #  Three things, in the order they were wanted:
 #
-#    1. find the counter on USB and say what it is       bleeper probe
-#    2. show what it is counting, now                    bleeper watch
-#    3. pull the history it recorded while unattended    bleeper log pull
+#    1. find the counter on USB and say what it is       radbeeper probe
+#    2. show what it is counting, now                    radbeeper watch
+#    3. pull the history it recorded while unattended    radbeeper log pull
 #
 #  WHY THERE IS NO pyserial HERE. The counter is a USB serial device and every
 #  example on the internet reaches for pyserial. Alpine packages it, but this
@@ -20,7 +20,7 @@
 #  rolling 60-second count, which is one number with one time constant. What was
 #  asked for is three: 3 seconds to see a source come and go as you move it,
 #  30 seconds to read the room, 300 seconds to have a number worth writing down.
-#  Those cannot be derived from a single CPM reading, so bleeper counts the
+#  Those cannot be derived from a single CPM reading, so radbeeper counts the
 #  blips itself -- one counts-per-second sample every second, from the counter's
 #  own heartbeat -- and computes each window from the samples it kept.
 #
@@ -96,7 +96,7 @@ SPIR_CHUNK = 2048
 # and under the home directory when it cannot, because a service that refuses
 # to run unprivileged is a service nobody runs.
 def state_dir():
-    for d in ("/var/log/bleeper", os.path.expanduser("~/.local/share/bleeper")):
+    for d in ("/var/log/radbeeper", os.path.expanduser("~/.local/share/radbeeper")):
         try:
             os.makedirs(d, exist_ok=True)
             probe = os.path.join(d, ".writable")
@@ -678,7 +678,7 @@ def run_curses(counter, w, args):
             w.add(when, counts)
             stdscr.erase()
             h, width = stdscr.getmaxyx()
-            title = "bleeper %s -- %s" % (VERSION, counter.version)
+            title = "radbeeper %s -- %s" % (VERSION, counter.version)
             stdscr.addnstr(0, 0, title, width - 1,
                            curses.color_pair(4) if use_colour else 0)
             stdscr.addnstr(1, 0, "%s @ %s baud   serial %s"
@@ -806,7 +806,7 @@ def cmd_log(args):
     if args.log_action == "info":
         print("model     %s" % c.model)
         print("flash     %d KiB" % (c.flash_size // 1024))
-        print("pull it   bleeper log pull -o FILE")
+        print("pull it   radbeeper log pull -o FILE")
         c.close()
         return 0
 
@@ -853,7 +853,7 @@ def cmd_log(args):
 # retry in a loop, because a USB device that is not plugged in will not become
 # plugged in because a daemon asked again four seconds later, and a service
 # that respawns forever on a Pi Zero is a service that costs more than it
-# measures. The retry is the next boot -- or `rc-service bleeper start` the
+# measures. The retry is the next boot -- or `rc-service radbeeper start` the
 # moment the thing is plugged in.
 def write_status(text):
     path = os.path.join(state_dir(), "status")
@@ -870,13 +870,13 @@ def cmd_service(args):
         counter = open_counter(args)
     except NotFound as e:
         path = write_status("dormant: %s" % e.reason)
-        print("bleeper: dormant -- %s" % e.reason)
+        print("radbeeper: dormant -- %s" % e.reason)
         if e.detail:
             for line in e.detail.splitlines():
                 print("    %s" % line)
         print("    status: %s" % path)
         print("    it will look again at the next boot, or when you run:"
-              " rc-service bleeper start")
+              " rc-service radbeeper start")
         return 0
 
     log_path = os.path.join(state_dir(), "cpm.csv")
@@ -890,8 +890,8 @@ def cmd_service(args):
     for sig in (signal.SIGTERM, signal.SIGINT):
         signal.signal(sig, handler)
 
-    print("bleeper: monitoring %s -- %s" % (counter.path, counter.version))
-    print("bleeper: logging to %s" % log_path)
+    print("radbeeper: monitoring %s -- %s" % (counter.path, counter.version))
+    print("radbeeper: logging to %s" % log_path)
     try:
         with open(log_path, "a") as f:
             if new:
@@ -942,7 +942,7 @@ def cmd_window(args):
                 break
         if path:
             os.execv(path, [term, flag, sys.argv[0], "watch"])
-    print("no terminal emulator found; run: bleeper watch", file=sys.stderr)
+    print("no terminal emulator found; run: radbeeper watch", file=sys.stderr)
     return 1
 
 
@@ -959,14 +959,14 @@ def spans_arg(text):
 
 def build_parser():
     p = argparse.ArgumentParser(
-        prog="bleeper",
+        prog="radbeeper",
         description="A GQ GMC Geiger-Muller counter on the desk: find it, "
                     "watch it, pull its log.",
         epilog="With no counter plugged in, --source sim runs the whole "
                "program against a Poisson background so the display and the "
                "averages can be worked on without hardware.")
     p.add_argument("--version", action="version",
-                   version="bleeper %s" % VERSION)
+                   version="radbeeper %s" % VERSION)
     p.add_argument("-d", "--device", help="serial port (default: search "
                                           "/dev/ttyUSB* and /dev/ttyACM*)")
     p.add_argument("-b", "--baud", type=int,

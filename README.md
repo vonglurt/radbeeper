@@ -1,4 +1,4 @@
-# bleeper
+# RadBeeper
 
 **A GQ GMC Geiger-Muller counter on the desk.**
 
@@ -9,17 +9,17 @@ three time constants at once, and pulls the history it recorded while you were
 not looking.
 
 ```sh
-bleeper probe            # find the counter and say what it is
-bleeper watch            # the monitor: 3s / 30s / 300s averages
-bleeper cpm              # the counter's own CPM, once, for a script
-bleeper log pull         # download the stored history to .bin and .csv
-bleeper service          # what the boot service runs
+radbeeper probe            # find the counter and say what it is
+radbeeper watch            # the monitor: 3s / 30s / 300s averages
+radbeeper cpm              # the counter's own CPM, once, for a script
+radbeeper log pull         # download the stored history to .bin and .csv
+radbeeper service          # what the boot service runs
 ```
 
 No counter on the desk? Every command works against a built-in source:
 
 ```sh
-bleeper --source sim --sim-cpm 400 watch
+radbeeper --source sim --sim-cpm 400 watch
 ```
 
 ## Why three averages
@@ -34,7 +34,7 @@ answer three:
 | **30 s** | Reading the room. Settled enough to compare two places. |
 | **300 s** | A number worth writing down. |
 
-Those cannot be derived from a single CPM reading, so bleeper counts the blips
+Those cannot be derived from a single CPM reading, so radbeeper counts the blips
 itself: one counts-per-second sample every second from the counter's own
 `<HEARTBEAT1>>` stream, and each window is a sum over the samples it kept.
 
@@ -45,7 +45,7 @@ leak.
 
 ## The counter has to be visible first
 
-`bleeper probe` distinguishes the three ways a counter fails to appear,
+`radbeeper probe` distinguishes the three ways a counter fails to appear,
 because they have three different fixes:
 
 ```
@@ -66,17 +66,17 @@ no counter: no USB-serial driver in this kernel
 
 ## The service, and what "dormant" means
 
-`bleeper service` probes once. If a counter is there it monitors and logs to
+`radbeeper service` probes once. If a counter is there it monitors and logs to
 `cpm.csv`. If there is not, **it writes down why and exits 0** — a stopped
 service, not a crash loop. A USB device that is not plugged in will not become
 plugged in because a daemon asked again four seconds later, and a service that
 respawns forever on a Pi Zero costs more than it measures.
 
-The retry is the next boot, or `rc-service bleeper start` the moment you plug
+The retry is the next boot, or `rc-service radbeeper start` the moment you plug
 it in.
 
-State lives in `/var/log/bleeper` when that is writable and
-`~/.local/share/bleeper` when it is not:
+State lives in `/var/log/radbeeper` when that is writable and
+`~/.local/share/radbeeper` when it is not:
 
 | File | What it holds |
 |---|---|
@@ -88,9 +88,9 @@ State lives in `/var/log/bleeper` when that is writable and
 ## Pulling the log
 
 ```sh
-bleeper log info          # how much history flash this model has
-bleeper log pull          # into the state directory
-bleeper log pull -o ~/attic/2026-09-04
+radbeeper log info          # how much history flash this model has
+radbeeper log pull          # into the state directory
+radbeeper log pull -o ~/attic/2026-09-04
 ```
 
 **The raw image is always written first, and the decode second.** GQ's history
@@ -145,7 +145,7 @@ rather than blocking.
 | `<GETDATETIME>>` | 7 bytes |
 | `<SPIR[addr][len]>>` | `len` bytes of history flash |
 
-Baud is 115200 on the 320 and 57600 on the 300; bleeper tries both.
+Baud is 115200 on the 320 and 57600 on the 300; radbeeper tries both.
 
 There is no `pyserial` here. Alpine packages it, but this runs on a Pi Zero
 with 512 MB and on a fresh install with no network, and a serial port is
