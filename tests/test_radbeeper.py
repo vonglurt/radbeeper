@@ -1186,11 +1186,11 @@ class TestOverlapAndSignificance(unittest.TestCase):
 
 
 class TestBigNumber(unittest.TestCase):
-    """Six-row digits, for the number read from across the room."""
+    """Nine-row digits, for the number read from across the room."""
 
-    def test_every_digit_is_six_rows(self):
+    def test_every_digit_is_nine_rows(self):
         for ch in "0123456789":
-            self.assertEqual(len(radbeeper.big_number(ch)), 6)
+            self.assertEqual(len(radbeeper.big_number(ch)), 9)
 
     def test_the_rows_of_one_number_are_all_the_same_width(self):
         rows = radbeeper.big_number("1234.5")
@@ -1204,7 +1204,7 @@ class TestBigNumber(unittest.TestCase):
     def test_a_dash_is_a_middle_bar_and_nothing_else(self):
         rows = radbeeper.big_number("-")
         self.assertEqual([bool("█" in r) for r in rows],
-                         [False, False, True, False, False, False])
+                         [False] * 4 + [True] + [False] * 4)
 
     def test_unknown_characters_are_skipped_not_crashed_on(self):
         self.assertEqual(radbeeper.big_number("9x9"), radbeeper.big_number("99"))
