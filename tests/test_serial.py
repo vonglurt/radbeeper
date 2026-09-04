@@ -185,3 +185,73 @@ class TestCommandsEndToEnd(SerialCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTheLock(SerialCase):
+    """One reader at a time, because two readers is a wrong number.
+
+    Two processes reading one tty each get a share of the bytes and neither is
+    told, so a logger and a monitor running together would halve both their
+    counts and look entirely plausible doing it. These are the tests for the
+    flock that stops that -- and for the two different answers the program
+    gives to a locked port, which is the whole reason the case is separate
+    from "no counter at all".
+    """
+
+    def test_a_second_open_of_the_same_port_is_refused(self):
+        first = radbeeper.Serial(self.dev.path, 115200, 1.0)
+        try:
+            with self.assertRaises(radbeeper.Busy):
+                radbeeper.Serial(self.dev.path, 115200, 1.0)
+        finally:
+            first.close()
+
+    def test_the_lock_goes_when_the_holder_closes(self):
+        first = radbeeper.Serial(self.dev.path, 115200, 1.0)
+        first.close()
+        second = radbeeper.Serial(self.dev.path, 115200, 1.0)
+        second.close()
+
+    def test_a_busy_port_is_its_own_reason_not_a_missing_counter(self):
+        # "No counter" and "the counter is busy" have different fixes, so they
+        # must not arrive as the same message.
+        held = radbeeper.Serial(self.dev.path, 115200, 1.0)
+        try:
+            with self.assertRaises(radbeeper.NotFound) as caught:
+                radbeeper.find_counter(device=self.dev.path)
+            self.assertTrue(caught.exception.busy)
+            self.assertIn("rc-service radbeeper stop",
+                          caught.exception.detail)
+        finally:
+            held.close()
+
+    def test_the_window_opens_nothing_when_the_port_is_busy(self):
+        # Already being read means already covered: no second window, and no
+        # write to a status file that belongs to whoever holds the port.
+        held = radbeeper.Serial(self.dev.path, 115200, 1.0)
+        try:
+            self.assertEqual(
+                radbeeper.main(["--device", self.dev.path, "window"]), 0)
+        finally:
+            held.close()
+
+    def test_the_service_waits_on_a_busy_port_instead_of_going_dormant(self):
+        # The one place this program is allowed a retry loop. An absent device
+        # will not appear because a daemon asked again; a locked one will, the
+        # moment the person watching it closes their monitor.
+        import tempfile
+        tmp = tempfile.mkdtemp()
+        real = radbeeper.state_dir
+        radbeeper.state_dir = lambda: tmp
+        held = radbeeper.Serial(self.dev.path, 115200, 1.0)
+        try:
+            rc = radbeeper.main(["--device", self.dev.path,
+                                 "--duration", "1", "service"])
+            self.assertEqual(rc, 0)
+            with open(os.path.join(tmp, "status")) as f:
+                status = f.read()
+            self.assertIn("waiting", status)
+            self.assertNotIn("dormant", status)
+        finally:
+            held.close()
+            radbeeper.state_dir = real

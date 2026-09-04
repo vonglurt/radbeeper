@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import struct
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -205,6 +206,51 @@ class TestLevels(unittest.TestCase):
         self.assertEqual(radbeeper.level(None), "unknown")
 
 
+class TestInterval(unittest.TestCase):
+    """The accumulator behind a log row: peaks, rate, and constant space."""
+
+    def test_cps_is_per_one_second_not_per_interval(self):
+        # 60 counts over 30 seconds is 2 CPS, never 60. The log's row spacing
+        # must not leak into the unit.
+        iv = radbeeper.Interval((3, 30))
+        for _ in range(30):
+            iv.add(2, [None, None])
+        self.assertEqual(iv.seconds, 30)
+        self.assertEqual(iv.counts, 60)
+        self.assertAlmostEqual(iv.cps(), 2.0)
+
+    def test_cps_of_an_empty_interval_is_zero_not_a_crash(self):
+        self.assertEqual(radbeeper.Interval((3,)).cps(), 0.0)
+
+    def test_peak_is_the_highest_seen_not_the_last(self):
+        iv = radbeeper.Interval((3, 30))
+        iv.add(1, [100.0, 10.0])
+        iv.add(1, [900.0, 20.0])      # the spike
+        iv.add(1, [50.0, 30.0])       # gone again by the time the row is due
+        self.assertEqual(iv.peaks[0], 900.0)
+        self.assertEqual(iv.peaks[1], 30.0)
+
+    def test_an_unfilled_window_never_becomes_a_peak(self):
+        # None means "not enough signal to say" and must not be read as 0,
+        # here least of all: a peak of 0 would be a claim, not an absence.
+        iv = radbeeper.Interval((3,))
+        iv.add(1, [None])
+        self.assertIsNone(iv.peaks[0])
+        iv.add(1, [40.0])
+        self.assertEqual(iv.peaks[0], 40.0)
+
+    def test_reset_clears_everything_so_memory_cannot_grow(self):
+        iv = radbeeper.Interval((3, 30))
+        for _ in range(1000):
+            iv.add(5, [10.0, 20.0])
+        iv.reset()
+        self.assertEqual((iv.counts, iv.seconds), (0, 0))
+        self.assertEqual(iv.peaks, [None, None])
+        # Nothing per-sample is retained -- the only state is the slots.
+        self.assertEqual(sorted(radbeeper.Interval.__slots__),
+                         ["counts", "peaks", "seconds", "spans"])
+
+
 class TestService(unittest.TestCase):
     """The two paths the boot service can take."""
 
@@ -226,16 +272,138 @@ class TestService(unittest.TestCase):
             self.assertIn("dormant", f.read())
 
     def test_a_counter_is_monitored_and_logged(self):
-        rc = radbeeper.main(["--source", "sim", "--seed", "4", "--duration", "3",
-                           "service"])
+        # One run, several claims: the interval cadence, the header, the field
+        # count, and that the timestamps sort as text. Doing it in one run
+        # keeps the suite's wall clock down -- the simulator yields in real
+        # time, so every service test costs its --duration in seconds.
+        rc = radbeeper.main(["--source", "sim", "--sim-cpm", "600", "--seed",
+                             "4", "--log-every", "2", "--duration", "9",
+                             "service"])
         self.assertEqual(rc, 0)
-        with open(os.path.join(self.tmp, "cpm.csv")) as f:
-            rows = f.read().strip().splitlines()
-        self.assertEqual(rows[0], "iso_time,cps,cpm_3,cpm_30,cpm_300")
+        with open(os.path.join(self.tmp, "cpm.tsv")) as f:
+            lines = f.read().split("\n")
+        rows = [ln for ln in lines if ln and not ln.startswith("#")]
+        head = lines[0]
+
+        self.assertEqual(head, "#time\tcps\tcounts\tseconds"
+                               "\tcpm_3\tcpm_30\tcpm_300"
+                               "\tpeak_3\tpeak_30\tpeak_300")
+        # Every row is the full width, trailing empties included, or a column
+        # count is not a reliable way to read the file.
+        for r in rows:
+            self.assertEqual(len(r.split("\t")), 10)
+        # A row every 2s over ~9s is a handful, NOT one per second. This is
+        # the whole point of the change and the cheapest thing to regress.
+        self.assertLessEqual(len(rows), 6)
         self.assertGreaterEqual(len(rows), 3)
+        # Written big-endian so plain text sort is chronological.
+        stamps = [r.split("\t")[0] for r in rows]
+        self.assertEqual(stamps, sorted(stamps))
         with open(os.path.join(self.tmp, "status")) as f:
             self.assertIn("stopped", f.read())
+
+    def test_the_last_partial_interval_is_still_written(self):
+        # Stopping between rows must not throw away what was collected: a
+        # service killed four seconds after a spike should still have it.
+        rc = radbeeper.main(["--source", "sim", "--seed", "5",
+                             "--log-every", "600", "--duration", "3",
+                             "service"])
+        self.assertEqual(rc, 0)
+        with open(os.path.join(self.tmp, "cpm.tsv")) as f:
+            rows = [ln for ln in f.read().split("\n")
+                    if ln and not ln.startswith("#")]
+        # The interval never came due, so the only row is the partial one.
+        self.assertEqual(len(rows), 1)
+        self.assertLess(int(rows[0].split("\t")[3]), 600)
 
     def test_window_does_nothing_quietly_without_a_counter(self):
         self.assertEqual(radbeeper.main(["--device", "/dev/does-not-exist",
                                        "window"]), 0)
+
+
+class TestHotplug(unittest.TestCase):
+    """The session watcher: one window per plug, and none without one.
+
+    spawn_window is replaced by a fork that only sleeps, because what is under
+    test is WHEN the watcher decides to open a window -- not what the window
+    then does, which is cmd_window's business and is covered above. The child
+    is real rather than a fake pid so that the waitpid bookkeeping, which is
+    how the loop knows a monitor is already up, is exercised too.
+    """
+
+    def setUp(self):
+        self.real_ports = radbeeper.candidate_ports
+        self.real_spawn = radbeeper.spawn_window
+        self.opened = []
+        self.kids = []
+        self.child_life = 30.0   # a window that stays open
+
+        def spawn(_args):
+            self.opened.append(True)
+            pid = os.fork()
+            if pid == 0:
+                if self.child_life:
+                    time.sleep(self.child_life)
+                os._exit(0)
+            self.kids.append(pid)
+            return pid
+
+        radbeeper.spawn_window = spawn
+
+    def tearDown(self):
+        radbeeper.candidate_ports = self.real_ports
+        radbeeper.spawn_window = self.real_spawn
+        for pid in self.kids:
+            try:
+                os.kill(pid, 9)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+
+    def run_watcher(self, ports_over_time, duration=1.4, poll=0.2):
+        """Run the loop with candidate_ports answering a fixed script.
+
+        The last entry is the steady state, so a short script can describe a
+        session of any length.
+        """
+        answers = list(ports_over_time)
+
+        def ports():
+            return answers.pop(0) if len(answers) > 1 else answers[0]
+
+        radbeeper.candidate_ports = ports
+        # --duration is a global option, so it goes before the subcommand.
+        return radbeeper.main(["--duration", str(duration), "hotplug",
+                               "--poll", str(poll), "--settle", "0"])
+
+    def test_nothing_plugged_in_opens_nothing(self):
+        # The whole point of the silent design: a machine with no counter must
+        # never see a window, however long the session runs.
+        self.assertEqual(self.run_watcher([[]]), 0)
+        self.assertEqual(self.opened, [])
+
+    def test_a_counter_already_there_at_login_opens_one_window(self):
+        # The case the old `window` autostart line handled, and which this has
+        # to keep handling now that it has replaced it.
+        self.assertEqual(self.run_watcher([["/dev/ttyUSB0"]]), 0)
+        self.assertEqual(len(self.opened), 1)
+
+    def test_a_counter_plugged_in_later_opens_one_window(self):
+        # Empty at login, then a node appears. Exactly one window -- not one
+        # per poll for the rest of the session, which is the way this goes
+        # wrong if the edge is not what triggers it.
+        self.assertEqual(self.run_watcher([[], [], ["/dev/ttyUSB0"]]), 0)
+        self.assertEqual(len(self.opened), 1)
+
+    def test_an_event_is_written_off_after_its_tries(self):
+        # A window that exits at once is what a serial cable that is not a
+        # counter looks like from here. It is worth a few attempts, because
+        # the same shape is a node whose group udev has not set yet -- and
+        # then it must stop. Reopening a stranger's port every four seconds
+        # for the rest of the session is the failure being guarded against.
+        self.child_life = 0
+        self.run_watcher([["/dev/ttyUSB0"]], duration=2.0, poll=0.2)
+        self.assertEqual(len(self.opened), radbeeper.DEFAULT_TRIES)
