@@ -56,7 +56,7 @@ footer{color:var(--dim);font-size:.82rem;margin-top:3rem;border-top:1px solid va
 code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
 </style></head><body><main>
 <h1>Radiation monitor</h1>
-<p class="sub">A GQ GMC Geiger-Muller counter on the desk &middot; generated 2026-09-04 22:15 by radbeeper 0.1.0 &middot; tube factor 151.5 CPM per &micro;Sv/h</p>
+<p class="sub">A GQ GMC Geiger-Muller counter on the desk &middot; generated 2026-09-04 22:54 by radbeeper 0.1.0 &middot; tube factor 151.5 CPM per &micro;Sv/h</p>
 <p class="lede">A <strong>GQ GMC-320 Plus</strong> Geiger&ndash;M&uuml;ller counter, plugged into a machine running <strong>Alpine Linux</strong> as a USB serial device &mdash; here shared into a virtual machine over USB pass-through. RadBeeper reads the counter, logs it to tab-separated files, and <strong>this page is regenerated from those files by a GitHub Action</strong> on every push. The whole of it is forkable: copy your own logs into <code>logs/</code> and you get a page like this one. <a href="https://github.com/vonglurt/radbeeper">Source and instructions</a>.</p>
 <h2>Counter F48824B8207F7E</h2>
 <div class="cards">
@@ -180,6 +180,8 @@ doas adduser $USER dialout    # then log in again</pre>
 <pre>radbeeper service</pre>
 <p>A row every 30 seconds into a dated file per counter, <code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code> &mdash; which is rotation by construction, with no cron entry and nothing renaming a file while a service appends to it. Each row carries the <strong>peak</strong> every window reached since the last one, so a source that came and went between two rows still leaves a trace.</p>
 <figure><img src="docs/screenshots/log-output.png" alt="the log on disk, and what a row holds" loading="lazy"><figcaption>the log on disk, and what a row holds</figcaption></figure>
+<p>Tabs are invisible, and that matters here: an <strong>empty field is not a zero</strong>, it is a window that was not full yet.</p>
+<figure><img src="docs/screenshots/log-tabs.png" alt="the same rows with every tab made visible" loading="lazy"><figcaption>the same rows with every tab made visible</figcaption></figure>
 <p>The counter also records to its own flash whether or not anything is listening. <code>radbeeper backfill</code> reads that back and fills the gaps &mdash; one row per slot, never over a live measurement, and an hour nobody recorded stays an hour nobody recorded.</p>
 <pre>radbeeper backfill</pre>
 <h3>Publish it</h3>
