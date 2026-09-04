@@ -10,6 +10,7 @@ import importlib.util
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -142,17 +143,25 @@ class TestHistoryOverSerial(SerialCase):
         self.assertGreater(len(spirs), 1)
 
     def test_the_downloaded_image_decodes_to_the_samples_put_in(self):
-        blob = build_history(seconds=50, cpm=400.0, seed=9, size=2048)
+        # 100 samples between marks, because the counter's RTC has
+        # one-second resolution: over 20 samples a 1.1% drift rounds away to
+        # nothing, and the interval is only resolvable over a long stretch.
+        # The real device writes a mark every 180.
+        blob = build_history(seconds=300, cpm=400.0, seed=9, size=8192,
+                             per_mark=100)
         self.dev.history = blob
         c = radbeeper.identify(self.dev.path, baud=115200)
         got = c.read_history(0, len(blob))
         c.close()
-        rows = list(radbeeper.decode_history(got))
+        rows = list(radbeeper.history_records(got))
         counts = [r[3] for r in rows if r[3] is not None]
-        self.assertEqual(len(counts), 50)
-        stamps = [r[1] for r in rows if r[1]]
-        self.assertEqual(stamps[0], "2026-09-04 11:00:00")
-        self.assertEqual([r[2] for r in rows if r[2]][0], "every minute")
+        self.assertEqual(len(counts), 300)
+        placed = [r[1] for r in rows if r[1] is not None and r[3] is not None]
+        self.assertEqual(placed[0],
+                         time.mktime((2026, 9, 4, 11, 0, 0, 0, 1, -1)))
+        # The fixture ticks at 1.011 s, so the decoder must not report 1.000.
+        dt = [r[2] for r in rows if r[2] is not None][0]
+        self.assertAlmostEqual(dt, 1.01, places=3)
         self.assertIn("note!", [r[4] for r in rows])
 
 
@@ -179,7 +188,7 @@ class TestCommandsEndToEnd(SerialCase):
             self.assertEqual(os.path.getsize(stem + ".bin"), 1024)
             with open(stem + ".csv") as f:
                 lines = f.read().strip().splitlines()
-            self.assertEqual(lines[0], "offset,timestamp,save_mode,count,note")
+            self.assertEqual(lines[0], "offset,time,interval_s,count,note")
             self.assertGreater(len(lines), 30)
 
 

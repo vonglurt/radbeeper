@@ -96,6 +96,26 @@ SPIR_CHUNK = 2048
 LOG_NAME = "cpm.tsv"
 DEFAULT_LOG_EVERY = 30.0
 
+# WHERE A ROW CAME FROM, and why the column is worth its width. Rows measured
+# live and rows reconstructed from the counter's flash are not the same
+# evidence: the live ones were watched by this machine's clock, the flash ones
+# were placed by arithmetic over a drifting one. Anybody reading the file a
+# month later needs to be able to tell, and a column is the only way that
+# survives sort, grep and a spreadsheet.
+SRC_LIVE = "live"
+SRC_FLASH = "flash"
+
+# How large a hole in the recording ends an average. The counter being off, or
+# out of range of anything, leaves a gap; carrying a 300-second window across
+# it would average two different afternoons together and call it one number.
+DEFAULT_MAX_GAP = 10.0
+
+# How much of the flash tail a backfill reads when it is not told otherwise.
+# 64 KiB is around seventeen hours at the interval this counter records, and
+# forty seconds of reading -- a whole megabyte is ten minutes, which is not a
+# thing to put in front of a service that is trying to start.
+DEFAULT_BACKFILL_BYTES = 64 * 1024
+
 # The session watcher, `radbeeper hotplug`. Four seconds is a listdir of /dev
 # fifteen times a minute, which costs nothing; --settle is the grace the node
 # gets between appearing and being opened, and --tries how many times a plug
@@ -629,13 +649,21 @@ class Interval:
 
     def reset(self):
         self.counts = 0
-        self.seconds = 0
+        self.seconds = 0.0
         self.peaks = [None] * len(self.spans)
 
-    def add(self, counts, averages):
-        """One second of data: the raw count, and each window as it stands."""
+    def add(self, counts, averages, dt=1.0):
+        """One sample: the raw count, each window as it stands, and how long
+        the sample covers.
+
+        dt is 1.0 from the heartbeat, which is a second by definition. It is
+        NOT 1.0 when the samples come from the counter's flash, where a
+        recorded "second" measures 1.011 of ours -- and a column that says
+        `seconds` has to mean seconds, or the cps beside it is a percent wrong
+        for no visible reason.
+        """
         self.counts += counts
-        self.seconds += 1
+        self.seconds += dt
         for i, cpm in enumerate(averages):
             if cpm is not None and (self.peaks[i] is None or cpm > self.peaks[i]):
                 self.peaks[i] = cpm
@@ -856,47 +884,268 @@ def cmd_watch(args):
 # with some shipped units. So the download writes the flash image to disk
 # first and decodes second: a decoder that mis-reads a marker costs a bad CSV,
 # never the data, and a better decoder can be run over the same image later.
+# This is that better decoder, and the image it was written against is the
+# reason the rule earns its keep.
 #
-#   55 AA 00 YY MM DD HH MM SS <mode>   a timestamp and the save interval
+#   55 AA 00 YY MM DD HH MM SS          a timestamp -- NINE bytes, no mode
 #   55 AA 01 <hi> <lo>                  one count that did not fit in a byte
 #   55 AA 02 <len> <ascii...>           a note typed on the device
 #   FF                                  unwritten flash
 #   anything else                       one count, one byte
-SAVE_MODES = {0: "off", 1: "every second", 2: "every minute",
-              3: "every hour", 4: "every second (2-byte)",
-              5: "every minute (2-byte)"}
+#
+# THE DATETIME RECORD IS NINE BYTES. GQ's document describes ten, the last a
+# save-mode byte, and this program believed it. It is not there on GMC-320Re
+# 4.26: measured over a 16 KiB image on 4 Sep 2026, all 85 datetime records
+# were followed immediately by 0x55 -- the first byte of the next marker.
+# Reading a tenth byte swallowed that 0x55, left 0xAA to be decoded as an
+# ordinary sample, and so INVENTED a count of 170 every three minutes while
+# losing the real two-byte count that follows every timestamp. Nine bytes, and
+# the save interval is measured rather than believed.
+def _history_raw(blob):
+    """Yield (offset, kind, value) for each record: mark, count or note.
 
-
-def decode_history(blob):
-    """Yield (index, timestamp_or_None, mode_or_None, count_or_None, note)."""
+    One pass, nothing kept. A 1 MiB image holds about a million samples and
+    this program runs on machines with 512 MB, so no stage of reading history
+    is allowed to build a list with one entry per sample.
+    """
     i, n = 0, len(blob)
-    stamp, mode = None, None
     while i < n:
         b = blob[i]
-        if b == 0x55 and i + 2 < n and blob[i + 1] == 0xAA:
+        if b == 0x55 and i + 3 <= n and blob[i + 1] == 0xAA:
             kind = blob[i + 2]
-            if kind == 0x00 and i + 9 < n:
-                yy, mm, dd, hh, mi, ss, md = blob[i + 3:i + 10]
-                stamp = "20%02d-%02d-%02d %02d:%02d:%02d" % (yy, mm, dd, hh, mi, ss)
-                mode = SAVE_MODES.get(md, "mode %d" % md)
-                yield i, stamp, mode, None, ""
-                i += 10
+            if kind == 0x00 and i + 9 <= n:
+                yy, mm, dd, hh, mi, ss = blob[i + 3:i + 9]
+                # The fields are range-checked BEFORE mktime, because mktime
+                # normalises rather than refuses: month 99 day 99 is not an
+                # error to it, it is 2034. Corrupt or half-erased flash throws
+                # up 55 AA 00 followed by rubbish, and a mark accepted from
+                # that would place every sample after it in the wrong decade.
+                if (1 <= mm <= 12 and 1 <= dd <= 31 and hh <= 23
+                        and mi <= 59 and ss <= 60):
+                    try:
+                        when = time.mktime((2000 + yy, mm, dd, hh, mi, ss,
+                                            0, 1, -1))
+                    except (ValueError, OverflowError):
+                        when = None
+                else:
+                    when = None
+                if when is not None:
+                    yield i, "mark", when
+                i += 9
                 continue
-            if kind == 0x01 and i + 4 < n:
-                yield i, stamp, mode, struct.unpack(">H", blob[i + 3:i + 5])[0], ""
+            if kind == 0x01 and i + 5 <= n:
+                yield i, "count", struct.unpack(">H", blob[i + 3:i + 5])[0]
                 i += 5
                 continue
-            if kind == 0x02 and i + 3 < n:
+            if kind == 0x02 and i + 4 <= n:
                 ln = blob[i + 3]
-                note = blob[i + 4:i + 4 + ln].decode("ascii", "replace")
-                yield i, stamp, mode, None, note
+                yield i, "note", blob[i + 4:i + 4 + ln].decode("ascii", "replace")
                 i += 4 + ln
                 continue
         if b == 0xFF:
             i += 1
             continue
-        yield i, stamp, mode, b, ""
+        yield i, "count", b
         i += 1
+
+
+def history_marks(blob):
+    """[[offset, unix time, samples before the next mark]] -- one per timestamp.
+
+    Small: a timestamp every three minutes is about 5,400 of these in a full
+    1 MiB image, against a million samples. Everything else about the recording
+    is derived from this list.
+    """
+    marks = []
+    since = 0
+    for off, kind, val in _history_raw(blob):
+        if kind == "mark":
+            if marks:
+                marks[-1][2] = since
+            marks.append([off, val, 0])
+            since = 0
+        elif kind == "count":
+            since += 1
+    if marks:
+        marks[-1][2] = since
+    return marks
+
+
+def sample_intervals(marks):
+    """Seconds per sample for each stretch between two timestamps.
+
+    THE INTERVAL IS MEASURED, NOT ASSUMED, and that is the whole reason this
+    function exists. The counter saves one sample per "second" and its second
+    is not one of ours: on the unit this was written against, 179 samples land
+    between marks 181 seconds apart -- 1.011 s each, which is 39 seconds of
+    drift an hour. Placing an hour-old sample by assuming 1.000 would put it
+    most of a minute from where it belongs, and backfilled rows would land in
+    the wrong slots.
+
+    BUT A MEASUREMENT IS NOT ALWAYS OF WHAT IT LOOKS LIKE. A stretch whose
+    mark is followed four hours later did not record one sample every eighty
+    seconds -- the counter was switched off in between, and its 179 samples
+    belong in the three minutes after its own mark with a four-hour hole after
+    them. So the measurements are taken, their median is the recording's real
+    rate, and any stretch more than a factor of two either side of that is
+    given the median instead of its own reading. The hole then survives as a
+    hole, which is what it was.
+
+    An image with only one timestamp measures nothing at all and says so with
+    None, rather than assuming a second and quietly being wrong.
+    """
+    raw = [None] * len(marks)
+    for j in range(len(marks) - 1):
+        span = marks[j + 1][1] - marks[j][1]
+        n = marks[j][2]
+        if n > 0 and span > 0:
+            raw[j] = span / float(n)
+    good = sorted(x for x in raw if x is not None)
+    if not good:
+        return raw
+    median = good[len(good) // 2]
+    return [median if (x is None or not 0.5 * median <= x <= 2.0 * median)
+            else x for x in raw]
+
+
+def history_records(blob):
+    """Yield (offset, when, dt, count, note) for every record in an image.
+
+    `when` is a unix time on THE COUNTER'S OWN CLOCK -- correcting that to this
+    machine's is a separate step, because it is a separate error with a
+    separate cause. Records before the first timestamp carry when=None: a
+    partial read of the middle of the flash cannot honestly place them.
+    """
+    marks = history_marks(blob)
+    dts = sample_intervals(marks)
+    at = dict((m[0], j) for j, m in enumerate(marks))
+    base = dt = None
+    k = 0
+    for off, kind, val in _history_raw(blob):
+        if kind == "mark":
+            j = at.get(off)
+            base, dt = val, (dts[j] if j is not None else None)
+            k = 0
+            yield off, val, dt, None, ""
+        elif kind == "count":
+            if base is None or dt is None:
+                yield off, None, None, val, ""
+            else:
+                yield off, base + k * dt, dt, val, ""
+                k += 1
+        else:
+            yield off, base, dt, None, val
+
+
+def history_samples(blob, offset=0.0):
+    """Yield (unix time, count, seconds this sample covers).
+
+    `offset` is added to every timestamp: see measure_clock_offset.
+    """
+    for _off, when, dt, count, _note in history_records(blob):
+        if when is not None and count is not None:
+            yield when + offset, count, dt
+
+
+def measure_clock_offset(counter):
+    """Seconds to add to the counter's timestamps to land on this clock.
+
+    The counter's RTC is not this machine's. On the unit here it reads about
+    half an hour behind, which is six hundred slots at the default row
+    spacing: backfilling without this correction would file four hours of
+    recording under the wrong four hours. The reading is bracketed by two
+    calls to time() and taken from the middle, because the counter's answer
+    takes a measurable fraction of a second to arrive.
+
+    It assumes the offset held over the whole recording, which is the best a
+    single measurement can do -- and is why the number is always printed
+    rather than quietly applied.
+    """
+    before = time.time()
+    text = counter.datetime()
+    after = time.time()
+    if not text:
+        return None
+    try:
+        theirs = time.mktime(time.strptime(text, "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return None
+    return (before + after) / 2.0 - theirs
+
+
+def first_mark_time(counter, address, probe):
+    """The time of the first timestamp in a probe read at `address`."""
+    chunk = counter.read_history(address, probe) or b""
+    for _off, kind, val in _history_raw(chunk):
+        if kind == "mark":
+            return val
+    return None
+
+
+def find_history_end(counter, size, probe=2048):
+    """(newest byte address, whether the flash has wrapped).
+
+    Pulling a full megabyte over 115200 baud takes ten minutes and the rows a
+    backfill wants are the NEWEST, so the first job is to find where the newest
+    ones are. There are two shapes of flash and they need different searches.
+
+    NOT YET FULL. Writing runs forward from zero and the rest is 0xFF. Eleven
+    probes bisect for where the 0xFF starts, and that is the end.
+
+    ALREADY WRAPPED, which is what the counter on the bench turned out to be
+    doing -- 1 MiB of ring with no unwritten byte anywhere in it. The newest
+    sample is immediately BEFORE the write pointer and the oldest immediately
+    after, so the flash reads as one long climb in time with exactly one step
+    backwards in it, and that step is the pointer. Timestamps are monotonic
+    either side of it, so it bisects: any address whose first mark is older
+    than the mark at zero lies past the pointer.
+
+    Getting this wrong is not a small error. Reading the physical tail of a
+    wrapped ring hands back the OLDEST hours in the flash while claiming they
+    are the newest, and a backfill would file last week under this afternoon.
+    """
+    tail = counter.read_history(max(0, size - probe), probe) or b""
+    if not any(c != 0xFF for c in tail):
+        lo, hi = 0, size
+        if not any(c != 0xFF for c in counter.read_history(0, probe) or b""):
+            return 0, False
+        while hi - lo > probe:
+            mid = (lo + hi) // 2
+            chunk = counter.read_history(mid, probe) or b""
+            if any(c != 0xFF for c in chunk):
+                lo = mid
+            else:
+                hi = mid
+        # Bisection lands within a probe of the truth; the last step reads
+        # that window and takes the exact byte, so the tail read does not
+        # carry a kilobyte of 0xFF with it.
+        window = counter.read_history(lo, probe * 2) or b""
+        last = -1
+        for j, c in enumerate(window):
+            if c != 0xFF:
+                last = j
+        return (lo + last + 1) if last >= 0 else lo, False
+
+    start = first_mark_time(counter, 0, probe)
+    if start is None:
+        return size, True          # no marks to steer by; take it as it lies
+    lo, hi = 0, size               # lo is newer-or-equal, hi is past the step
+    while hi - lo > probe:
+        mid = (lo + hi) // 2
+        seen = first_mark_time(counter, mid, probe)
+        if seen is None or seen >= start:
+            lo = mid
+        else:
+            hi = mid
+    # And exactly where, inside that window, time steps back. Overshooting
+    # costs a kilobyte of last week's samples on the front of the read --
+    # harmless, since they sort into their own slots, but it is a wrong
+    # answer to a question with a right one.
+    window = counter.read_history(lo, probe * 2) or b""
+    for off, kind, val in _history_raw(window):
+        if kind == "mark" and val < start:
+            return lo + off, True
+    return lo + probe, True
 
 
 def cmd_log(args):
@@ -936,15 +1185,290 @@ def cmd_log(args):
     print("raw    %s  (%d KiB)" % (raw_path, len(got) // 1024))
     rows = 0
     with open(csv_path, "w") as f:
-        f.write("offset,timestamp,save_mode,count,note\n")
-        for off, stamp, mode, count, note in decode_history(got):
-            f.write("%d,%s,%s,%s,%s\n" % (off, stamp or "", mode or "",
-                                          "" if count is None else count,
-                                          note.replace(",", " ")))
+        f.write("offset,time,interval_s,count,note\n")
+        for off, when, dt, count, note in history_records(got):
+            f.write("%d,%s,%s,%s,%s\n"
+                    % (off,
+                       "" if when is None else time.strftime(
+                           "%Y-%m-%dT%H:%M:%S", time.localtime(when)),
+                       "" if dt is None else "%.4f" % dt,
+                       "" if count is None else count,
+                       note.replace(",", " ")))
             rows += 1
     print("csv    %s  (%d rows)" % (csv_path, rows))
+    print("       times are the COUNTER's clock; interval_s is the measured")
+    print("       spacing of its samples. radbeeper backfill corrects both.")
     if rows == 0:
         print("nothing was recorded -- the counter's history may be empty.")
+    return 0
+
+
+# --------------------------------------------------------------- the log ---
+#
+# ONE ROW PER SLOT, AND THE SLOT IS THE KEY. Rows arrive from two places --
+# the live monitor, and a backfill reading the counter's flash -- and they must
+# not be able to describe the same stretch of time twice. So a row is not
+# identified by its timestamp, which is whatever instant the writer happened to
+# reach, but by the SLOT it falls in: the log interval it belongs to, floor of
+# the time over the row spacing. Two rows clash if and only if they share a
+# slot, and a backfill never writes into a slot that already has a row.
+#
+# GAPS ARE ALLOWED AND ARE NOT FILLED. A slot with no evidence stays absent
+# from the file. Nothing is interpolated across it, because a row that says
+# 0.000 CPS for a half hour nobody measured is worse than no row at all -- it
+# is the same mistake as drawing an unfilled window as zero, one file down.
+def log_header(spans):
+    head = ["time", "cps", "counts", "seconds"]
+    head += ["cpm_%g" % s for s in spans]
+    head += ["peak_%g" % s for s in spans]
+    head.append("src")
+    # The '#' keeps the header sorting above the rows rather than into the
+    # middle of them, so `sort` stays usable on the file as it is, and
+    # `grep -v '^#'` drops it when it is in the way.
+    return "#" + "\t".join(head)
+
+
+def log_row(when, cps, counts, seconds, averages, peaks, src):
+    """One tab-separated line: when, how fast, the worst it got, and whence.
+
+    The timestamp is first and is written big-endian, so it sorts
+    lexicographically: `sort cpm.tsv` is chronological with no flags, no field
+    numbers and no awk, which is the whole reason for that shape.
+    """
+    cells = [time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(when)),
+             "%.3f" % cps, "%d" % counts, "%g" % seconds]
+    cells += ["" if a is None else "%.1f" % a for a in averages]
+    cells += ["" if p is None else "%.1f" % p for p in peaks]
+    cells.append(src)
+    return "\t".join(cells)
+
+
+def slot_of(when, every):
+    """The slot a time falls in. This is a row's identity -- see above."""
+    return int(when // every)
+
+
+def row_time(line):
+    """The unix time a written row carries, or None if it is not a row."""
+    if not line or line.startswith("#"):
+        return None
+    try:
+        return time.mktime(time.strptime(line.split("\t", 1)[0],
+                                         "%Y-%m-%dT%H:%M:%S"))
+    except (ValueError, IndexError):
+        return None
+
+
+def read_log(path):
+    """[(unix time, line)] for an existing log. Missing is empty, not an error."""
+    out = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.rstrip("\n")
+                when = row_time(line)
+                if when is not None:
+                    out.append((when, line))
+    except IOError:
+        pass
+    return out
+
+
+def merge_log(path, header, rows, every):
+    """Fold rows into the log, one per slot, never over one already there.
+
+    Returns (added, clashed). A clash is not an error and is not a warning: it
+    is the ordinary case of backfilling a period that was already logged live,
+    and the live row is the better evidence, so it stays.
+
+    The file is rewritten rather than appended to because backfilled rows
+    belong in the PAST, and the one property this format promises is that
+    plain `sort` on it is chronological. Rewriting is done onto a temporary
+    file in the same directory and renamed over the original, so an
+    interrupted backfill leaves the old log intact rather than half a new one.
+    """
+    existing = read_log(path)
+    taken = set(slot_of(w, every) for w, _ in existing)
+    keep = []
+    added = clashed = 0
+    for when, line in rows:
+        slot = slot_of(when, every)
+        if slot in taken:
+            clashed += 1
+            continue
+        taken.add(slot)
+        keep.append((when, line))
+        added += 1
+    if not added:
+        return 0, clashed
+    merged = sorted(existing + keep, key=lambda r: r[1])
+    tmp = path + ".new"
+    with open(tmp, "w") as f:
+        f.write(header + "\n")
+        for _when, line in merged:
+            f.write(line + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    return added, clashed
+
+
+# ---------------------------------------------------------------- backfill ---
+#
+# THE COUNTER KEPT ITS OWN LOG WHILE NOBODY WAS LISTENING. That is the whole
+# point of the flash: it recorded through the hours the machine was off, or the
+# counter was in a bag. Reading it back turns those hours into the same rows
+# the monitor writes, so one file answers "what was it doing" for the whole
+# period rather than only the parts somebody was watching.
+#
+# The rows are built by replaying the flash samples through the SAME Windows
+# and Interval the live logger uses. Not a second implementation of the
+# averaging: the same one, fed from a different source. A backfilled row and a
+# live row of the same stretch would agree, which is the only way to be sure
+# the reconstruction means what the live rows mean.
+def rows_from_samples(samples, spans, every, max_gap, src=SRC_FLASH):
+    """Replay timed samples into log rows, one per slot, gaps ending averages."""
+    rows = []
+    w = Windows(spans)
+    iv = Interval(spans)
+    slot = None
+    last = None
+
+    def flush(at):
+        if iv.seconds:
+            rows.append((at, log_row(at, iv.cps(), iv.counts, iv.seconds,
+                                     [w.average(s) for s in w.spans],
+                                     iv.peaks, src)))
+        iv.reset()
+
+    for when, count, dt in samples:
+        # A hole in the recording is not a quiet stretch: the counter was off,
+        # or out of reach. Averages must not be carried across one.
+        if last is not None and when - last > max_gap:
+            flush(slot * every)
+            w = Windows(spans)
+            slot = None
+        here = slot_of(when, every)
+        if slot is None:
+            slot = here
+        elif here != slot:
+            flush(slot * every)
+            slot = here
+        w.add(when, count)
+        iv.add(count, [w.average(s) for s in w.spans], dt or 1.0)
+        last = when
+    if slot is not None:
+        flush(slot * every)
+    return rows
+
+
+def backfill(blob, args, offset=0.0, path=None):
+    """Fold whatever the image can account for into the log. Returns a report."""
+    every = args.log_every
+    # SORTED, because an image is not always in time order. A full dump of a
+    # wrapped ring has one step backwards in it, and replaying that as it lies
+    # would end every average at the seam and file half the week under the
+    # wrong slots. read_history_tail hands back chronological bytes and this
+    # costs nothing there; it is what makes `backfill --image` of a raw dump
+    # give the same answer.
+    samples = sorted(history_samples(blob, offset))
+    if not samples:
+        return {"samples": 0, "added": 0, "clashed": 0, "first": None,
+                "last": None}
+    rows = rows_from_samples(samples, args.spans, every, args.max_gap)
+    log_path = path or os.path.join(state_dir(), LOG_NAME)
+    added, clashed = merge_log(log_path, log_header(args.spans), rows, every)
+    # Holes are worth counting and saying out loud. They are the hours the
+    # counter was off or out of reach, they are not filled, and a person
+    # looking at a suspiciously short file deserves to know there were 42 of
+    # them rather than wondering what the backfill lost.
+    holes = sum(1 for a, b in zip(rows, rows[1:]) if b[0] - a[0] > every)
+    return {"samples": len(samples), "rows": len(rows), "added": added,
+            "clashed": clashed, "first": samples[0][0], "last": samples[-1][0],
+            "holes": holes, "path": log_path}
+
+
+def read_history_tail(counter, want, quiet=False):
+    """The newest `want` bytes of the flash, in the order they were recorded.
+
+    In a wrapped ring the newest bytes end at the write pointer and, if more
+    are asked for than lie before it, continue from the physical end of the
+    chip. What comes back is always chronological, so nothing downstream has
+    to know the flash is a circle.
+    """
+    size = counter.flash_size or 0
+    if not size:
+        return b""
+    end, wrapped = find_history_end(counter, size)
+    if end <= 0:
+        return b""
+
+    def grab(address, length):
+        got = b""
+        while len(got) < length:
+            chunk = counter.read_history(address + len(got),
+                                         min(SPIR_CHUNK * 8, length - len(got)))
+            if not chunk:
+                break
+            got += chunk
+        return got
+
+    if not quiet:
+        print("radbeeper: newest history at %d KiB of %d KiB%s; reading %d KiB"
+              % (end // 1024, size // 1024,
+                 " (wrapped)" if wrapped else "", min(want, size) // 1024))
+    if want <= end:
+        return grab(end - want, want)
+    head = grab(0, end)
+    if not wrapped:
+        return head
+    over = min(want - end, size - end)
+    return grab(size - over, over) + head
+
+
+def say_backfill(report, offset):
+    if not report["samples"]:
+        print("radbeeper: no placeable samples in the history read")
+        return
+    span = "%s .. %s" % (
+        time.strftime("%Y-%m-%d %H:%M", time.localtime(report["first"])),
+        time.strftime("%Y-%m-%d %H:%M", time.localtime(report["last"])))
+    print("radbeeper: %d samples, %s" % (report["samples"], span))
+    if offset:
+        print("           counter clock corrected by %+.0f s" % offset)
+    print("           %d rows: %d added, %d already logged live"
+          % (report["rows"], report["added"], report["clashed"]))
+    if report["holes"]:
+        print("           %d gaps left as gaps -- the counter was not recording"
+              % report["holes"])
+
+
+def cmd_backfill(args):
+    if args.image:
+        with open(args.image, "rb") as f:
+            blob = f.read()
+        offset = args.clock_offset or 0.0
+        report = backfill(blob, args, offset, args.log)
+        say_backfill(report, offset)
+        return 0
+    try:
+        counter = open_counter(args)
+    except NotFound as e:
+        print("%s: %s" % ("port busy" if e.busy else "no counter", e.reason),
+              file=sys.stderr)
+        return 1
+    try:
+        offset = args.clock_offset
+        if offset is None:
+            offset = measure_clock_offset(counter) or 0.0
+        blob = read_history_tail(counter, args.backfill_bytes)
+    finally:
+        counter.close()
+    if not blob:
+        print("radbeeper: the counter's history is empty")
+        return 0
+    report = backfill(blob, args, offset, args.log)
+    say_backfill(report, offset)
     return 0
 
 
@@ -1017,6 +1541,26 @@ def cmd_service(args):
                 slept += 0.5
 
     log_path = os.path.join(state_dir(), LOG_NAME)
+
+    # BEFORE ANYTHING IS APPENDED, because backfilled rows belong in the past
+    # and merging rewrites the file. This is also the moment it is worth doing:
+    # the service starts when a counter is plugged in or the machine comes up,
+    # which is exactly when the counter has been recording somewhere this log
+    # was not. Reading the tail of the flash costs about forty seconds; the
+    # status file says so, so a service that looks slow to start can be asked
+    # what it is doing.
+    if args.backfill:
+        write_status("backfilling from the counter's history")
+        try:
+            offset = args.clock_offset
+            if offset is None:
+                offset = measure_clock_offset(counter) or 0.0
+            blob = read_history_tail(counter, args.backfill_bytes)
+            if blob:
+                say_backfill(backfill(blob, args, offset, log_path), offset)
+        except (OSError, ValueError) as e:
+            print("radbeeper: backfill skipped -- %s" % e)
+
     write_status("monitoring %s (%s)" % (counter.path, counter.version))
     new = not os.path.exists(log_path)
     w = Windows(args.spans)
@@ -1024,30 +1568,15 @@ def cmd_service(args):
     every = args.log_every
 
     def row(averages):
-        """One tab-separated line: when, how fast, and the worst it got.
-
-        The timestamp is first and is written big-endian, so it sorts
-        lexicographically: `sort cpm.tsv` is chronological with no flags, no
-        field numbers and no awk, which is the whole reason for that shape.
-        """
-        cells = [time.strftime("%Y-%m-%dT%H:%M:%S"),
-                 "%.3f" % iv.cps(), "%d" % iv.counts, "%d" % iv.seconds]
-        cells += ["" if a is None else "%.1f" % a for a in averages]
-        cells += ["" if pk is None else "%.1f" % pk for pk in iv.peaks]
-        return "\t".join(cells) + "\n"
+        return log_row(time.time(), iv.cps(), iv.counts, iv.seconds,
+                       averages, iv.peaks, SRC_LIVE) + "\n"
 
     print("radbeeper: monitoring %s -- %s" % (counter.path, counter.version))
     print("radbeeper: logging to %s, a row every %gs" % (log_path, every))
     try:
         with open(log_path, "a") as f:
             if new:
-                head = ["time", "cps", "counts", "seconds"]
-                head += ["cpm_%g" % s for s in w.spans]
-                head += ["peak_%g" % s for s in w.spans]
-                # The '#' keeps the header sorting above the rows rather than
-                # into the middle of them, so `sort` stays usable on the file
-                # as it is, and `grep -v '^#'` drops it when it is in the way.
-                f.write("#" + "\t".join(head) + "\n")
+                f.write(log_header(w.spans) + "\n")
                 f.flush()
             due = None
             try:
@@ -1256,14 +1785,37 @@ def build_parser():
                         "the last one" % DEFAULT_LOG_EVERY)
     p.add_argument("--duration", type=float,
                    help="stop after this many seconds (for tests)")
+    p.add_argument("--clock-offset", type=float, metavar="SECONDS",
+                   help="seconds to add to the counter's own timestamps "
+                        "(default: measure it against this machine's clock)")
+    p.add_argument("--backfill-bytes", type=int,
+                   default=DEFAULT_BACKFILL_BYTES, metavar="BYTES",
+                   help="how much of the end of the history flash to read "
+                        "(default %d; the whole megabyte is ten minutes of "
+                        "reading)" % DEFAULT_BACKFILL_BYTES)
+    p.add_argument("--max-gap", type=float, default=DEFAULT_MAX_GAP,
+                   metavar="SECONDS",
+                   help="a hole this long in a recording ends the running "
+                        "averages instead of being averaged across "
+                        "(default %g)" % DEFAULT_MAX_GAP)
     p.add_argument("--plain", action="store_true",
                    help="line output instead of the full-screen monitor")
     sub = p.add_subparsers(dest="command")
     sub.add_parser("probe", help="find the counter and say what it is")
     sub.add_parser("cpm", help="print the counter's own CPM once and exit")
     sub.add_parser("watch", help="the monitor: 3s / 30s / 300s averages")
-    sub.add_parser("service", help="what the boot service runs: monitor if "
-                                   "present, dormant if not")
+    sv = sub.add_parser("service", help="what the boot service runs: monitor "
+                                       "if present, dormant if not")
+    sv.add_argument("--no-backfill", dest="backfill", action="store_false",
+                    help="do not read the counter's history at start-up")
+    bf = sub.add_parser("backfill", help="fill the log's gaps from the "
+                                         "counter's own recorded history")
+    bf.add_argument("--image", metavar="FILE",
+                    help="decode a .bin from `log pull` instead of reading "
+                         "the counter")
+    bf.add_argument("-o", "--log", metavar="FILE",
+                    help="the log to fold rows into (default: %s in the "
+                         "state directory)" % LOG_NAME)
     sub.add_parser("window", help="open the monitor in a terminal, silently "
                                   "doing nothing if no counter is present")
     hp = sub.add_parser("hotplug", help="stay in the session and open the "
@@ -1300,12 +1852,13 @@ def main(argv=None):
     for missing, default in (("log_action", "info"), ("output", None),
                              ("bytes", None), ("poll", DEFAULT_POLL),
                              ("settle", DEFAULT_SETTLE),
-                             ("tries", DEFAULT_TRIES)):
+                             ("tries", DEFAULT_TRIES), ("backfill", True),
+                             ("image", None), ("log", None)):
         if not hasattr(args, missing):
             setattr(args, missing, default)
     handlers = {"probe": cmd_probe, "cpm": cmd_cpm, "watch": cmd_watch,
                 "log": cmd_log, "service": cmd_service, "window": cmd_window,
-                "hotplug": cmd_hotplug}
+                "hotplug": cmd_hotplug, "backfill": cmd_backfill}
     try:
         return handlers[args.command](args)
     except KeyboardInterrupt:

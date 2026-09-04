@@ -192,6 +192,90 @@ that. At the default it is two syscalls a minute rather than a hundred and
 twenty, which on a Pi Zero writing to an SD card is the difference that
 matters. `--log-every 1` gets a row a second back if you want one.
 
+## Backfilling from the counter's own log
+
+The counter records to its flash whether or not anything is listening. When
+`radbeeper service` starts -- at boot, or the moment a counter is plugged in --
+it reads the tail of that flash first and fills in the log's gaps, so one file
+answers "what was it doing" for the whole period rather than only the parts
+somebody was watching.
+
+```sh
+radbeeper backfill                     # the counter, into the service log
+radbeeper backfill --image hist.bin    # a raw dump from `log pull`
+radbeeper backfill -o /tmp/try.tsv     # somewhere else, to look first
+radbeeper service --no-backfill        # don't
+```
+
+Rows are built by replaying the flash samples through the **same** `Windows`
+and `Interval` the live logger uses -- not a second implementation of the
+averaging. A backfilled row and a live row of the same stretch agree, which is
+the only way to be sure the reconstruction means what the live rows mean.
+
+### One row per slot, and gaps stay gaps
+
+A row is not identified by its timestamp, which is whatever instant the writer
+happened to reach, but by its **slot**: the log interval it falls in, floor of
+the time over the row spacing. Two rows clash if and only if they share a slot,
+and **a backfill never writes into a slot that already has a row** -- the live
+measurement is the better evidence and it stays. Slots with no evidence stay
+absent from the file. Nothing is interpolated across them, because a row
+claiming 0.000 CPS for a half hour nobody measured is worse than no row: it is
+the same mistake as drawing an unfilled window as zero.
+
+Every row says where it came from, in a `src` column: `live` or `flash`.
+
+### The counter's second is not a second
+
+```
+55 AA 00 YY MM DD HH MM SS      a timestamp -- NINE bytes, no save-mode
+```
+
+The device writes a mark every few minutes and one sample per "second" in
+between, and **its second is not one of ours**. On the unit this was written
+against, 179 samples land between marks 181 seconds apart: 1.011 s each, which
+is 39 seconds of drift an hour. So the spacing is measured per stretch --
+the gap between two marks divided by the samples they hold -- and never
+assumed. Assuming 1.000 would file an hour-old sample most of a minute from
+where it belongs.
+
+A stretch whose mark is followed *four hours* later did not record one sample
+every eighty seconds; the counter was off in between. Measurements more than a
+factor of two from their median are replaced by the median, so those samples
+land in the three minutes after their own mark and the four-hour hole survives
+as a hole.
+
+**The RTC is a separate error with a separate cause.** `backfill` measures the
+counter's clock against this machine's and shifts every timestamp by the
+difference, printing what it applied. It assumes that offset held for the whole
+recording — so if you *set* the counter's clock, data recorded before that
+needs the old offset, passed by hand:
+
+```sh
+radbeeper --clock-offset 2180 backfill --image hist.bin
+```
+
+### The flash is a ring, and it had already wrapped
+
+Reading a megabyte over 115200 baud takes ten minutes, and the rows a backfill
+wants are the newest, so `backfill` reads only the tail -- 64 KiB by default,
+about seventeen hours. Finding where the tail *is* has two cases:
+
+- **Not yet full.** Writing runs forward from zero and the rest is `0xFF`.
+  Eleven probes bisect for where the `0xFF` starts.
+- **Already wrapped**, which is what the counter on the bench turned out to be:
+  1 MiB of ring with no unwritten byte in it. The newest sample sits
+  immediately before the write pointer and the oldest immediately after, so the
+  flash reads as one long climb in time with exactly one step backwards in it.
+  That step is the pointer, and it bisects too.
+
+Getting this wrong is not a small error: reading the physical tail of a wrapped
+ring hands back the *oldest* hours while claiming they are the newest, and the
+backfill would file last week under this afternoon.
+
+Against the counter here -- a full, wrapped megabyte -- that is 844,809 samples
+over eleven days, 28,544 rows, and 42 holes left as holes.
+
 ## Pulling the log
 
 ```sh

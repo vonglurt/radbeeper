@@ -94,40 +94,125 @@ class TestSimCounter(unittest.TestCase):
 
 
 class TestHistoryDecode(unittest.TestCase):
+    """The record grammar, one record shape at a time."""
+
+    def counts(self, blob):
+        return [r[3] for r in radbeeper.history_records(blob)
+                if r[3] is not None]
+
     def test_plain_bytes_are_counts(self):
-        rows = list(radbeeper.decode_history(bytes([1, 2, 3])))
-        self.assertEqual([r[3] for r in rows], [1, 2, 3])
+        self.assertEqual(self.counts(bytes([1, 2, 3])), [1, 2, 3])
 
     def test_ff_is_unwritten_flash_and_is_skipped(self):
-        rows = list(radbeeper.decode_history(bytes([1, 0xFF, 0xFF, 2])))
-        self.assertEqual([r[3] for r in rows], [1, 2])
+        self.assertEqual(self.counts(bytes([1, 0xFF, 0xFF, 2])), [1, 2])
 
-    def test_timestamp_marker_sets_the_stamp_and_mode(self):
-        blob = bytes([0x55, 0xAA, 0x00, 26, 9, 4, 10, 30, 0, 2]) + bytes([7])
-        rows = list(radbeeper.decode_history(blob))
-        self.assertEqual(rows[0][1], "2026-09-04 10:30:00")
-        self.assertEqual(rows[0][2], "every minute")
-        # the count after it inherits the stamp
-        self.assertEqual(rows[1][3], 7)
-        self.assertEqual(rows[1][1], "2026-09-04 10:30:00")
+    def test_the_datetime_record_is_nine_bytes(self):
+        # THE REGRESSION THIS FILE EXISTS FOR. GQ's document says ten, the
+        # last a save mode; a GMC-320Re 4.26 writes nine and the tenth byte in
+        # a real image is the 0x55 that opens the next record. Reading ten ate
+        # that 0x55, left 0xAA to be decoded as an ordinary sample, and so
+        # invented a count of 170 every three minutes while losing the
+        # two-byte count that follows. The shape below is lifted from a real
+        # image at offset 144.
+        blob = (bytes([0x55, 0xAA, 0x00, 26, 8, 29, 18, 13, 33])
+                + bytes([0x55, 0xAA, 0x01, 0x00, 0x07])
+                + bytes([1, 2]))
+        self.assertEqual(self.counts(blob), [7, 1, 2])
+        self.assertNotIn(0xAA, self.counts(blob))
+
+    def test_a_timestamp_places_the_counts_that_follow_it(self):
+        base = time.mktime((2026, 9, 4, 10, 30, 0, 0, 1, -1))
+        blob = (bytes([0x55, 0xAA, 0x00, 26, 9, 4, 10, 30, 0]) + bytes([7, 8])
+                + bytes([0x55, 0xAA, 0x00, 26, 9, 4, 10, 30, 2]))
+        rows = [r for r in radbeeper.history_records(blob) if r[3] is not None]
+        self.assertEqual([r[3] for r in rows], [7, 8])
+        self.assertAlmostEqual(rows[0][1], base)
+        self.assertAlmostEqual(rows[1][1], base + 1.0)
 
     def test_two_byte_count_marker(self):
         blob = bytes([0x55, 0xAA, 0x01]) + struct.pack(">H", 1234)
-        rows = list(radbeeper.decode_history(blob))
-        self.assertEqual(rows[0][3], 1234)
+        self.assertEqual(self.counts(blob), [1234])
 
     def test_note_marker_is_read_as_text(self):
         note = b"hello"
         blob = bytes([0x55, 0xAA, 0x02, len(note)]) + note
-        rows = list(radbeeper.decode_history(blob))
+        rows = list(radbeeper.history_records(blob))
         self.assertEqual(rows[0][4], "hello")
 
     def test_a_55_that_is_not_a_marker_is_a_count(self):
-        rows = list(radbeeper.decode_history(bytes([0x55, 0x01, 0x55])))
-        self.assertEqual([r[3] for r in rows], [0x55, 1, 0x55])
+        self.assertEqual(self.counts(bytes([0x55, 0x01, 0x55])),
+                         [0x55, 1, 0x55])
 
     def test_empty_flash_decodes_to_nothing(self):
-        self.assertEqual(list(radbeeper.decode_history(b"\xff" * 512)), [])
+        self.assertEqual(list(radbeeper.history_records(b"\xff" * 512)), [])
+
+    def test_an_impossible_date_is_not_a_timestamp(self):
+        # Corrupt or half-erased flash produces 55 AA 00 with rubbish after
+        # it. That must not become a mark that places a thousand samples in
+        # the year 2255.
+        blob = bytes([0x55, 0xAA, 0x00, 99, 99, 99, 99, 99, 99]) + bytes([4])
+        rows = list(radbeeper.history_records(blob))
+        self.assertEqual([r[3] for r in rows if r[3] is not None], [4])
+        self.assertTrue(all(r[1] is None for r in rows))
+
+
+class TestMeasuredInterval(unittest.TestCase):
+    """The counter's second is not a second, and the recording says so.
+
+    179 samples between marks 181 seconds apart is 1.011 s each: 39 seconds of
+    drift an hour. Assuming 1.000 would file an hour-old sample most of a
+    minute from where it belongs, so the spacing is measured per stretch.
+    """
+
+    def image(self, per_mark, n, interval, start=(26, 9, 4, 11, 0, 0)):
+        out = bytearray()
+        t = time.mktime((2000 + start[0],) + start[1:] + (0, 1, -1))
+        written = 0
+        while written < n:
+            st = time.localtime(t)
+            out += bytes([0x55, 0xAA, 0x00, st.tm_year - 2000, st.tm_mon,
+                          st.tm_mday, st.tm_hour, st.tm_min, st.tm_sec])
+            here = min(per_mark, n - written)
+            out += bytes([1] * here)
+            written += here
+            t = round(t + here * interval)
+        return bytes(out)
+
+    def test_the_interval_is_taken_from_the_marks_not_assumed(self):
+        marks = radbeeper.history_marks(self.image(180, 360, 1.0111))
+        dts = radbeeper.sample_intervals(marks)
+        self.assertAlmostEqual(dts[0], 182 / 180.0, places=4)
+        self.assertNotAlmostEqual(dts[0], 1.0, places=3)
+
+    def test_the_last_stretch_borrows_the_measurement_before_it(self):
+        # It has no following mark, so it cannot be measured -- but it is the
+        # newest data, which is the part a backfill most wants.
+        marks = radbeeper.history_marks(self.image(60, 180, 1.011))
+        dts = radbeeper.sample_intervals(marks)
+        self.assertIsNotNone(dts[-1])
+        self.assertAlmostEqual(dts[-1], dts[-2])
+
+    def test_one_mark_measures_nothing_and_says_so(self):
+        # Rather than assuming a second and being quietly wrong.
+        blob = bytes([0x55, 0xAA, 0x00, 26, 9, 4, 11, 0, 0]) + bytes([1] * 10)
+        self.assertEqual(radbeeper.sample_intervals(
+            radbeeper.history_marks(blob)), [None])
+        self.assertEqual(list(radbeeper.history_samples(blob)), [])
+
+    def test_samples_land_where_the_measured_spacing_puts_them(self):
+        blob = self.image(100, 200, 1.02)
+        got = list(radbeeper.history_samples(blob))
+        self.assertEqual(len(got), 200)
+        # 100 samples over a 102-second mark gap: the hundredth is 99 steps in.
+        self.assertAlmostEqual(got[99][0] - got[0][0], 99 * 1.02, places=3)
+
+    def test_the_clock_offset_shifts_everything_together(self):
+        blob = self.image(60, 120, 1.011)
+        plain = list(radbeeper.history_samples(blob))
+        moved = list(radbeeper.history_samples(blob, offset=3600.0))
+        self.assertAlmostEqual(moved[0][0] - plain[0][0], 3600.0)
+        self.assertEqual([c for _t, c, _d in plain],
+                         [c for _t, c, _d in moved])
 
 
 class TestDiscovery(unittest.TestCase):
@@ -287,11 +372,14 @@ class TestService(unittest.TestCase):
 
         self.assertEqual(head, "#time\tcps\tcounts\tseconds"
                                "\tcpm_3\tcpm_30\tcpm_300"
-                               "\tpeak_3\tpeak_30\tpeak_300")
+                               "\tpeak_3\tpeak_30\tpeak_300\tsrc")
         # Every row is the full width, trailing empties included, or a column
         # count is not a reliable way to read the file.
         for r in rows:
-            self.assertEqual(len(r.split("\t")), 10)
+            self.assertEqual(len(r.split("\t")), 11)
+        # And every one of them says it was measured here, not reconstructed.
+        for r in rows:
+            self.assertEqual(r.split("\t")[-1], radbeeper.SRC_LIVE)
         # A row every 2s over ~9s is a handful, NOT one per second. This is
         # the whole point of the change and the cheapest thing to regress.
         self.assertLessEqual(len(rows), 6)
@@ -407,3 +495,202 @@ class TestHotplug(unittest.TestCase):
         self.child_life = 0
         self.run_watcher([["/dev/ttyUSB0"]], duration=2.0, poll=0.2)
         self.assertEqual(len(self.opened), radbeeper.DEFAULT_TRIES)
+
+
+class TestSlotsAndMerging(unittest.TestCase):
+    """One row per slot, and a backfill never writes over what was measured.
+
+    The slot -- floor of the time over the row spacing -- is a row's identity.
+    Rows arrive from the live monitor and from the counter's flash and must not
+    be able to describe the same stretch twice, and where neither has anything
+    to say the file is left with a hole rather than an invention.
+    """
+
+    every = 30.0
+    spans = (3, 30, 300)
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.path = os.path.join(self.tmp, "cpm.tsv")
+        # A round multiple of the spacing, so slot boundaries are obvious.
+        self.base = float(int(time.time() // 3000) * 3000)
+
+    def samples(self, n, start=0.0, dt=1.0, count=1):
+        return [(self.base + start + i * dt, count, dt) for i in range(n)]
+
+    def rows(self, samples, max_gap=10.0):
+        return radbeeper.rows_from_samples(samples, self.spans, self.every,
+                                           max_gap)
+
+    def test_samples_become_one_row_per_slot(self):
+        rows = self.rows(self.samples(120))
+        self.assertEqual(len(rows), 4)
+        # And each row is stamped at the START of its slot, not at whatever
+        # instant the last sample in it happened to fall on.
+        for i, (when, _line) in enumerate(rows):
+            self.assertEqual(when, self.base + i * self.every)
+
+    def test_a_row_carries_the_seconds_it_actually_covers(self):
+        # The counter's sample is 1.011 s, so 30 of them are 30.33 seconds and
+        # the column has to say so -- otherwise the cps beside it is 1% wrong
+        # with nothing on the row to show why.
+        rows = self.rows(self.samples(30, dt=1.011))
+        seconds = float(rows[0][1].split("\t")[3])
+        self.assertAlmostEqual(seconds, 30 * 1.011, places=3)
+
+    def test_nothing_is_invented_for_a_slot_with_no_samples(self):
+        # Two bursts an hour apart: four rows and four rows, and no rows at
+        # all for the hour between them. A gap in the file is the honest
+        # record of a gap in the recording.
+        got = self.rows(self.samples(120) + self.samples(120, start=3600.0))
+        self.assertEqual(len(got), 8)
+        stamps = [w for w, _ in got]
+        # The hole is the hour minus the slot the last samples of the first
+        # burst were still filling: no row exists anywhere inside it.
+        self.assertEqual(max(b - a for a, b in zip(stamps, stamps[1:])),
+                         3600.0 - self.every * 3)
+
+    def test_a_hole_in_the_recording_ends_the_averages(self):
+        # A 300-second window carried across an hour the counter was switched
+        # off would average two different afternoons together and print the
+        # result as one number.
+        long_enough = self.samples(400)
+        after = self.samples(60, start=4000.0)
+        got = self.rows(long_enough + after)
+        before_gap = got[12][1].split("\t")
+        after_gap = got[-1][1].split("\t")
+        self.assertNotEqual(before_gap[6], "")   # cpm_300 was full
+        self.assertEqual(after_gap[6], "")       # and starts again empty
+
+    def test_backfilled_rows_say_so(self):
+        line = self.rows(self.samples(60))[0][1]
+        self.assertEqual(line.rstrip("\n").split("\t")[-1], radbeeper.SRC_FLASH)
+
+    def test_a_slot_that_already_has_a_row_is_left_alone(self):
+        header = radbeeper.log_header(self.spans)
+        live = radbeeper.log_row(self.base + 5, 1.0, 30, 30.0,
+                                 [None, None, None], [None, None, None],
+                                 radbeeper.SRC_LIVE)
+        with open(self.path, "w") as f:
+            f.write(header + "\n")
+            f.write(live + "\n")
+        added, clashed = radbeeper.merge_log(
+            self.path, header, self.rows(self.samples(120)), self.every)
+        self.assertEqual((added, clashed), (3, 1))
+        with open(self.path) as f:
+            body = [ln for ln in f.read().splitlines() if not ln.startswith("#")]
+        self.assertEqual(len(body), 4)
+        # The live row survived intact -- it is the better evidence.
+        self.assertIn(live, body)
+        self.assertEqual(sum(1 for ln in body
+                             if ln.endswith(radbeeper.SRC_LIVE)), 1)
+
+    def test_the_merged_file_sorts_chronologically_as_plain_text(self):
+        header = radbeeper.log_header(self.spans)
+        # Deliberately merge the older half second, since a backfill's whole
+        # difficulty is that its rows belong in the past.
+        radbeeper.merge_log(self.path, header,
+                            self.rows(self.samples(120, start=3600.0)),
+                            self.every)
+        radbeeper.merge_log(self.path, header, self.rows(self.samples(120)),
+                            self.every)
+        with open(self.path) as f:
+            lines = f.read().splitlines()
+        self.assertTrue(lines[0].startswith("#"))
+        body = lines[1:]
+        self.assertEqual(body, sorted(body))
+        self.assertEqual(len(body), 8)
+
+    def test_a_merge_with_nothing_to_add_does_not_rewrite_the_file(self):
+        header = radbeeper.log_header(self.spans)
+        rows = self.rows(self.samples(120))
+        radbeeper.merge_log(self.path, header, rows, self.every)
+        before = open(self.path).read()
+        added, clashed = radbeeper.merge_log(self.path, header, rows, self.every)
+        self.assertEqual(added, 0)
+        self.assertEqual(clashed, 4)
+        self.assertEqual(open(self.path).read(), before)
+        self.assertFalse(os.path.exists(self.path + ".new"))
+
+
+class TestTheRing(unittest.TestCase):
+    """Finding the newest bytes in a flash that may have wrapped.
+
+    Reading the physical tail of a wrapped ring hands back the OLDEST hours
+    while claiming they are the newest, and a backfill would then file last
+    week under this afternoon. The counter on the bench was wrapped, so this
+    is the ordinary case and not the exotic one.
+    """
+
+    per_mark = 60
+    probe = 2048
+
+    def run_of(self, start, samples, interval=1.011):
+        """A stretch of recording: marks every per_mark samples."""
+        out = bytearray()
+        t = float(start)
+        written = 0
+        while written < samples:
+            st = time.localtime(t)
+            out += bytes([0x55, 0xAA, 0x00, st.tm_year - 2000, st.tm_mon,
+                          st.tm_mday, st.tm_hour, st.tm_min, st.tm_sec])
+            here = min(self.per_mark, samples - written)
+            out += bytes([2] * here)
+            written += here
+            t = round(t + here * interval)
+        return bytes(out)
+
+    def shim(self, blob):
+        class Shim(object):
+            flash_size = len(blob)
+            reads = 0
+
+            def read_history(self, address, length):
+                Shim.reads += 1
+                return blob[address:address + length]
+        return Shim()
+
+    def test_a_flash_still_filling_ends_where_the_ff_starts(self):
+        base = time.mktime((2026, 9, 1, 9, 0, 0, 0, 1, -1))
+        data = self.run_of(base, 6000)
+        blob = data + b"\xff" * (65536 - len(data))
+        end, wrapped = radbeeper.find_history_end(self.shim(blob), len(blob),
+                                                  self.probe)
+        self.assertFalse(wrapped)
+        self.assertLessEqual(abs(end - len(data)), self.probe)
+
+    def test_a_wrapped_ring_ends_at_the_step_backwards_in_time(self):
+        # Newest first physically, then the oldest: that is what a ring whose
+        # pointer has come round looks like from address zero.
+        base = time.mktime((2026, 9, 1, 9, 0, 0, 0, 1, -1))
+        newer = self.run_of(base + 7 * 86400, 6000)
+        older = self.run_of(base, 6000)
+        blob = newer + older
+        c = self.shim(blob)
+        end, wrapped = radbeeper.find_history_end(c, len(blob), self.probe)
+        self.assertTrue(wrapped)
+        self.assertLessEqual(abs(end - len(newer)), self.probe)
+        # And it is a bisection, not a read of the whole megabyte.
+        self.assertLess(type(c).reads, 40)
+
+    def test_the_tail_of_a_ring_is_the_newest_data_not_the_last_bytes(self):
+        base = time.mktime((2026, 9, 1, 9, 0, 0, 0, 1, -1))
+        newer = self.run_of(base + 7 * 86400, 6000)
+        older = self.run_of(base, 6000)
+        c = self.shim(newer + older)
+        got = radbeeper.read_history_tail(c, 4096, quiet=True)
+        stamps = [m[1] for m in radbeeper.history_marks(got)]
+        self.assertTrue(stamps)
+        # Everything read is from the newer week -- which is the whole point.
+        self.assertGreater(min(stamps), base + 6 * 86400)
+
+    def test_a_full_dump_of_a_ring_still_backfills_in_order(self):
+        # `backfill --image` on a raw dump gets the seam as it lies. Sorting is
+        # what makes it give the same answer as reading the tail.
+        base = time.mktime((2026, 9, 1, 9, 0, 0, 0, 1, -1))
+        blob = self.run_of(base + 7 * 86400, 600) + self.run_of(base, 600)
+        got = sorted(radbeeper.history_samples(blob))
+        self.assertEqual(got, sorted(got))
+        self.assertLess(got[0][0], base + 86400)
+        self.assertGreater(got[-1][0], base + 6 * 86400)

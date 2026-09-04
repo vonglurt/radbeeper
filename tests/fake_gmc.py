@@ -30,23 +30,49 @@ VERSION = b"GMC-320Re 4.26"
 SERIAL = bytes([0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE])
 
 
-def build_history(seconds=120, cpm=30.0, seed=5, size=4096):
+def build_history(seconds=120, cpm=30.0, seed=5, size=4096,
+                  interval=1.011, per_mark=20, start=(26, 9, 4, 11, 0, 0)):
     """A flash image in the shape the real one has.
 
-    A timestamp marker, then one byte per saved sample, with a two-byte
-    marker wherever the count does not fit in a byte -- which is the case
-    the decoder is most likely to get wrong, so the fixture makes sure it
-    happens.
+    Timestamp markers every `per_mark` samples, one byte per sample in
+    between, and a two-byte marker wherever the count does not fit in a byte
+    -- the case the decoder is most likely to get wrong, so the fixture makes
+    sure it happens.
+
+    THE DATETIME RECORD IS NINE BYTES, no save-mode byte, because that is what
+    a GMC-320Re 4.26 writes: the tenth byte in a real image is the 0x55 of the
+    next marker. The fixture used to write ten and so agreed with the decoder's
+    bug instead of with the hardware.
+
+    `interval` is the counter's true seconds per sample and defaults to 1.011,
+    which is what the unit on the bench measures. A fixture that ticked exactly
+    once a second would let an assumed interval pass every test and then place
+    real samples a minute out.
+
+    `per_mark` is 20 rather than the device's 180 so that a short fixture still
+    contains two marks: one mark measures no interval, and a decoder given one
+    mark can place nothing -- correct, but useless to test against.
     """
     rng = random.Random(seed)
     out = bytearray()
-    out += bytes([0x55, 0xAA, 0x00, 26, 9, 4, 11, 0, 0, 2])   # mode 2, per minute
-    for _ in range(seconds):
-        n = max(0, int(rng.gauss(cpm, cpm / 3)))
-        if n > 255:
-            out += bytes([0x55, 0xAA, 0x01]) + struct.pack(">H", n)
-        else:
-            out.append(n)
+    t = time.mktime((2000 + start[0],) + start[1:] + (0, 1, -1))
+    written = 0
+    while written < seconds:
+        stamp = time.localtime(t)
+        out += bytes([0x55, 0xAA, 0x00, stamp.tm_year - 2000, stamp.tm_mon,
+                      stamp.tm_mday, stamp.tm_hour, stamp.tm_min, stamp.tm_sec])
+        n_here = min(per_mark, seconds - written)
+        for _ in range(n_here):
+            n = max(0, int(rng.gauss(cpm, cpm / 3)))
+            if n > 255:
+                out += bytes([0x55, 0xAA, 0x01]) + struct.pack(">H", n)
+            else:
+                out.append(n)
+        written += n_here
+        # The RTC has one-second resolution, so the mark it writes is the
+        # rounded truth -- which is exactly why the interval has to be
+        # measured over many samples rather than read off one gap.
+        t = round(t + n_here * interval)
     out += bytes([0x55, 0xAA, 0x02, 5]) + b"note!"
     out += b"\xff" * max(0, size - len(out))
     return bytes(out[:size])
