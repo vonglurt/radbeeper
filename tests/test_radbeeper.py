@@ -111,13 +111,12 @@ class TestHistoryDecode(unittest.TestCase):
         # last a save mode; a GMC-320Re 4.26 writes nine and the tenth byte in
         # a real image is the 0x55 that opens the next record. Reading ten ate
         # that 0x55, left 0xAA to be decoded as an ordinary sample, and so
-        # invented a count of 170 every three minutes while losing the
-        # two-byte count that follows. The shape below is lifted from a real
-        # image at offset 144.
+        # invented a count of 170 every three minutes. The shape below is
+        # lifted from a real image at offset 144.
         blob = (bytes([0x55, 0xAA, 0x00, 26, 8, 29, 18, 13, 33])
-                + bytes([0x55, 0xAA, 0x01, 0x00, 0x07])
-                + bytes([1, 2]))
-        self.assertEqual(self.counts(blob), [7, 1, 2])
+                + bytes([0x55, 0xAA, 0x01])
+                + bytes([0x00, 0x07, 1, 2]))
+        self.assertEqual(self.counts(blob), [0, 7, 1, 2])
         self.assertNotIn(0xAA, self.counts(blob))
 
     def test_a_timestamp_places_the_counts_that_follow_it(self):
@@ -129,9 +128,19 @@ class TestHistoryDecode(unittest.TestCase):
         self.assertAlmostEqual(rows[0][1], base)
         self.assertAlmostEqual(rows[1][1], base + 1.0)
 
-    def test_two_byte_count_marker(self):
-        blob = bytes([0x55, 0xAA, 0x01]) + struct.pack(">H", 1234)
-        self.assertEqual(self.counts(blob), [1234])
+    def test_55_aa_01_is_a_marker_and_carries_nothing(self):
+        # GQ's document calls it a two-byte count, for a second whose count
+        # did not fit in a byte. Reading it that way turned the two ordinary
+        # samples after every timestamp into one reading of 256, or 512, or
+        # 21,930 -- 1,701 of them in a real image, on a tube that saturates
+        # three orders of magnitude below that. All 4,709 sat exactly nine
+        # bytes after a timestamp and not one anywhere else, and the two bytes
+        # following have the distribution of counts and not of a big-endian
+        # pair: 64% zero, 21% one, 7% two. So it is three bytes, and what
+        # comes after it is data.
+        blob = bytes([0x55, 0xAA, 0x01]) + bytes([0x04, 0xD2])
+        self.assertEqual(self.counts(blob), [0x04, 0xD2])
+        self.assertNotIn(1234, self.counts(blob))
 
     def test_note_marker_is_read_as_text(self):
         note = b"hello"
@@ -869,39 +878,41 @@ class TestSites(unittest.TestCase):
     def at(self, y, m, d):
         return time.mktime((y, m, d, 12, 0, 0, 0, 1, -1))
 
-    def test_a_counter_seen_for_the_first_time_gets_the_default(self):
-        sites = radbeeper.ensure_site("A1", self.tmp)
-        self.assertEqual([r[2] for r in sites], [radbeeper.DEFAULT_SITE])
+    def test_a_counter_nobody_has_placed_gets_no_place(self):
+        # An assumed location is worse than none: it is published, it looks
+        # like a measurement, and nobody reading it later can tell it was a
+        # guess. So nothing is invented and the column stays empty.
+        self.assertEqual(radbeeper.ensure_site("A1", self.tmp), [])
+        self.assertIsNone(radbeeper.site_at("A1", time.time(), []))
 
-    def test_the_default_covers_readings_older_than_the_record(self):
-        # ensure_site dates the first record at the epoch on purpose: a
-        # counter's flash goes back further than the day somebody first wrote
-        # down where it was, and those readings were still somewhere.
-        sites = radbeeper.ensure_site("A1", self.tmp)
+    def test_the_earliest_record_covers_readings_older_than_itself(self):
+        # A counter's flash goes back further than the day somebody wrote down
+        # where it was, and those readings were still somewhere.
+        radbeeper.record_site("A1", "The bench", self.at(2026, 9, 3), self.tmp)
+        sites = radbeeper.read_sites(self.tmp)
         found = radbeeper.site_at("A1", self.at(2020, 1, 1), sites)
-        self.assertEqual(found[2], radbeeper.DEFAULT_SITE)
+        self.assertEqual(found[2], "The bench")
 
     def test_a_move_applies_from_when_it_happened_and_not_before(self):
-        radbeeper.ensure_site("A1", self.tmp)
+        radbeeper.record_site("A1", "The bench", self.at(2026, 9, 1), self.tmp)
         radbeeper.record_site("A1", "The garage", self.at(2026, 9, 3),
                               self.tmp)
         sites = radbeeper.read_sites(self.tmp)
         self.assertEqual(
-            radbeeper.site_at("A1", self.at(2026, 9, 1), sites)[2],
-            radbeeper.DEFAULT_SITE)
+            radbeeper.site_at("A1", self.at(2026, 9, 2), sites)[2],
+            "The bench")
         self.assertEqual(
             radbeeper.site_at("A1", self.at(2026, 9, 4), sites)[2],
             "The garage")
 
     def test_it_is_a_history_and_not_a_setting(self):
-        radbeeper.ensure_site("A1", self.tmp)
+        radbeeper.record_site("A1", "The bench", self.at(2026, 9, 1), self.tmp)
         radbeeper.record_site("A1", "The garage", self.at(2026, 9, 3),
                               self.tmp)
         radbeeper.record_site("A1", "The roof", self.at(2026, 9, 5), self.tmp)
         self.assertEqual(len(radbeeper.read_sites(self.tmp)), 3)
 
     def test_counters_do_not_borrow_each_others_places(self):
-        radbeeper.ensure_site("A1", self.tmp)
         radbeeper.record_site("A1", "The garage", self.at(2026, 9, 3),
                               self.tmp)
         sites = radbeeper.read_sites(self.tmp)
@@ -911,7 +922,7 @@ class TestSites(unittest.TestCase):
         # These logs are published. A place name is what a reader needs; a
         # decimal fix is a street address for whoever is holding the counter,
         # so the file has no column to put one in.
-        radbeeper.ensure_site("A1", self.tmp)
+        radbeeper.record_site("A1", "The bench", self.at(2026, 9, 1), self.tmp)
         with open(os.path.join(self.tmp, radbeeper.SITES_NAME)) as f:
             for line in f:
                 self.assertEqual(len(line.rstrip("\n").split("\t")), 3)
@@ -926,13 +937,13 @@ class TestExport(unittest.TestCase):
         import tempfile
         self.tmp = tempfile.mkdtemp()
         self.base = time.mktime((2026, 9, 2, 10, 0, 0, 0, 1, -1))
-        radbeeper.ensure_site("A1", self.tmp)
+        radbeeper.record_site("A1", "The bench", self.base - 60, self.tmp)
         rows = []
         for i in range(4):
             when = self.base + i * 30
             rows.append((when, radbeeper.log_row(
                 when, 1.0, 30, 30.0, [60.0, 60.0, 60.0], [90.0, 70.0, 60.0],
-                radbeeper.SRC_FLASH, radbeeper.DEFAULT_SITE)))
+                radbeeper.SRC_FLASH, "The bench")))
         radbeeper.merge_log(radbeeper.log_path(self.base, self.tmp, "A1"),
                             radbeeper.log_header(self.spans), rows, 30.0)
 
@@ -961,7 +972,7 @@ class TestExport(unittest.TestCase):
         counters = radbeeper.summarise(self.tmp)
         html = radbeeper.render_html(counters, radbeeper.read_sites(self.tmp))
         self.assertIn("A1", html)
-        self.assertIn(radbeeper.DEFAULT_SITE, html)
+        self.assertIn("The bench", html)
         self.assertIn("<table", html)
         self.assertTrue(html.startswith("<!doctype html>"))
 

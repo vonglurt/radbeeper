@@ -2,356 +2,187 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Radiation monitor</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/datatables.net-dt/2.1.8/dataTables.dataTables.min.css">
 <style>
-:root{color-scheme:light dark;--fg:#181818;--bg:#faf9f7;--dim:#6b6b6b;--line:#e0ddd8;--card:#fff}
-@media (prefers-color-scheme:dark){:root{--fg:#e8e6e3;--bg:#16161a;--dim:#9a9a9a;--line:#2e2e35;--card:#1e1e24}}
+:root{color-scheme:light dark;--fg:#181818;--bg:#faf9f7;--dim:#6b6b6b;--line:#e0ddd8;--card:#fff;--accent:#2f6f4f;--warn:#b0642a}
+@media (prefers-color-scheme:dark){:root{--fg:#e8e6e3;--bg:#16161a;--dim:#9a9a9a;--line:#2e2e35;--card:#1e1e24;--accent:#6cc08c;--warn:#e0a06a}}
 body{margin:0;padding:2rem 1rem;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}
 main{max-width:1100px;margin:0 auto}
 h1{font-size:1.6rem;margin:0 0 .2rem}
 h2{font-size:1.1rem;margin:2.2rem 0 .6rem;font-weight:600}
-.sub{color:var(--dim);margin:0 0 1.6rem}
+.sub{color:var(--dim);margin:0 0 1rem}
+.lede{max-width:70ch;margin:0 0 2rem;font-size:1rem;line-height:1.6}
+.lede a{color:var(--accent)}
+.how{margin-top:2.6rem}
+.how h3{margin:1.6rem 0 .3rem;font-size:1rem}
+.how p{margin:.35rem 0;max-width:68ch}
+.how pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.6rem .9rem;overflow-x:auto;font-size:.84rem;margin:.5rem 0}
+.how img{border:1px solid var(--line);border-radius:8px;margin:.6rem 0;max-width:100%}
+.how figure{margin:.8rem 0 1.2rem}
+.how figcaption{color:var(--dim);font-size:.82rem;margin-top:.3rem}
 .cards{display:grid;gap:.9rem;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
 .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem}
 .card .k{color:var(--dim);font-size:.78rem;text-transform:uppercase;letter-spacing:.04em}
 .card .v{font-size:1.5rem;font-variant-numeric:tabular-nums;margin-top:.15rem}
 .card .n{color:var(--dim);font-size:.8rem}
-table.dataTable{font-variant-numeric:tabular-nums;font-size:.88rem}
-table.dataTable td,table.dataTable th{border-color:var(--line)!important}
+.plotwrap{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem 0;margin-top:.9rem}
+.plot{display:block;height:auto}
+.plot .grid{stroke:var(--line);stroke-width:1}
+.plot .minor{opacity:.45}
+.plot .mean{fill:none;stroke:var(--accent);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round}
+.plot .peak{fill:none;stroke:var(--warn);stroke-width:1;opacity:.55}
+.plot text{fill:var(--dim);font-size:11px;font-family:system-ui,sans-serif}
+.plot .ylab{text-anchor:end}
+.plot .xlab{text-anchor:middle}
+.plot .ycap{text-anchor:start;font-size:10px;letter-spacing:.05em;text-transform:uppercase}
+.legend{display:flex;gap:1.2rem;color:var(--dim);font-size:.8rem;padding:.1rem 0 .8rem}
+.legend i{display:inline-block;width:18px;height:0;border-top-width:2px;border-top-style:solid;vertical-align:middle;margin-right:.4rem}
+.about{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1.2rem 1.4rem;margin-top:2.6rem}
+.about h3{margin:0 0 .4rem;font-size:1.05rem}
+.about p{margin:.4rem 0;max-width:62ch}
+.about pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.6rem .8rem;overflow-x:auto;font-size:.82rem}
+.windows{display:grid;gap:.7rem;margin:.9rem 0 0;padding:0;list-style:none;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.windows li{border-left:2px solid var(--accent);padding-left:.7rem}
+.windows b{display:block;font-size:1.05rem}
+.windows span{color:var(--dim);font-size:.85rem}
+table{border-collapse:collapse;width:100%;font-size:.86rem;font-variant-numeric:tabular-nums;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th{text-align:left;font-weight:600;color:var(--dim);font-size:.76rem;text-transform:uppercase;letter-spacing:.04em}
+th,td{padding:.36rem .7rem;border-bottom:1px solid var(--line)}
+tbody tr:last-child td{border-bottom:0}
+td:not(:first-child),th:not(:first-child){text-align:right}
+.more{margin:.6rem 0 0;font-size:.85rem}
+.more a{color:var(--accent)}
+.tablewrap{overflow-x:auto}
 footer{color:var(--dim);font-size:.82rem;margin-top:3rem;border-top:1px solid var(--line);padding-top:1rem}
 code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
 </style></head><body><main>
 <h1>Radiation monitor</h1>
-<p class="sub">Generated 2026-09-04 21:01 by radbeeper 0.1.0 &middot; tube factor 151.5 CPM per &micro;Sv/h</p>
+<p class="sub">A GQ GMC Geiger-Muller counter on the desk &middot; generated 2026-09-04 14:39 by radbeeper 0.1.0 &middot; tube factor 151.5 CPM per &micro;Sv/h</p>
+<p class="lede">A <strong>GQ GMC-320 Plus</strong> Geiger&ndash;M&uuml;ller counter, plugged into a machine running <strong>Alpine Linux</strong> as a USB serial device &mdash; here shared into a virtual machine over USB pass-through. RadBeeper reads the counter, logs it to tab-separated files, and <strong>this page is regenerated from those files by a GitHub Action</strong> on every push. The whole of it is forkable: copy your own logs into <code>logs/</code> and you get a page like this one. <a href="https://github.com/vonglurt/radbeeper">Source and instructions</a>.</p>
 <h2>Counter F48824B8207F7E</h2>
 <div class="cards">
-<div class="card"><div class="k">Mean</div><div class="v">103.3 CPM</div><div class="n">0.682 uSv/h</div></div>
-<div class="card"><div class="k">Highest 3s peak</div><div class="v">439300 CPM</div><div class="n">2899.670 uSv/h</div></div>
-<div class="card"><div class="k">Rows</div><div class="v">28,550</div><div class="n">237.5 hours counted</div></div>
-<div class="card"><div class="k">Covering</div><div class="v">2026-08-24 02:37</div><div class="n">to 2026-09-04 13:09</div></div>
-<div class="card"><div class="k">Site</div><div class="v">Bellevue High School</div></div>
+<div class="card"><div class="k">Mean</div><div class="v">42.0 CPM</div><div class="n">0.277 uSv/h</div></div>
+<div class="card"><div class="k">Highest 3s peak</div><div class="v">8520 CPM</div><div class="n">56.238 uSv/h</div></div>
+<div class="card"><div class="k">Rows</div><div class="v">28,544</div><div class="n">237.5 hours counted</div></div>
+<div class="card"><div class="k">Covering</div><div class="v">2026-08-24 02:37</div><div class="n">to 2026-09-04 12:53</div></div>
 </div>
+<h2>Counts per minute, by the hour</h2>
+<div class="plotwrap"><svg class="plot" viewBox="0 0 1120 300" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="counts per minute over time"><line class="grid" x1="52" y1="274.0" x2="1110" y2="274.0"/><text class="ylab" x="44" y="278.0">10</text><line class="grid minor" x1="52" y1="247.7" x2="1110" y2="247.7"/><line class="grid minor" x1="52" y1="213.0" x2="1110" y2="213.0"/><line class="grid" x1="52" y1="186.7" x2="1110" y2="186.7"/><text class="ylab" x="44" y="190.7">100</text><line class="grid minor" x1="52" y1="160.4" x2="1110" y2="160.4"/><line class="grid minor" x1="52" y1="125.6" x2="1110" y2="125.6"/><line class="grid" x1="52" y1="99.3" x2="1110" y2="99.3"/><text class="ylab" x="44" y="103.3">1,000</text><line class="grid minor" x1="52" y1="73.0" x2="1110" y2="73.0"/><line class="grid minor" x1="52" y1="38.3" x2="1110" y2="38.3"/><line class="grid" x1="52" y1="12.0" x2="1110" y2="12.0"/><text class="ylab" x="44" y="16.0">10,000</text><line class="grid" x1="109.9" y1="12" x2="109.9" y2="274"/><text class="xlab" x="109.9" y="292">Aug 24</text><line class="grid" x1="202.6" y1="12" x2="202.6" y2="274"/><text class="xlab" x="202.6" y="292">Aug 25</text><line class="grid" x1="295.3" y1="12" x2="295.3" y2="274"/><text class="xlab" x="295.3" y="292">Aug 26</text><line class="grid" x1="387.9" y1="12" x2="387.9" y2="274"/><text class="xlab" x="387.9" y="292">Aug 27</text><line class="grid" x1="480.6" y1="12" x2="480.6" y2="274"/><text class="xlab" x="480.6" y="292">Aug 28</text><line class="grid" x1="573.3" y1="12" x2="573.3" y2="274"/><text class="xlab" x="573.3" y="292">Aug 29</text><line class="grid" x1="665.9" y1="12" x2="665.9" y2="274"/><text class="xlab" x="665.9" y="292">Aug 30</text><line class="grid" x1="758.6" y1="12" x2="758.6" y2="274"/><text class="xlab" x="758.6" y="292">Aug 31</text><line class="grid" x1="851.3" y1="12" x2="851.3" y2="274"/><text class="xlab" x="851.3" y="292">Sep 1</text><line class="grid" x1="944.0" y1="12" x2="944.0" y2="274"/><text class="xlab" x="944.0" y="292">Sep 2</text><line class="grid" x1="1036.6" y1="12" x2="1036.6" y2="274"/><text class="xlab" x="1036.6" y="292">Sep 3</text><path class="peak" d="M52.0 125.6 L55.9 77.9 L59.7 147.6 L63.6 78.8 L67.4 128.8 L71.3 26.4 L75.2 147.6 L79.0 52.3 L82.9 127.2 L86.8 26.2 L90.6 26.4 L94.5 145.0 L98.3 26.3 L102.2 18.1 L106.1 147.6 L109.9 118.7 L113.8 120.0 L117.6 122.7 L121.5 111.8 L125.4 130.5 M133.1 121.3 L136.9 145.0 L140.8 145.0 L144.7 134.1 L148.5 122.7 L152.4 150.4 L156.3 147.6 L160.1 156.8 L164.0 145.0 L167.8 138.1 M175.6 145.0 L179.4 145.0 L183.3 110.8 L187.1 150.4 L191.0 117.5 L194.9 121.3 L198.7 128.8 L202.6 118.7 L206.5 124.1 L210.3 114.0 L214.2 122.7 L218.0 121.3 L221.9 110.8 L225.8 111.8 L229.6 145.0 L233.5 115.1 L237.3 112.9 L241.2 134.1 L245.1 140.3 L248.9 150.4 L252.8 145.0 L256.6 156.8 L260.5 142.6 L264.4 147.6 L268.2 150.4 L272.1 124.1 L276.0 147.6 L279.8 136.0 L283.7 130.5 L287.5 77.0 L291.4 150.4 L295.3 78.8 L299.1 74.2 L303.0 110.8 L306.8 52.7 L310.7 121.3 L314.6 26.5 L318.4 138.1 L322.3 112.9 L326.2 147.6 L330.0 150.4 L333.9 125.6 L337.7 156.8 L341.6 153.5 L345.5 122.7 L349.3 128.8 L353.2 121.3 L357.0 138.1 L360.9 125.6 L364.8 124.1 L368.6 136.0 L372.5 132.2 L376.4 153.5 L380.2 128.8 L384.1 153.5 L387.9 136.0 L391.8 153.5 L395.7 150.4 L399.5 160.4 L403.4 114.0 L407.2 115.1 L411.1 120.0 L415.0 150.4 L418.8 121.3 L422.7 156.8 L426.5 116.3 L430.4 138.1 L434.3 125.6 L438.1 122.7 L442.0 122.7 L445.9 142.6 L449.7 145.0 L453.6 120.0 L457.4 132.2 L461.3 136.0 L465.2 132.2 L469.0 125.6 L472.9 147.6 L476.7 130.5 L480.6 114.0 L484.5 145.0 L488.3 115.1 L492.2 153.5 L496.1 150.4 L499.9 150.4 L503.8 142.6 L507.6 125.6 L511.5 145.0 L515.4 142.6 M523.1 145.0 L526.9 153.5 L530.8 134.1 L534.7 78.3 L538.5 150.4 L542.4 26.4 L546.2 26.4 L550.1 136.0 L554.0 26.5 L557.8 150.4 L561.7 18.1 L565.6 26.4 L569.4 145.0 L573.3 52.7 L577.1 150.4 L581.0 140.3 L584.9 114.0 L588.7 124.1 L592.6 150.4 L596.4 150.4 L600.3 153.5 L604.2 121.3 L608.0 150.4 L611.9 138.1 L615.8 156.8 L619.6 136.0 L623.5 132.2 L627.3 153.5 L631.2 150.4 L635.1 127.2 L638.9 153.5 L642.8 142.6 L646.6 142.6 L650.5 160.4 L654.4 147.6 L658.2 147.6 L662.1 130.5 L665.9 153.5 L669.8 153.5 L673.7 156.8 L677.5 128.8 L681.4 153.5 L685.3 150.4 L689.1 114.0 L693.0 120.0 L696.8 153.5 L700.7 124.1 L704.6 130.5 L708.4 153.5 L712.3 145.0 L716.1 134.1 L720.0 78.3 L723.9 78.8 L727.7 52.7 L731.6 147.6 L735.5 26.4 L739.3 26.5 L743.2 136.0 L747.0 160.4 L750.9 153.5 L754.8 116.3 L758.6 132.2 L762.5 118.7 L766.3 124.1 L770.2 147.6 L774.1 150.4 L777.9 106.9 L781.8 118.7 L785.6 115.1 L789.5 115.1 L793.4 150.4 L797.2 124.1 L801.1 150.4 L805.0 118.7 L808.8 150.4 L812.7 145.0 L816.5 140.3 L820.4 140.3 L824.3 138.1 L828.1 142.6 L832.0 150.4 L835.8 153.5 L839.7 150.4 L843.6 134.1 L847.4 114.0 L851.3 121.3 L855.2 127.2 L859.0 114.0 L862.9 150.4 L866.7 112.9 M874.5 116.3 L878.3 145.0 L882.2 150.4 L886.0 125.6 L889.9 140.3 L893.8 145.0 L897.6 153.5 L901.5 147.6 L905.4 140.3 L909.2 122.7 L913.1 136.0 L916.9 134.1 L920.8 145.0 L924.7 153.5 L928.5 142.6 L932.4 145.0 L936.2 138.1 L940.1 150.4 L944.0 150.4 L947.8 147.6 L951.7 130.5 L955.5 118.7 L959.4 153.5 M967.1 127.2 L971.0 127.2 L974.9 145.0 L978.7 147.6 L982.6 145.0 L986.4 145.0 L990.3 122.7 L994.2 153.5 L998.0 153.5 L1001.9 150.4 L1005.7 150.4 L1009.6 145.0 L1013.5 138.1 L1017.3 145.0 L1021.2 150.4 L1025.1 147.6 L1028.9 150.4 L1032.8 134.1 L1036.6 136.0 L1040.5 142.6 L1044.4 124.1 L1048.2 120.0 L1052.1 145.0 L1055.9 168.8 L1059.8 142.6 L1063.7 130.5 M1071.4 153.5 L1075.2 78.8 L1079.1 140.3 L1083.0 150.4 L1086.8 77.9 L1090.7 134.1 L1094.6 77.5 L1098.4 147.6 L1102.3 77.0 L1106.1 114.0 L1110.0 145.0"/><path class="mean" d="M52.0 213.9 L55.9 217.8 L59.7 223.5 L63.6 221.2 L67.4 218.2 L71.3 219.0 L75.2 223.8 L79.0 220.0 L82.9 219.7 L86.8 218.2 L90.6 219.4 L94.5 224.8 L98.3 215.1 L102.2 216.7 L106.1 219.3 L109.9 216.4 L113.8 215.7 L117.6 210.7 L121.5 197.1 L125.4 218.0 M133.1 213.5 L136.9 220.5 L140.8 222.5 L144.7 221.4 L148.5 215.7 L152.4 223.2 L156.3 223.4 L160.1 225.6 L164.0 223.6 L167.8 223.1 M175.6 222.8 L179.4 222.7 L183.3 219.8 L187.1 223.2 L191.0 210.8 L194.9 211.4 L198.7 215.3 L202.6 202.9 L206.5 213.1 L210.3 203.5 L214.2 213.0 L218.0 207.5 L221.9 198.8 L225.8 204.9 L229.6 220.9 L233.5 210.2 L237.3 208.5 L241.2 221.0 L245.1 222.9 L248.9 223.9 L252.8 223.6 L256.6 223.2 L260.5 223.0 L264.4 224.2 L268.2 222.9 L272.1 216.5 L276.0 222.4 L279.8 222.5 L283.7 192.2 L287.5 213.3 L291.4 223.1 L295.3 212.3 L299.1 214.6 L303.0 202.1 L306.8 195.4 L310.7 218.7 L314.6 209.9 L318.4 184.7 L322.3 199.8 L326.2 221.5 L330.0 221.8 L333.9 212.9 L337.7 220.9 L341.6 219.7 L345.5 217.8 L349.3 217.8 L353.2 220.5 L357.0 216.8 L360.9 222.5 L364.8 222.3 L368.6 224.1 L372.5 222.1 L376.4 224.4 L380.2 219.0 L384.1 222.9 L387.9 220.3 L391.8 221.0 L395.7 220.2 L399.5 220.1 L403.4 208.0 L407.2 216.3 L411.1 212.3 L415.0 220.3 L418.8 215.9 L422.7 221.3 L426.5 215.3 L430.4 222.5 L434.3 221.5 L438.1 217.4 L442.0 221.6 L445.9 222.6 L449.7 220.6 L453.6 215.9 L457.4 220.2 L461.3 223.2 L465.2 221.8 L469.0 221.4 L472.9 224.3 L476.7 220.4 L480.6 206.6 L484.5 224.2 L488.3 215.1 L492.2 220.6 L496.1 221.8 L499.9 223.9 L503.8 220.5 L507.6 218.6 L511.5 221.8 L515.4 222.4 M523.1 224.9 L526.9 225.5 L530.8 222.5 L534.7 217.6 L538.5 223.7 L542.4 218.1 L546.2 218.3 L550.1 222.2 L554.0 220.1 L557.8 224.8 L561.7 217.4 L565.6 215.0 L569.4 222.8 L573.3 215.8 L577.1 223.5 L581.0 222.9 L584.9 215.3 L588.7 216.3 L592.6 223.3 L596.4 224.7 L600.3 224.8 L604.2 216.1 L608.0 224.3 L611.9 221.5 L615.8 223.7 L619.6 223.7 L623.5 223.0 L627.3 225.6 L631.2 224.1 L635.1 220.3 L638.9 224.9 L642.8 225.4 L646.6 223.0 L650.5 226.3 L654.4 224.3 L658.2 223.7 L662.1 217.1 L665.9 223.1 L669.8 221.9 L673.7 221.1 L677.5 217.7 L681.4 222.9 L685.3 223.1 L689.1 217.6 L693.0 214.8 L696.8 221.5 L700.7 211.3 L704.6 221.2 L708.4 224.6 L712.3 222.9 L716.1 220.5 L720.0 221.9 L723.9 223.7 L727.7 224.3 L731.6 223.0 L735.5 218.7 L739.3 220.4 L743.2 222.7 L747.0 228.1 L750.9 222.7 L754.8 215.4 L758.6 220.4 L762.5 210.7 L766.3 214.5 L770.2 220.7 L774.1 219.8 L777.9 209.6 L781.8 211.1 L785.6 213.5 L789.5 219.9 L793.4 221.8 L797.2 216.4 L801.1 222.8 L805.0 219.8 L808.8 223.9 L812.7 224.8 L816.5 224.4 L820.4 222.6 L824.3 223.9 L828.1 223.7 L832.0 223.1 L835.8 222.0 L839.7 223.0 L843.6 221.0 L847.4 220.6 L851.3 221.2 L855.2 215.9 L859.0 208.3 L862.9 222.5 L866.7 215.2 M874.5 215.7 L878.3 222.3 L882.2 223.5 L886.0 218.1 L889.9 222.2 L893.8 222.7 L897.6 222.6 L901.5 224.6 L905.4 224.4 L909.2 220.9 L913.1 220.4 L916.9 223.4 L920.8 223.8 L924.7 227.0 L928.5 223.7 L932.4 222.2 L936.2 220.5 L940.1 222.7 L944.0 225.8 L947.8 224.1 L951.7 218.7 L955.5 220.5 L959.4 224.3 L963.3 186.9 L967.1 222.1 L971.0 221.3 L974.9 224.8 L978.7 224.6 L982.6 225.3 L986.4 225.9 L990.3 223.4 L994.2 226.3 L998.0 227.5 L1001.9 226.9 L1005.7 225.5 L1009.6 226.8 L1013.5 225.2 L1017.3 225.8 L1021.2 224.3 L1025.1 226.1 L1028.9 225.9 L1032.8 221.6 L1036.6 220.9 L1040.5 223.2 L1044.4 225.2 L1048.2 222.5 L1052.1 224.5 L1055.9 222.6 L1059.8 224.8 L1063.7 222.5 M1071.4 225.7 L1075.2 221.9 L1079.1 224.3 L1083.0 224.1 L1086.8 224.9 L1090.7 224.9 L1094.6 223.5 L1098.4 223.2 L1102.3 224.1 L1106.1 219.2 L1110.0 224.6"/><text class="ycap" x="8" y="22">CPM, log</text></svg>
+<div class="legend"><span><i style="border-top-color:var(--accent)"></i>hourly mean</span><span><i style="border-top-color:var(--warn)"></i>highest 3-second peak in the hour</span><span>a break in the line is an hour with no recording</span></div></div>
 <h2>By day</h2>
-<table class="rb"><thead><tr><th>Day</th><th>Mean CPM</th><th>&micro;Sv/h</th><th>Peak 3s CPM</th><th>Rows</th><th>Hours</th></tr></thead><tbody>
-<tr><td>2026-09-04</td><td>164.0</td><td>1.082</td><td>439300</td><td>1386</td><td>11.5</td></tr>
-<tr><td>2026-09-03</td><td>79.4</td><td>0.524</td><td>30820</td><td>2760</td><td>23.0</td></tr>
-<tr><td>2026-09-02</td><td>97.1</td><td>0.641</td><td>35880</td><td>2592</td><td>21.6</td></tr>
-<tr><td>2026-09-01</td><td>100.4</td><td>0.662</td><td>61460</td><td>2584</td><td>21.5</td></tr>
-<tr><td>2026-08-31</td><td>101.7</td><td>0.671</td><td>102540</td><td>2293</td><td>19.1</td></tr>
-<tr><td>2026-08-30</td><td>97.6</td><td>0.644</td><td>30780</td><td>2294</td><td>19.1</td></tr>
-<tr><td>2026-08-29</td><td>96.3</td><td>0.635</td><td>61520</td><td>2572</td><td>21.4</td></tr>
-<tr><td>2026-08-28</td><td>103.7</td><td>0.684</td><td>51240</td><td>2456</td><td>20.4</td></tr>
-<tr><td>2026-08-27</td><td>109.1</td><td>0.720</td><td>66620</td><td>2414</td><td>20.1</td></tr>
-<tr><td>2026-08-26</td><td>108.8</td><td>0.718</td><td>71900</td><td>2346</td><td>19.5</td></tr>
-<tr><td>2026-08-25</td><td>110.1</td><td>0.727</td><td>81940</td><td>2583</td><td>21.5</td></tr>
-<tr><td>2026-08-24</td><td>101.2</td><td>0.668</td><td>36140</td><td>2270</td><td>18.9</td></tr>
-</tbody></table>
+<div class="tablewrap"><table><thead><tr><th>Day</th><th>Mean CPM</th><th>&micro;Sv/h</th><th>Peak 3s CPM</th><th>Rows</th><th>Hours</th></tr></thead><tbody>
+<tr><td>2026-09-04</td><td>37.8</td><td>0.250</td><td>1800</td><td>1380</td><td>11.5</td></tr>
+<tr><td>2026-09-03</td><td>36.7</td><td>0.242</td><td>580</td><td>2760</td><td>23.0</td></tr>
+<tr><td>2026-09-02</td><td>38.8</td><td>0.256</td><td>600</td><td>2592</td><td>21.6</td></tr>
+<tr><td>2026-09-01</td><td>41.5</td><td>0.274</td><td>700</td><td>2584</td><td>21.5</td></tr>
+<tr><td>2026-08-31</td><td>42.9</td><td>0.283</td><td>6840</td><td>2293</td><td>19.1</td></tr>
+<tr><td>2026-08-30</td><td>39.3</td><td>0.259</td><td>680</td><td>2294</td><td>19.1</td></tr>
+<tr><td>2026-08-29</td><td>40.8</td><td>0.270</td><td>8520</td><td>2572</td><td>21.4</td></tr>
+<tr><td>2026-08-28</td><td>41.9</td><td>0.276</td><td>680</td><td>2456</td><td>20.4</td></tr>
+<tr><td>2026-08-27</td><td>43.6</td><td>0.288</td><td>700</td><td>2414</td><td>20.1</td></tr>
+<tr><td>2026-08-26</td><td>46.5</td><td>0.307</td><td>6820</td><td>2346</td><td>19.5</td></tr>
+<tr><td>2026-08-25</td><td>47.8</td><td>0.316</td><td>740</td><td>2583</td><td>21.5</td></tr>
+<tr><td>2026-08-24</td><td>45.2</td><td>0.298</td><td>8520</td><td>2270</td><td>18.9</td></tr>
+</tbody></table></div>
 <h2>Latest rows</h2>
-<table class="rb"><thead><tr><th>Time</th><th>CPS</th><th>3s</th><th>30s</th><th>300s</th><th>Peak 3s</th><th>Source</th><th>Site</th></tr></thead><tbody>
-<tr><td>2026-09-04T13:09:30</td><td>1.433</td><td>220.0</td><td>86.0</td><td>--</td><td>280.0</td><td>live</td><td>--</td></tr>
-<tr><td>2026-09-04T13:08:59</td><td>1.300</td><td>0.0</td><td>78.0</td><td>--</td><td>380.0</td><td>live</td><td>--</td></tr>
-<tr><td>2026-09-04T13:08:29</td><td>1.067</td><td>60.0</td><td>64.0</td><td>--</td><td>420.0</td><td>live</td><td>--</td></tr>
-<tr><td>2026-09-04T13:07:59</td><td>1.867</td><td>240.0</td><td>112.0</td><td>--</td><td>440.0</td><td>live</td><td>--</td></tr>
-<tr><td>2026-09-04T13:07:29</td><td>1.200</td><td>140.0</td><td>72.0</td><td>--</td><td>340.0</td><td>live</td><td>--</td></tr>
-<tr><td>2026-09-04T13:06:59</td><td>1.742</td><td>0.0</td><td>108.0</td><td>--</td><td>340.0</td><td>live</td><td>--</td></tr>
-<tr><td>2026-09-04T12:53:30</td><td>0.114</td><td>0.0</td><td>6.0</td><td>83.8</td><td>40.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:53:00</td><td>0.824</td><td>0.0</td><td>50.0</td><td>84.2</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:52:30</td><td>0.297</td><td>0.0</td><td>18.0</td><td>82.8</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:52:00</td><td>9.071</td><td>20.0</td><td>532.0</td><td>84.2</td><td>5120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:51:30</td><td>0.429</td><td>0.0</td><td>26.0</td><td>34.4</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:51:00</td><td>0.560</td><td>80.0</td><td>34.0</td><td>35.6</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:50:30</td><td>0.750</td><td>80.0</td><td>52.0</td><td>86.8</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:50:00</td><td>0.560</td><td>80.0</td><td>34.0</td><td>87.0</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:49:30</td><td>0.560</td><td>0.0</td><td>34.0</td><td>88.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:49:00</td><td>0.784</td><td>0.0</td><td>52.0</td><td>88.6</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:48:30</td><td>0.396</td><td>140.0</td><td>24.0</td><td>87.6</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:48:00</td><td>0.593</td><td>20.0</td><td>36.0</td><td>88.2</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:47:30</td><td>0.546</td><td>80.0</td><td>32.0</td><td>190.8</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:47:00</td><td>0.560</td><td>0.0</td><td>34.0</td><td>191.6</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:46:30</td><td>0.626</td><td>0.0</td><td>38.0</td><td>190.8</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:46:00</td><td>9.310</td><td>0.0</td><td>546.0</td><td>191.4</td><td>5200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:45:30</td><td>0.758</td><td>0.0</td><td>46.0</td><td>141.2</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:45:00</td><td>0.857</td><td>80.0</td><td>52.0</td><td>143.2</td><td>220.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:44:30</td><td>0.375</td><td>60.0</td><td>32.0</td><td>243.2</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:44:00</td><td>0.758</td><td>100.0</td><td>46.0</td><td>244.8</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:43:30</td><td>0.494</td><td>100.0</td><td>30.0</td><td>245.2</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:43:00</td><td>18.040</td><td>80.0</td><td>1062.0</td><td>245.8</td><td>10340.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:42:30</td><td>0.725</td><td>80.0</td><td>44.0</td><td>143.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:42:00</td><td>0.429</td><td>0.0</td><td>26.0</td><td>143.6</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:41:30</td><td>0.716</td><td>100.0</td><td>44.0</td><td>246.8</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:41:00</td><td>0.758</td><td>80.0</td><td>46.0</td><td>245.8</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:40:56</td><td>0.667</td><td>--</td><td>--</td><td>--</td><td>--</td><td>live</td><td>--</td></tr>
-<tr><td>2026-09-04T12:40:00</td><td>17.869</td><td>20.0</td><td>1052.0</td><td>240.2</td><td>10280.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:39:30</td><td>0.692</td><td>60.0</td><td>42.0</td><td>138.6</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:39:00</td><td>0.824</td><td>80.0</td><td>50.0</td><td>137.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:38:30</td><td>0.614</td><td>40.0</td><td>36.0</td><td>187.4</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:38:00</td><td>0.626</td><td>40.0</td><td>38.0</td><td>186.4</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:37:30</td><td>0.692</td><td>0.0</td><td>42.0</td><td>189.4</td><td>220.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:37:00</td><td>18.040</td><td>60.0</td><td>1058.0</td><td>190.8</td><td>10300.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:36:30</td><td>0.527</td><td>40.0</td><td>32.0</td><td>87.0</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:36:00</td><td>0.198</td><td>40.0</td><td>12.0</td><td>86.2</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:35:30</td><td>0.716</td><td>80.0</td><td>44.0</td><td>86.2</td><td>220.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:35:00</td><td>0.560</td><td>140.0</td><td>34.0</td><td>84.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:34:30</td><td>0.429</td><td>0.0</td><td>26.0</td><td>84.6</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:34:00</td><td>9.412</td><td>40.0</td><td>554.0</td><td>88.2</td><td>5200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:33:30</td><td>0.462</td><td>40.0</td><td>28.0</td><td>36.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:33:00</td><td>1.121</td><td>80.0</td><td>68.0</td><td>36.4</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:32:30</td><td>0.955</td><td>0.0</td><td>56.0</td><td>33.6</td><td>300.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:32:00</td><td>0.330</td><td>0.0</td><td>20.0</td><td>33.6</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:31:30</td><td>0.396</td><td>0.0</td><td>24.0</td><td>34.4</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:31:00</td><td>0.171</td><td>0.0</td><td>12.0</td><td>33.8</td><td>40.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:30:30</td><td>0.494</td><td>20.0</td><td>30.0</td><td>35.6</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:30:00</td><td>0.527</td><td>40.0</td><td>32.0</td><td>39.4</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:29:30</td><td>1.057</td><td>80.0</td><td>62.0</td><td>40.6</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:29:00</td><td>0.494</td><td>0.0</td><td>30.0</td><td>36.8</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:28:30</td><td>0.527</td><td>20.0</td><td>32.0</td><td>41.0</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:28:00</td><td>0.684</td><td>60.0</td><td>40.0</td><td>39.6</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:27:30</td><td>0.928</td><td>20.0</td><td>56.0</td><td>37.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:27:00</td><td>0.431</td><td>0.0</td><td>26.0</td><td>35.8</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:26:30</td><td>0.331</td><td>40.0</td><td>20.0</td><td>37.0</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:26:00</td><td>0.464</td><td>0.0</td><td>28.0</td><td>38.4</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:25:30</td><td>1.127</td><td>100.0</td><td>68.0</td><td>36.6</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:25:00</td><td>0.753</td><td>60.0</td><td>44.0</td><td>32.8</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:24:30</td><td>0.396</td><td>0.0</td><td>24.0</td><td>31.4</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:24:00</td><td>1.187</td><td>0.0</td><td>72.0</td><td>31.0</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:23:30</td><td>0.307</td><td>0.0</td><td>18.0</td><td>28.6</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:23:00</td><td>0.363</td><td>0.0</td><td>22.0</td><td>32.2</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:22:30</td><td>0.593</td><td>0.0</td><td>36.0</td><td>33.0</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:22:00</td><td>0.648</td><td>0.0</td><td>38.0</td><td>31.6</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:21:30</td><td>0.560</td><td>20.0</td><td>34.0</td><td>32.4</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:21:00</td><td>0.165</td><td>20.0</td><td>10.0</td><td>34.8</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:20:30</td><td>0.512</td><td>20.0</td><td>30.0</td><td>35.6</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:20:00</td><td>0.494</td><td>0.0</td><td>30.0</td><td>37.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:19:30</td><td>0.330</td><td>0.0</td><td>20.0</td><td>35.8</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:19:00</td><td>0.784</td><td>200.0</td><td>48.0</td><td>38.8</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:18:30</td><td>0.923</td><td>140.0</td><td>56.0</td><td>37.6</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:18:00</td><td>0.494</td><td>0.0</td><td>30.0</td><td>37.0</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:17:30</td><td>0.375</td><td>40.0</td><td>22.0</td><td>37.2</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:17:00</td><td>0.758</td><td>20.0</td><td>46.0</td><td>38.0</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:16:30</td><td>0.956</td><td>20.0</td><td>58.0</td><td>36.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:16:00</td><td>0.307</td><td>60.0</td><td>18.0</td><td>34.6</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:15:30</td><td>0.725</td><td>20.0</td><td>44.0</td><td>36.2</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:15:00</td><td>0.297</td><td>0.0</td><td>18.0</td><td>36.4</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:14:30</td><td>0.614</td><td>0.0</td><td>50.0</td><td>90.6</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:14:00</td><td>0.791</td><td>200.0</td><td>48.0</td><td>89.6</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:13:30</td><td>0.824</td><td>60.0</td><td>50.0</td><td>87.8</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:13:00</td><td>0.546</td><td>20.0</td><td>32.0</td><td>88.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:12:30</td><td>0.494</td><td>0.0</td><td>30.0</td><td>89.6</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:12:00</td><td>0.560</td><td>100.0</td><td>34.0</td><td>89.2</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:11:30</td><td>0.614</td><td>0.0</td><td>36.0</td><td>90.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:11:00</td><td>0.560</td><td>0.0</td><td>34.0</td><td>89.4</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:10:30</td><td>0.758</td><td>20.0</td><td>46.0</td><td>90.4</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:10:00</td><td>9.548</td><td>100.0</td><td>560.0</td><td>87.8</td><td>5220.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:09:30</td><td>0.429</td><td>20.0</td><td>26.0</td><td>35.6</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:09:00</td><td>0.494</td><td>0.0</td><td>30.0</td><td>37.6</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:08:30</td><td>1.023</td><td>40.0</td><td>60.0</td><td>38.4</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:08:00</td><td>0.659</td><td>20.0</td><td>40.0</td><td>36.6</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:07:30</td><td>0.429</td><td>20.0</td><td>26.0</td><td>38.2</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:07:00</td><td>0.853</td><td>60.0</td><td>50.0</td><td>39.6</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:06:30</td><td>0.363</td><td>0.0</td><td>22.0</td><td>38.6</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:06:00</td><td>0.725</td><td>40.0</td><td>44.0</td><td>42.0</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:05:30</td><td>0.341</td><td>0.0</td><td>20.0</td><td>40.6</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:05:00</td><td>0.626</td><td>0.0</td><td>38.0</td><td>42.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:04:30</td><td>0.758</td><td>20.0</td><td>46.0</td><td>43.8</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:04:00</td><td>0.580</td><td>0.0</td><td>38.0</td><td>41.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:03:30</td><td>0.758</td><td>80.0</td><td>46.0</td><td>41.0</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:03:00</td><td>0.923</td><td>100.0</td><td>56.0</td><td>39.4</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:02:30</td><td>0.682</td><td>80.0</td><td>40.0</td><td>87.8</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:02:00</td><td>0.659</td><td>0.0</td><td>40.0</td><td>87.4</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:01:30</td><td>0.923</td><td>160.0</td><td>56.0</td><td>86.0</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:01:00</td><td>0.512</td><td>0.0</td><td>30.0</td><td>85.0</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:00:30</td><td>0.560</td><td>80.0</td><td>34.0</td><td>86.6</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T12:00:00</td><td>0.923</td><td>60.0</td><td>56.0</td><td>85.8</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:59:34</td><td>0.300</td><td>40.0</td><td>36.0</td><td>--</td><td>40.0</td><td>live</td><td>--</td></tr>
-<tr><td>2026-09-04T11:59:04</td><td>0.500</td><td>20.0</td><td>32.0</td><td>--</td><td>80.0</td><td>live</td><td>--</td></tr>
-<tr><td>2026-09-04T11:58:33</td><td>0.300</td><td>0.0</td><td>28.0</td><td>--</td><td>40.0</td><td>live</td><td>--</td></tr>
-<tr><td>2026-09-04T11:58:13</td><td>0.273</td><td>0.0</td><td>--</td><td>--</td><td>20.0</td><td>live</td><td>--</td></tr>
-<tr><td>2026-09-04T11:57:30</td><td>0.593</td><td>20.0</td><td>36.0</td><td>40.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:57:00</td><td>0.429</td><td>20.0</td><td>26.0</td><td>39.2</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:56:30</td><td>0.750</td><td>80.0</td><td>46.0</td><td>194.4</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:56:00</td><td>0.791</td><td>80.0</td><td>48.0</td><td>193.8</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:55:30</td><td>0.429</td><td>20.0</td><td>26.0</td><td>190.4</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:55:00</td><td>0.682</td><td>0.0</td><td>40.0</td><td>193.4</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:54:30</td><td>0.956</td><td>40.0</td><td>58.0</td><td>194.0</td><td>240.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:54:00</td><td>0.989</td><td>160.0</td><td>60.0</td><td>193.0</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:53:30</td><td>0.648</td><td>20.0</td><td>38.0</td><td>241.8</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:53:00</td><td>0.527</td><td>0.0</td><td>32.0</td><td>239.4</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:52:30</td><td>0.330</td><td>20.0</td><td>20.0</td><td>240.4</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:52:00</td><td>26.872</td><td>20.0</td><td>1578.0</td><td>241.2</td><td>15460.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:51:30</td><td>0.659</td><td>20.0</td><td>40.0</td><td>87.0</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:51:00</td><td>0.231</td><td>20.0</td><td>14.0</td><td>85.6</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:50:30</td><td>0.921</td><td>140.0</td><td>56.0</td><td>88.6</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:50:00</td><td>0.791</td><td>160.0</td><td>48.0</td><td>86.8</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:49:30</td><td>0.791</td><td>140.0</td><td>48.0</td><td>85.4</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:49:00</td><td>9.344</td><td>0.0</td><td>548.0</td><td>85.2</td><td>5120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:48:30</td><td>0.231</td><td>0.0</td><td>14.0</td><td>33.0</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:48:00</td><td>0.692</td><td>40.0</td><td>42.0</td><td>38.8</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:47:30</td><td>0.477</td><td>20.0</td><td>28.0</td><td>38.8</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:47:00</td><td>0.560</td><td>40.0</td><td>34.0</td><td>38.4</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:46:30</td><td>0.429</td><td>20.0</td><td>26.0</td><td>39.2</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:46:00</td><td>0.725</td><td>20.0</td><td>44.0</td><td>42.0</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:45:30</td><td>0.614</td><td>0.0</td><td>38.0</td><td>41.2</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:45:00</td><td>0.560</td><td>20.0</td><td>34.0</td><td>40.8</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:44:30</td><td>0.758</td><td>80.0</td><td>46.0</td><td>43.8</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:44:00</td><td>0.443</td><td>40.0</td><td>26.0</td><td>93.0</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:43:30</td><td>1.187</td><td>20.0</td><td>72.0</td><td>93.4</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:43:00</td><td>0.692</td><td>20.0</td><td>42.0</td><td>88.2</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:42:30</td><td>0.409</td><td>0.0</td><td>24.0</td><td>88.2</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:42:00</td><td>0.692</td><td>20.0</td><td>42.0</td><td>89.4</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:41:30</td><td>0.890</td><td>80.0</td><td>54.0</td><td>90.4</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:41:00</td><td>0.580</td><td>160.0</td><td>36.0</td><td>87.6</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:40:30</td><td>0.560</td><td>60.0</td><td>34.0</td><td>86.6</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:40:00</td><td>1.055</td><td>60.0</td><td>64.0</td><td>87.8</td><td>5140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:39:30</td><td>9.221</td><td>5140.0</td><td>538.0</td><td>84.6</td><td>5140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:39:00</td><td>0.497</td><td>0.0</td><td>30.0</td><td>35.0</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:38:30</td><td>0.265</td><td>40.0</td><td>16.0</td><td>35.4</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:38:00</td><td>0.729</td><td>60.0</td><td>44.0</td><td>91.6</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:37:30</td><td>0.630</td><td>120.0</td><td>38.0</td><td>89.4</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:37:00</td><td>0.862</td><td>40.0</td><td>52.0</td><td>89.2</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:36:30</td><td>0.443</td><td>0.0</td><td>26.0</td><td>88.2</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:36:00</td><td>0.396</td><td>80.0</td><td>24.0</td><td>88.8</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:35:30</td><td>0.758</td><td>40.0</td><td>46.0</td><td>90.0</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:35:00</td><td>0.546</td><td>20.0</td><td>32.0</td><td>89.4</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:34:30</td><td>0.692</td><td>0.0</td><td>42.0</td><td>88.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:34:00</td><td>0.560</td><td>20.0</td><td>34.0</td><td>87.2</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:33:30</td><td>9.855</td><td>5160.0</td><td>578.0</td><td>88.2</td><td>5260.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:33:00</td><td>0.264</td><td>0.0</td><td>16.0</td><td>33.4</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:32:30</td><td>0.692</td><td>60.0</td><td>42.0</td><td>35.8</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:32:00</td><td>0.716</td><td>0.0</td><td>42.0</td><td>34.8</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:31:30</td><td>0.527</td><td>0.0</td><td>32.0</td><td>32.4</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:31:00</td><td>0.593</td><td>60.0</td><td>36.0</td><td>34.4</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:30:30</td><td>0.682</td><td>0.0</td><td>40.0</td><td>34.2</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:30:00</td><td>0.297</td><td>40.0</td><td>18.0</td><td>33.6</td><td>40.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:29:30</td><td>0.560</td><td>0.0</td><td>34.0</td><td>36.0</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:29:00</td><td>0.750</td><td>40.0</td><td>44.0</td><td>342.4</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:28:30</td><td>0.494</td><td>0.0</td><td>30.0</td><td>340.6</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:28:00</td><td>0.659</td><td>100.0</td><td>40.0</td><td>342.0</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:27:30</td><td>0.548</td><td>60.0</td><td>32.0</td><td>342.0</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:27:00</td><td>0.298</td><td>0.0</td><td>18.0</td><td>342.0</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:26:30</td><td>0.862</td><td>120.0</td><td>52.0</td><td>362.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:26:00</td><td>0.564</td><td>0.0</td><td>34.0</td><td>4758.8</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:25:30</td><td>0.564</td><td>40.0</td><td>34.0</td><td>9223.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:25:00</td><td>0.696</td><td>20.0</td><td>42.0</td><td>9221.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:24:30</td><td>53.001</td><td>140.0</td><td>3098.0</td><td>9272.6</td><td>30740.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:24:00</td><td>0.433</td><td>20.0</td><td>26.0</td><td>8968.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:23:30</td><td>0.733</td><td>20.0</td><td>44.0</td><td>8970.0</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:23:00</td><td>0.600</td><td>20.0</td><td>36.0</td><td>8972.0</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:22:30</td><td>0.600</td><td>40.0</td><td>36.0</td><td>8978.0</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:22:00</td><td>2.266</td><td>100.0</td><td>136.0</td><td>8979.2</td><td>1860.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:21:30</td><td>721.297</td><td>1360.0</td><td>44102.0</td><td>9283.4</td><td>439300.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:21:00</td><td>764.893</td><td>60.0</td><td>44678.0</td><td>4885.2</td><td>439120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:20:30</td><td>0.370</td><td>40.0</td><td>22.0</td><td>420.8</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:20:00</td><td>8.954</td><td>5120.0</td><td>550.0</td><td>429.0</td><td>5140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:19:30</td><td>0.890</td><td>120.0</td><td>54.0</td><td>379.2</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:19:00</td><td>0.758</td><td>60.0</td><td>46.0</td><td>386.0</td><td>220.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:18:30</td><td>1.091</td><td>220.0</td><td>64.0</td><td>545.6</td><td>220.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:18:00</td><td>1.582</td><td>100.0</td><td>96.0</td><td>546.2</td><td>560.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:17:30</td><td>0.791</td><td>0.0</td><td>48.0</td><td>541.4</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:17:00</td><td>54.423</td><td>30720.0</td><td>3178.0</td><td>540.4</td><td>31280.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:16:30</td><td>1.492</td><td>220.0</td><td>90.0</td><td>229.2</td><td>620.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:16:00</td><td>1.061</td><td>360.0</td><td>64.0</td><td>222.0</td><td>360.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:15:30</td><td>1.724</td><td>60.0</td><td>104.0</td><td>218.2</td><td>300.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:15:00</td><td>0.829</td><td>0.0</td><td>50.0</td><td>211.4</td><td>380.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:14:30</td><td>2.022</td><td>20.0</td><td>122.0</td><td>209.6</td><td>340.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:14:00</td><td>27.761</td><td>15380.0</td><td>1642.0</td><td>201.0</td><td>15400.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:13:30</td><td>1.312</td><td>120.0</td><td>78.0</td><td>42.2</td><td>240.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:13:00</td><td>0.779</td><td>20.0</td><td>48.0</td><td>40.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:12:30</td><td>0.606</td><td>20.0</td><td>38.0</td><td>38.2</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:12:00</td><td>1.111</td><td>40.0</td><td>66.0</td><td>42.0</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:11:30</td><td>0.303</td><td>0.0</td><td>18.0</td><td>39.6</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:11:00</td><td>0.367</td><td>0.0</td><td>26.0</td><td>41.0</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:10:30</td><td>0.659</td><td>40.0</td><td>40.0</td><td>41.2</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:10:00</td><td>0.527</td><td>0.0</td><td>32.0</td><td>41.4</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:09:30</td><td>0.614</td><td>0.0</td><td>36.0</td><td>144.0</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:09:00</td><td>0.758</td><td>60.0</td><td>46.0</td><td>146.4</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:08:30</td><td>0.923</td><td>20.0</td><td>56.0</td><td>144.4</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:08:00</td><td>0.477</td><td>20.0</td><td>30.0</td><td>142.2</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:07:30</td><td>1.154</td><td>40.0</td><td>70.0</td><td>143.4</td><td>220.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:07:00</td><td>0.791</td><td>100.0</td><td>48.0</td><td>139.6</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:06:30</td><td>0.546</td><td>0.0</td><td>32.0</td><td>138.2</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:06:00</td><td>0.396</td><td>20.0</td><td>24.0</td><td>137.8</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:05:30</td><td>0.692</td><td>0.0</td><td>42.0</td><td>141.0</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:05:00</td><td>18.006</td><td>20.0</td><td>1058.0</td><td>142.0</td><td>10320.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:04:30</td><td>1.022</td><td>40.0</td><td>62.0</td><td>38.4</td><td>220.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:04:00</td><td>0.429</td><td>80.0</td><td>26.0</td><td>35.4</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:03:30</td><td>0.580</td><td>20.0</td><td>34.0</td><td>36.0</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:03:00</td><td>0.659</td><td>0.0</td><td>40.0</td><td>37.2</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:02:30</td><td>0.527</td><td>120.0</td><td>32.0</td><td>36.4</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:02:00</td><td>0.580</td><td>80.0</td><td>34.0</td><td>36.8</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:01:30</td><td>0.462</td><td>20.0</td><td>28.0</td><td>36.2</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:01:00</td><td>0.923</td><td>20.0</td><td>56.0</td><td>36.6</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:00:30</td><td>0.853</td><td>140.0</td><td>52.0</td><td>36.2</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T11:00:00</td><td>0.363</td><td>20.0</td><td>22.0</td><td>35.8</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:59:30</td><td>0.527</td><td>20.0</td><td>32.0</td><td>36.4</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:59:00</td><td>0.512</td><td>20.0</td><td>32.0</td><td>36.2</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:58:30</td><td>0.791</td><td>20.0</td><td>48.0</td><td>37.2</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:58:00</td><td>0.527</td><td>0.0</td><td>32.0</td><td>38.2</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:57:30</td><td>0.614</td><td>80.0</td><td>36.0</td><td>40.2</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:57:00</td><td>0.462</td><td>0.0</td><td>28.0</td><td>39.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:56:30</td><td>0.527</td><td>40.0</td><td>32.0</td><td>39.8</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:56:00</td><td>0.887</td><td>60.0</td><td>52.0</td><td>39.4</td><td>220.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:55:30</td><td>0.758</td><td>40.0</td><td>46.0</td><td>35.4</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:55:00</td><td>0.462</td><td>0.0</td><td>28.0</td><td>32.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:54:30</td><td>0.512</td><td>0.0</td><td>30.0</td><td>32.2</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:54:00</td><td>0.659</td><td>0.0</td><td>40.0</td><td>31.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:53:30</td><td>0.956</td><td>20.0</td><td>58.0</td><td>31.6</td><td>240.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:53:00</td><td>0.887</td><td>80.0</td><td>52.0</td><td>31.0</td><td>240.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:52:30</td><td>0.396</td><td>20.0</td><td>24.0</td><td>29.4</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:52:00</td><td>0.593</td><td>80.0</td><td>36.0</td><td>29.8</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:51:30</td><td>0.477</td><td>60.0</td><td>28.0</td><td>29.2</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:51:00</td><td>0.198</td><td>40.0</td><td>12.0</td><td>29.2</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:50:30</td><td>0.198</td><td>0.0</td><td>12.0</td><td>33.6</td><td>60.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:50:00</td><td>0.512</td><td>60.0</td><td>30.0</td><td>34.8</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:49:30</td><td>0.429</td><td>0.0</td><td>26.0</td><td>35.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:49:00</td><td>0.626</td><td>0.0</td><td>38.0</td><td>38.2</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:48:30</td><td>0.887</td><td>20.0</td><td>52.0</td><td>90.6</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:48:00</td><td>0.593</td><td>60.0</td><td>36.0</td><td>87.8</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:47:30</td><td>0.462</td><td>0.0</td><td>28.0</td><td>87.6</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:47:00</td><td>0.512</td><td>40.0</td><td>30.0</td><td>89.2</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:46:30</td><td>0.462</td><td>0.0</td><td>28.0</td><td>88.4</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:46:00</td><td>0.923</td><td>60.0</td><td>56.0</td><td>89.2</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:45:30</td><td>0.409</td><td>20.0</td><td>24.0</td><td>87.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:45:00</td><td>0.659</td><td>20.0</td><td>40.0</td><td>88.8</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:44:30</td><td>0.824</td><td>60.0</td><td>50.0</td><td>89.0</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:44:00</td><td>9.548</td><td>0.0</td><td>562.0</td><td>89.2</td><td>5140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:43:30</td><td>0.431</td><td>20.0</td><td>26.0</td><td>35.6</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:43:00</td><td>0.530</td><td>20.0</td><td>32.0</td><td>38.0</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:42:30</td><td>0.729</td><td>20.0</td><td>44.0</td><td>40.8</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:42:00</td><td>0.398</td><td>40.0</td><td>24.0</td><td>41.6</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:41:30</td><td>0.597</td><td>20.0</td><td>36.0</td><td>41.4</td><td>240.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:41:00</td><td>0.583</td><td>40.0</td><td>34.0</td><td>39.6</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:40:30</td><td>0.679</td><td>20.0</td><td>42.0</td><td>41.4</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:40:00</td><td>0.703</td><td>20.0</td><td>52.0</td><td>41.4</td><td>240.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:39:30</td><td>0.870</td><td>140.0</td><td>54.0</td><td>43.2</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:39:00</td><td>0.402</td><td>20.0</td><td>28.0</td><td>194.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:38:30</td><td>0.837</td><td>140.0</td><td>50.0</td><td>195.2</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:38:00</td><td>1.004</td><td>0.0</td><td>60.0</td><td>192.6</td><td>220.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:37:30</td><td>0.770</td><td>0.0</td><td>52.0</td><td>188.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:37:00</td><td>0.462</td><td>60.0</td><td>28.0</td><td>188.2</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:36:30</td><td>0.297</td><td>0.0</td><td>18.0</td><td>187.4</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:36:00</td><td>0.887</td><td>60.0</td><td>54.0</td><td>188.6</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:35:30</td><td>0.659</td><td>40.0</td><td>40.0</td><td>189.0</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:35:00</td><td>1.022</td><td>20.0</td><td>62.0</td><td>188.4</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:34:30</td><td>26.599</td><td>80.0</td><td>1560.0</td><td>186.4</td><td>15420.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:34:00</td><td>0.593</td><td>0.0</td><td>36.0</td><td>32.8</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:33:30</td><td>0.396</td><td>0.0</td><td>24.0</td><td>33.8</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:33:00</td><td>0.375</td><td>0.0</td><td>22.0</td><td>290.0</td><td>80.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:32:30</td><td>0.659</td><td>40.0</td><td>40.0</td><td>290.2</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:32:00</td><td>0.330</td><td>20.0</td><td>20.0</td><td>289.2</td><td>100.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:31:30</td><td>0.512</td><td>0.0</td><td>30.0</td><td>292.6</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:31:00</td><td>0.923</td><td>100.0</td><td>56.0</td><td>291.6</td><td>180.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:30:30</td><td>0.560</td><td>0.0</td><td>34.0</td><td>289.6</td><td>160.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:30:00</td><td>0.716</td><td>0.0</td><td>42.0</td><td>287.6</td><td>140.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:29:30</td><td>0.396</td><td>100.0</td><td>24.0</td><td>287.4</td><td>220.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:29:00</td><td>0.758</td><td>200.0</td><td>46.0</td><td>288.0</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:28:30</td><td>44.094</td><td>0.0</td><td>2586.0</td><td>288.6</td><td>25680.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:28:00</td><td>0.396</td><td>20.0</td><td>24.0</td><td>32.8</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:27:30</td><td>0.494</td><td>20.0</td><td>30.0</td><td>34.6</td><td>120.0</td><td>flash</td><td>Bellevue High School</td></tr>
-<tr><td>2026-09-04T10:27:00</td><td>0.921</td><td>20.0</td><td>54.0</td><td>36.2</td><td>200.0</td><td>flash</td><td>Bellevue High School</td></tr>
-</tbody></table>
+<div class="tablewrap"><table><thead><tr><th>Time</th><th>CPS</th><th>3s</th><th>30s</th><th>300s</th><th>Peak 3s</th><th>Source</th><th>Site</th></tr></thead><tbody>
+<tr><td>2026-09-04T12:53:30</td><td>0.110</td><td>0.0</td><td>6.0</td><td>32.8</td><td>40.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:53:00</td><td>0.829</td><td>0.0</td><td>50.0</td><td>33.2</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:52:30</td><td>0.331</td><td>0.0</td><td>20.0</td><td>32.4</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:52:00</td><td>0.343</td><td>0.0</td><td>20.0</td><td>33.0</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:51:30</td><td>0.431</td><td>0.0</td><td>26.0</td><td>34.4</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:51:00</td><td>0.564</td><td>80.0</td><td>34.0</td><td>35.6</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:50:30</td><td>0.862</td><td>80.0</td><td>52.0</td><td>35.8</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:50:00</td><td>0.431</td><td>0.0</td><td>26.0</td><td>35.4</td><td>60.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:49:30</td><td>0.564</td><td>60.0</td><td>34.0</td><td>38.4</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:49:00</td><td>0.789</td><td>0.0</td><td>52.0</td><td>37.6</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:48:30</td><td>0.398</td><td>140.0</td><td>24.0</td><td>36.8</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:48:00</td><td>0.597</td><td>20.0</td><td>36.0</td><td>38.0</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:47:30</td><td>0.530</td><td>80.0</td><td>32.0</td><td>37.8</td><td>180.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:47:00</td><td>0.564</td><td>40.0</td><td>34.0</td><td>38.6</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:46:30</td><td>0.630</td><td>20.0</td><td>38.0</td><td>37.8</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:46:00</td><td>0.617</td><td>40.0</td><td>36.0</td><td>38.8</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:45:30</td><td>0.762</td><td>0.0</td><td>46.0</td><td>39.6</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:45:00</td><td>0.862</td><td>80.0</td><td>52.0</td><td>41.4</td><td>220.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:44:30</td><td>0.530</td><td>60.0</td><td>32.0</td><td>39.2</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:44:00</td><td>0.630</td><td>0.0</td><td>38.0</td><td>40.4</td><td>180.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:43:30</td><td>0.597</td><td>80.0</td><td>36.0</td><td>41.4</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:43:00</td><td>0.514</td><td>0.0</td><td>34.0</td><td>41.0</td><td>160.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:42:30</td><td>0.729</td><td>80.0</td><td>44.0</td><td>41.8</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:42:00</td><td>0.431</td><td>0.0</td><td>26.0</td><td>41.6</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:41:30</td><td>0.729</td><td>100.0</td><td>44.0</td><td>42.8</td><td>180.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:41:00</td><td>0.796</td><td>60.0</td><td>48.0</td><td>42.0</td><td>160.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:40:30</td><td>1.061</td><td>100.0</td><td>64.0</td><td>38.0</td><td>180.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:40:00</td><td>0.446</td><td>0.0</td><td>30.0</td><td>36.0</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:39:30</td><td>0.696</td><td>60.0</td><td>42.0</td><td>36.6</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:39:00</td><td>0.829</td><td>80.0</td><td>50.0</td><td>35.0</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:38:30</td><td>0.597</td><td>40.0</td><td>36.0</td><td>34.4</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:38:00</td><td>0.630</td><td>40.0</td><td>38.0</td><td>33.8</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:37:30</td><td>0.696</td><td>0.0</td><td>42.0</td><td>36.4</td><td>220.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:37:00</td><td>0.652</td><td>60.0</td><td>38.0</td><td>37.8</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:36:30</td><td>0.530</td><td>40.0</td><td>32.0</td><td>36.0</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:36:00</td><td>0.199</td><td>40.0</td><td>12.0</td><td>35.2</td><td>60.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:35:30</td><td>0.729</td><td>80.0</td><td>44.0</td><td>35.2</td><td>220.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:35:00</td><td>0.530</td><td>140.0</td><td>32.0</td><td>33.6</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:34:30</td><td>0.431</td><td>0.0</td><td>26.0</td><td>33.6</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:34:00</td><td>0.720</td><td>80.0</td><td>44.0</td><td>37.2</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:33:30</td><td>0.464</td><td>40.0</td><td>28.0</td><td>36.0</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:33:00</td><td>1.127</td><td>80.0</td><td>68.0</td><td>36.6</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:32:30</td><td>0.928</td><td>0.0</td><td>56.0</td><td>33.6</td><td>300.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:32:00</td><td>0.331</td><td>0.0</td><td>20.0</td><td>33.6</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:31:30</td><td>0.398</td><td>0.0</td><td>24.0</td><td>34.4</td><td>160.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:31:00</td><td>0.171</td><td>0.0</td><td>12.0</td><td>33.8</td><td>40.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:30:30</td><td>0.497</td><td>20.0</td><td>30.0</td><td>36.4</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:30:00</td><td>0.530</td><td>40.0</td><td>32.0</td><td>39.6</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:29:30</td><td>1.028</td><td>80.0</td><td>62.0</td><td>40.6</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:29:00</td><td>0.497</td><td>0.0</td><td>30.0</td><td>36.8</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:28:30</td><td>0.564</td><td>40.0</td><td>34.0</td><td>41.0</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:28:00</td><td>0.631</td><td>80.0</td><td>38.0</td><td>39.4</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:27:30</td><td>0.933</td><td>80.0</td><td>56.0</td><td>37.8</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:27:00</td><td>0.467</td><td>20.0</td><td>28.0</td><td>35.8</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:26:30</td><td>0.300</td><td>40.0</td><td>18.0</td><td>36.8</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:26:00</td><td>0.600</td><td>0.0</td><td>36.0</td><td>38.4</td><td>160.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:25:30</td><td>1.033</td><td>60.0</td><td>62.0</td><td>36.0</td><td>160.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:25:00</td><td>0.722</td><td>40.0</td><td>42.0</td><td>32.6</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:24:30</td><td>0.398</td><td>0.0</td><td>24.0</td><td>31.4</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:24:00</td><td>1.193</td><td>0.0</td><td>72.0</td><td>31.2</td><td>200.0</td><td>flash</td><td>--</td></tr>
+</tbody></table></div>
+<p class="more">The last 60 rows of 28,544. Read the full chart: <a href="logs/cpm-F48824B8207F7E-2026-08.tsv">cpm-F48824B8207F7E-2026-08.tsv</a> &middot; <a href="logs/cpm-F48824B8207F7E-2026-09.tsv">cpm-F48824B8207F7E-2026-09.tsv</a> &mdash; tab-separated, one row every 30 seconds.</p>
+<section class="how">
+<h2>How to use it</h2>
+<h3>Install</h3>
+<p>One stdlib Python file. No packages, no build, nothing to compile &mdash; the install is a copy.</p>
+<pre>git clone https://github.com/vonglurt/radbeeper.git
+cd radbeeper &amp;&amp; make install
+
+doas adduser $USER dialout    # then log in again</pre>
+<h3>Find the counter</h3>
+<pre>radbeeper probe</pre>
+<figure><img src="docs/screenshots/probe.png" alt="radbeeper probe, against the counter these logs came from" loading="lazy"><figcaption>radbeeper probe, against the counter these logs came from</figcaption></figure>
+<p>If it finds nothing it says which of four things went wrong, because they have four different fixes: no serial node at all (often a kernel with no <code>ch341</code> &mdash; Alpine's <code>linux-virt</code> has none, <code>linux-lts</code> does), permission on the node, something that is not a GMC, or a port another reader already holds.</p>
+<h3>Watch it</h3>
+<pre>radbeeper watch</pre>
+<figure><img src="docs/screenshots/watch.png" alt="the monitor: three time constants at once" loading="lazy"><figcaption>the monitor: three time constants at once</figcaption></figure>
+<p>The counter's own reading is a rolling 60-second count &mdash; one number with one time constant. RadBeeper counts the blips itself and keeps three windows at once.</p>
+<ul class="windows">
+<li><b>3 s</b><span>Watching a source come and go as you move it. Jumpy, and honestly so.</span></li>
+<li><b>30 s</b><span>Reading the room. Settled enough to compare two places.</span></li>
+<li><b>300 s</b><span>A number worth writing down.</span></li>
+</ul>
+<p><strong>A window shows nothing until it is full</strong>, and says how long it still needs. A three-second CPM built from one sample is twenty times noisier than it looks, and drawing it as though it were settled is how a 25 CPM background reads as 60 and somebody goes hunting for a leak.</p>
+<figure><img src="docs/screenshots/watch-filling.png" alt="the long window still filling, and saying so" loading="lazy"><figcaption>the long window still filling, and saying so</figcaption></figure>
+<p>No counter on the desk? Every command runs against a built-in source, and it is a real one &mdash; radioactive decay is a Poisson process, so the simulator draws Poisson samples.</p>
+<pre>radbeeper --source sim --sim-cpm 400 watch</pre>
+<h3>Log it</h3>
+<pre>radbeeper service</pre>
+<p>A row every 30 seconds into a dated file per counter, <code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code> &mdash; which is rotation by construction, with no cron entry and nothing renaming a file while a service appends to it. Each row carries the <strong>peak</strong> every window reached since the last one, so a source that came and went between two rows still leaves a trace.</p>
+<figure><img src="docs/screenshots/log-output.png" alt="the log on disk, and what a row holds" loading="lazy"><figcaption>the log on disk, and what a row holds</figcaption></figure>
+<p>The counter also records to its own flash whether or not anything is listening. <code>radbeeper backfill</code> reads that back and fills the gaps &mdash; one row per slot, never over a live measurement, and an hour nobody recorded stays an hour nobody recorded.</p>
+<pre>radbeeper backfill</pre>
+<h3>Publish it</h3>
+<pre>radbeeper export --logs logs -o index.html</pre>
+<p>This page. Fork the repository, copy your <code>cpm-*.tsv</code> into <code>logs/</code>, push, and the workflow rebuilds and commits it &mdash; served by GitHub Pages with no build step. There is nothing to install in the workflow: the generator is the same one file, which is also why the page cannot drift from the log format.</p>
+<p>MIT &mdash; <a href="https://github.com/vonglurt/radbeeper">github.com/vonglurt/radbeeper</a></p>
+</section>
 <footer>Rows marked <code>live</code> were measured by a monitor on this machine; rows marked <code>flash</code> were reconstructed from the counter's own recorded history. Gaps are gaps: nothing is interpolated. Built by <code>radbeeper export</code>.</footer>
 </main>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/datatables.net/2.1.8/dataTables.min.js"></script>
-<script>document.addEventListener('DOMContentLoaded',function(){document.querySelectorAll('table.rb').forEach(function(t){new DataTable(t,{pageLength:25,order:[]});});});</script>
 </body></html>

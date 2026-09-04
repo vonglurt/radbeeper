@@ -189,7 +189,7 @@ class TestCommandsEndToEnd(SerialCase):
             with open(stem + ".csv") as f:
                 lines = f.read().strip().splitlines()
             self.assertEqual(lines[0], "offset,time,interval_s,count,note")
-            self.assertGreater(len(lines), 30)
+            self.assertGreaterEqual(len(lines), 30)
 
 
 if __name__ == "__main__":

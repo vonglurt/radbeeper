@@ -39,10 +39,12 @@ def build_history(seconds=120, cpm=30.0, seed=5, size=4096,
     -- the case the decoder is most likely to get wrong, so the fixture makes
     sure it happens.
 
-    THE DATETIME RECORD IS NINE BYTES, no save-mode byte, because that is what
-    a GMC-320Re 4.26 writes: the tenth byte in a real image is the 0x55 of the
-    next marker. The fixture used to write ten and so agreed with the decoder's
-    bug instead of with the hardware.
+    THE DATETIME RECORD IS NINE BYTES, no save-mode byte, and it is followed
+    by a bare `55 AA 01` -- that is what a GMC-320Re 4.26 writes, measured over
+    a full 1 MiB image where all 4,709 of them sat exactly nine bytes after a
+    timestamp and nowhere else. The fixture used to write a ten-byte datetime
+    and to use `55 AA 01` as a two-byte count, and so agreed with the decoder's
+    bugs instead of with the hardware.
 
     `interval` is the counter's true seconds per sample and defaults to 1.011,
     which is what the unit on the bench measures. A fixture that ticked exactly
@@ -61,13 +63,13 @@ def build_history(seconds=120, cpm=30.0, seed=5, size=4096,
         stamp = time.localtime(t)
         out += bytes([0x55, 0xAA, 0x00, stamp.tm_year - 2000, stamp.tm_mon,
                       stamp.tm_mday, stamp.tm_hour, stamp.tm_min, stamp.tm_sec])
+        out += bytes([0x55, 0xAA, 0x01])   # follows every timestamp
         n_here = min(per_mark, seconds - written)
         for _ in range(n_here):
-            n = max(0, int(rng.gauss(cpm, cpm / 3)))
-            if n > 255:
-                out += bytes([0x55, 0xAA, 0x01]) + struct.pack(">H", n)
-            else:
-                out.append(n)
+            # 254, not 255: 0xFF is unwritten flash and the decoder skips
+            # it, so a single byte cannot express a count of 255 at all.
+            n = max(0, min(254, int(rng.gauss(cpm, cpm / 3))))
+            out.append(n)
         written += n_here
         # The RTC has one-second resolution, so the mark it writes is the
         # rounded truth -- which is exactly why the interval has to be
