@@ -92,7 +92,9 @@ FLASH_SIZES = {"GMC-320": 0x100000, "GMC-300": 0x10000, "GMC-500": 0x100000,
                "GMC-600": 0x100000}
 SPIR_CHUNK = 2048
 
-# The service log: tab-separated, one row per LOG_EVERY seconds.
+# The service log: tab-separated, one row per LOG_EVERY seconds, one file per
+# month. LOG_NAME is the single undated file older versions wrote; it is
+# migrated into the dated ones the first time it is seen and then kept aside.
 LOG_NAME = "cpm.tsv"
 DEFAULT_LOG_EVERY = 30.0
 
@@ -109,6 +111,22 @@ SRC_FLASH = "flash"
 # out of range of anything, leaves a gap; carrying a 300-second window across
 # it would average two different afternoons together and call it one number.
 DEFAULT_MAX_GAP = 10.0
+
+# WHERE THE COUNTER IS, AND THE FACT THAT IT MOVES. A reading without a place
+# is half a measurement -- 40 CPM means one thing in a basement and another on
+# a hillside -- and these counters are carried about, so the place is not a
+# property of the machine or of the file. It is a property of a SERIAL NUMBER
+# OVER TIME, which is what sites.tsv records: append-only, one row per move,
+# so a reading from last Tuesday resolves to where the counter was last
+# Tuesday and not to where it is now.
+#
+# A NAME AND NOT A COORDINATE, deliberately. These logs are meant to be
+# published -- the export builds a page for a fork to put on the web -- and a
+# place name is what a reader needs, while a decimal fix to six places is a
+# street address for whoever is holding the counter. Nothing here has any use
+# for the precision, so it is not collected.
+SITES_NAME = "sites.tsv"
+DEFAULT_SITE = "Bellevue High School"
 
 # How much of the flash tail a backfill reads when it is not told otherwise.
 # 64 KiB is around seventeen hours at the interval this counter records, and
@@ -1222,13 +1240,17 @@ def log_header(spans):
     head += ["cpm_%g" % s for s in spans]
     head += ["peak_%g" % s for s in spans]
     head.append("src")
+    # The place, resolved at the row's own time: a counter that moved
+    # mid-month leaves a file whose rows are not all from one site, and a row
+    # that cannot say where it was is half a measurement.
+    head.append("site")
     # The '#' keeps the header sorting above the rows rather than into the
     # middle of them, so `sort` stays usable on the file as it is, and
     # `grep -v '^#'` drops it when it is in the way.
     return "#" + "\t".join(head)
 
 
-def log_row(when, cps, counts, seconds, averages, peaks, src):
+def log_row(when, cps, counts, seconds, averages, peaks, src, site=""):
     """One tab-separated line: when, how fast, the worst it got, and whence.
 
     The timestamp is first and is written big-endian, so it sorts
@@ -1240,6 +1262,123 @@ def log_row(when, cps, counts, seconds, averages, peaks, src):
     cells += ["" if a is None else "%.1f" % a for a in averages]
     cells += ["" if p is None else "%.1f" % p for p in peaks]
     cells.append(src)
+    cells.append(site or "")
+    return "\t".join(cells)
+
+
+def read_sites(directory=None):
+    """[(serial, from_time, name)], oldest first."""
+    path = os.path.join(directory or state_dir(), SITES_NAME)
+    out = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                cells = line.split("\t")
+                if len(cells) < 3:
+                    continue
+                when = row_time(cells[1] + "\t")
+                if when is None:
+                    continue
+                out.append((cells[0], when, cells[2]))
+    except IOError:
+        pass
+    out.sort(key=lambda r: (r[0], r[1]))
+    return out
+
+
+def site_at(serial, when, sites):
+    """Where that counter was at that moment.
+
+    Readings older than the first thing written down belong to the first place
+    we know about, not to nowhere: the counter was somewhere, and the earliest
+    record is the best evidence of where. Everything after a move belongs to
+    the place it moved to.
+    """
+    mine = [r for r in sites if r[0] == serial]
+    if not mine:
+        return None
+    current = mine[0]
+    for row in mine:
+        if row[1] <= when:
+            current = row
+    return current
+
+
+def record_site(serial, name, when=None, directory=None):
+    """Append a move. Append-only, because it is a history and not a setting."""
+    d = directory or state_dir()
+    path = os.path.join(d, SITES_NAME)
+    fresh = not os.path.exists(path) or os.path.getsize(path) == 0
+    with open(path, "a") as f:
+        if fresh:
+            f.write("#serial\tfrom\tname\n")
+        # `when` is 0 for the record that covers a counter's whole history,
+        # and 0 is falsy -- so this asks whether it was given, not whether it
+        # is true, which is the difference between "from the start" and "from
+        # the moment somebody first ran this".
+        stamp = time.time() if when is None else when
+        f.write("%s\t%s\t%s\n"
+                % (serial, time.strftime("%Y-%m-%dT%H:%M:%S",
+                                         time.localtime(stamp)), name))
+    return path
+
+
+def ensure_site(serial, directory=None):
+    """A counter seen for the first time is written down where it started."""
+    sites = read_sites(directory)
+    if any(r[0] == serial for r in sites):
+        return sites
+    # Dated well before any reading, so it covers the whole of the counter's
+    # history rather than only what comes after this moment.
+    record_site(serial, DEFAULT_SITE, when=0, directory=directory)
+    return read_sites(directory)
+
+
+def log_path(when, directory=None, serial=None):
+    """The dated log a row belongs in: one file per counter per month.
+
+    THE SERIAL IS IN THE NAME because two counters on one machine are two
+    measurements, not one, and a file that mixed them would be unmixable
+    afterwards. Same argument as the month: a distinction that matters is
+    better made by which file a row goes in than by a column somebody has to
+    remember to filter on.
+
+    ROTATION BY CONSTRUCTION, WHICH IS WHY THERE IS NO ROTATION CODE. A row is
+    written to the file for its own month, so a month ending is not an event:
+    that file simply stops growing and the next one starts. Nothing has to be
+    scheduled, nothing renames a file while a service is appending to it, and
+    there is no window where a log is half-moved. It is also the only shape
+    that suits a backfill, which routinely carries rows for months that ended
+    weeks ago and would otherwise need to know what had already been rotated.
+
+    The names sort chronologically, so `sort cpm-*.tsv` is still one
+    chronological stream across the whole archive -- the same promise the row
+    format makes within one file.
+    """
+    return os.path.join(
+        directory or state_dir(),
+        "cpm-%s-%s.tsv" % (serial or "unknown",
+                           time.strftime("%Y-%m", time.localtime(when))))
+
+
+def fit_row(line, width):
+    """An older row widened to the current format.
+
+    Rows written before the src column existed were all measured live, so
+    that is what they are marked. Anything of an unexpected width is left
+    exactly as found: a log is somebody's data and a format guess is not worth
+    editing it over.
+    """
+    cells = line.split("\t")
+    if len(cells) >= width:
+        return line
+    # src was added first and site second, so a short row is missing a suffix
+    # of the columns and padding on the right restores the right meaning.
+    while len(cells) < width:
+        cells.append(SRC_LIVE if len(cells) == width - 2 else "")
     return "\t".join(cells)
 
 
@@ -1301,7 +1440,9 @@ def merge_log(path, header, rows, every):
         added += 1
     if not added:
         return 0, clashed
-    merged = sorted(existing + keep, key=lambda r: r[1])
+    width = len(header.split("\t"))
+    merged = sorted([(w, fit_row(ln, width)) for w, ln in existing + keep],
+                    key=lambda r: r[1])
     tmp = path + ".new"
     with open(tmp, "w") as f:
         f.write(header + "\n")
@@ -1311,6 +1452,106 @@ def merge_log(path, header, rows, every):
         os.fsync(f.fileno())
     os.replace(tmp, path)
     return added, clashed
+
+
+class LogWriter:
+    """Appends rows to the dated log for their month.
+
+    Two things it watches for, both once per row and so once per thirty
+    seconds -- a stat and a comparison, against the two syscalls the row
+    itself costs:
+
+    THE MONTH TURNING OVER, which is the whole of rotation.
+
+    THE FILE BEING REPLACED UNDERNEATH IT. A backfill merges by writing a new
+    file and renaming it over the old one, which leaves an appender holding a
+    file descriptor onto an orphaned inode: it goes on writing, to nothing
+    anybody will ever read. Comparing the inode catches that and reopens.
+    """
+
+    def __init__(self, spans, directory=None, serial=None, every=None):
+        self.spans = spans
+        self.dir = directory
+        self.serial = serial
+        self.every = every or DEFAULT_LOG_EVERY
+        self.path = None
+        self.file = None
+        self.ino = None
+        self.last_slot = None
+
+    def _open(self, path):
+        self.close()
+        fresh = not os.path.exists(path) or os.path.getsize(path) == 0
+        self.file = open(path, "a")
+        if fresh:
+            self.file.write(log_header(self.spans) + "\n")
+        self.path = path
+        # The slot already on disk, so a restart cannot append a second row
+        # for a slot the previous run finished. That is exactly what happens
+        # when a service comes back mid-interval: its first row is a short one
+        # covering a stretch the last run already wrote in full.
+        rows = read_log(path)
+        self.last_slot = slot_of(rows[-1][0], self.every) if rows else None
+        try:
+            self.ino = os.fstat(self.file.fileno()).st_ino
+        except OSError:
+            self.ino = None
+
+    def write(self, when, text):
+        """Append a row, unless its slot is already spoken for.
+
+        One row per slot is the rule the whole format rests on, and it has to
+        hold for the live logger too -- not only for the merge a backfill does.
+        Returns whether the row was written.
+        """
+        path = log_path(when, self.dir, self.serial)
+        if path != self.path or self.file is None or self._replaced():
+            self._open(path)
+        slot = slot_of(when, self.every)
+        if self.last_slot is not None and slot <= self.last_slot:
+            return False
+        self.file.write(text)
+        self.file.flush()
+        self.last_slot = slot
+        return True
+
+    def _replaced(self):
+        try:
+            return os.stat(self.path).st_ino != self.ino
+        except OSError:
+            return True
+
+    def close(self):
+        if self.file is not None:
+            try:
+                self.file.close()
+            except IOError:
+                pass
+        self.file = None
+
+
+def migrate_legacy_log(args, directory=None, serial=None):
+    """Fold an old undated cpm.tsv into the dated files, once.
+
+    The original is renamed rather than removed. The split is arithmetic on
+    somebody's measurements and it is not worth asking them to trust it on the
+    strength of the first run.
+    """
+    old = os.path.join(directory or state_dir(), LOG_NAME)
+    rows = read_log(old)
+    if not rows:
+        return 0, 0
+    header = log_header(args.spans)
+    files = {}
+    for when, line in rows:
+        files.setdefault(log_path(when, directory, serial),
+                         []).append((when, line))
+    moved = 0
+    for path in sorted(files):
+        added, _clashed = merge_log(path, header, files[path], args.log_every)
+        moved += added
+    os.rename(old, old + ".pre-rotation")
+    return moved, len(files)
 
 
 # ---------------------------------------------------------------- backfill ---
@@ -1326,7 +1567,8 @@ def merge_log(path, header, rows, every):
 # averaging: the same one, fed from a different source. A backfilled row and a
 # live row of the same stretch would agree, which is the only way to be sure
 # the reconstruction means what the live rows mean.
-def rows_from_samples(samples, spans, every, max_gap, src=SRC_FLASH):
+def rows_from_samples(samples, spans, every, max_gap, src=SRC_FLASH,
+                      site_for=None):
     """Replay timed samples into log rows, one per slot, gaps ending averages."""
     rows = []
     w = Windows(spans)
@@ -1338,7 +1580,8 @@ def rows_from_samples(samples, spans, every, max_gap, src=SRC_FLASH):
         if iv.seconds:
             rows.append((at, log_row(at, iv.cps(), iv.counts, iv.seconds,
                                      [w.average(s) for s in w.spans],
-                                     iv.peaks, src)))
+                                     iv.peaks, src,
+                                     site_for(at) if site_for else "")))
         iv.reset()
 
     for when, count, dt in samples:
@@ -1362,9 +1605,15 @@ def rows_from_samples(samples, spans, every, max_gap, src=SRC_FLASH):
     return rows
 
 
-def backfill(blob, args, offset=0.0, path=None):
+def backfill(blob, args, offset=0.0, path=None, serial=None):
     """Fold whatever the image can account for into the log. Returns a report."""
     every = args.log_every
+    sites = ensure_site(serial) if serial else []
+
+    def site_for(when):
+        found = site_at(serial, when, sites) if serial else None
+        return found[2] if found else ""
+
     # SORTED, because an image is not always in time order. A full dump of a
     # wrapped ring has one step backwards in it, and replaying that as it lies
     # would end every average at the seam and file half the week under the
@@ -1373,11 +1622,22 @@ def backfill(blob, args, offset=0.0, path=None):
     # give the same answer.
     samples = sorted(history_samples(blob, offset))
     if not samples:
-        return {"samples": 0, "added": 0, "clashed": 0, "first": None,
-                "last": None}
-    rows = rows_from_samples(samples, args.spans, every, args.max_gap)
-    log_path = path or os.path.join(state_dir(), LOG_NAME)
-    added, clashed = merge_log(log_path, log_header(args.spans), rows, every)
+        return {"samples": 0, "rows": 0, "added": 0, "clashed": 0,
+                "first": None, "last": None, "holes": 0, "files": []}
+    rows = rows_from_samples(samples, args.spans, every, args.max_gap,
+                             site_for=site_for)
+    header = log_header(args.spans)
+    if path:
+        files = {path: rows}
+    else:
+        files = {}
+        for r in rows:
+            files.setdefault(log_path(r[0], serial=serial), []).append(r)
+    added = clashed = 0
+    for one in sorted(files):
+        a, c = merge_log(one, header, files[one], every)
+        added += a
+        clashed += c
     # Holes are worth counting and saying out loud. They are the hours the
     # counter was off or out of reach, they are not filled, and a person
     # looking at a suspiciously short file deserves to know there were 42 of
@@ -1385,7 +1645,7 @@ def backfill(blob, args, offset=0.0, path=None):
     holes = sum(1 for a, b in zip(rows, rows[1:]) if b[0] - a[0] > every)
     return {"samples": len(samples), "rows": len(rows), "added": added,
             "clashed": clashed, "first": samples[0][0], "last": samples[-1][0],
-            "holes": holes, "path": log_path}
+            "holes": holes, "files": sorted(files)}
 
 
 def read_history_tail(counter, want, quiet=False):
@@ -1441,14 +1701,28 @@ def say_backfill(report, offset):
     if report["holes"]:
         print("           %d gaps left as gaps -- the counter was not recording"
               % report["holes"])
+    for one in report["files"]:
+        print("           -> %s" % one)
 
 
 def cmd_backfill(args):
+    if not args.log:
+        try:
+            moved, files = migrate_legacy_log(args, serial=args.serial)
+            if moved:
+                print("radbeeper: %d rows from %s split across %d dated log%s"
+                      % (moved, LOG_NAME, files, "" if files == 1 else "s"))
+        except OSError as e:
+            print("radbeeper: could not split %s -- %s" % (LOG_NAME, e))
     if args.image:
         with open(args.image, "rb") as f:
             blob = f.read()
+        if not args.serial:
+            print("radbeeper: --serial is how a dumped image says which "
+                  "counter it came from", file=sys.stderr)
+            return 1
         offset = args.clock_offset or 0.0
-        report = backfill(blob, args, offset, args.log)
+        report = backfill(blob, args, offset, args.log, args.serial)
         say_backfill(report, offset)
         return 0
     try:
@@ -1458,6 +1732,7 @@ def cmd_backfill(args):
               file=sys.stderr)
         return 1
     try:
+        serial = args.serial or counter.serial_no
         offset = args.clock_offset
         if offset is None:
             offset = measure_clock_offset(counter) or 0.0
@@ -1467,8 +1742,277 @@ def cmd_backfill(args):
     if not blob:
         print("radbeeper: the counter's history is empty")
         return 0
-    report = backfill(blob, args, offset, args.log)
+    report = backfill(blob, args, offset, args.log, serial)
     say_backfill(report, offset)
+    return 0
+
+
+def cmd_site(args):
+    """Where a counter is, and everywhere it has been."""
+    serial = args.serial
+    if not serial:
+        try:
+            counter = open_counter(args)
+            serial = counter.serial_no
+            counter.close()
+        except NotFound as e:
+            print("no counter: %s -- name one with --serial" % e.reason,
+                  file=sys.stderr)
+            return 1
+    if args.name:
+        path = record_site(serial, args.name)
+        print("%s moved to %s" % (serial, args.name))
+        print("  recorded in %s" % path)
+        return 0
+    sites = ensure_site(serial)
+    mine = [r for r in sites if r[0] == serial]
+    now = site_at(serial, time.time(), sites)
+    print("counter %s" % serial)
+    print("now     %s" % now[2])
+    if len(mine) > 1:
+        print("history")
+        for _s, when, name in mine:
+            print("  %s  %s"
+                  % ("from the start  " if when <= 0 else
+                     time.strftime("%Y-%m-%d %H:%M", time.localtime(when)),
+                     name))
+    return 0
+
+
+# ------------------------------------------------------------------ export ---
+#
+# WHY THIS IS IN HERE AND NOT A SEPARATE SCRIPT. The point of the export is
+# that somebody can fork the repository, drop their own logs in, and have a
+# page. A separate script is a second thing to install, a second thing to keep
+# in step with the row format, and the first thing to rot when a column is
+# added. It reads the same files the same way the rest of the program writes
+# them, so a format change breaks it here rather than silently on somebody
+# else's web page.
+#
+# The generator is stdlib. The PAGE pulls DataTables from a CDN, which is a
+# different question from what this program depends on: a browser fetching a
+# table widget is not a Pi Zero fetching a package.
+LOG_GLOB = "cpm-"
+
+
+def log_files(directory=None):
+    """[(serial, path)] for every dated log in a directory, oldest name first."""
+    d = directory or state_dir()
+    out = []
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return out
+    for name in names:
+        if not name.startswith(LOG_GLOB) or not name.endswith(".tsv"):
+            continue
+        stem = name[len(LOG_GLOB):-len(".tsv")]
+        # cpm-<serial>-YYYY-MM.tsv, and a serial may contain no dash we care
+        # about: split from the right, where the date is.
+        bits = stem.rsplit("-", 2)
+        if len(bits) != 3:
+            continue
+        out.append((bits[0], os.path.join(d, name)))
+    return out
+
+
+def read_rows(path):
+    """Yield (when, cells) for a dated log, header and blanks skipped."""
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.rstrip("\n")
+                when = row_time(line)
+                if when is not None:
+                    yield when, line.split("\t")
+    except IOError:
+        return
+
+
+def summarise(directory=None, cpm_per_usvh=DEFAULT_CPM_PER_USVH):
+    """Per counter: the totals, the daily rollup, and the last rows seen.
+
+    The daily rollup is counts over seconds, not a mean of the per-row CPMs:
+    rows are not all the same length -- a service stopped mid-interval writes a
+    short one -- and averaging averages would weight a four-second row like a
+    thirty-second one.
+    """
+    counters = {}
+    for serial, path in log_files(directory):
+        c = counters.setdefault(serial, {
+            "serial": serial, "rows": 0, "counts": 0, "seconds": 0.0,
+            "first": None, "last": None, "peak": None, "days": {},
+            "latest": [], "sites": set()})
+        for when, cells in read_rows(path):
+            try:
+                counts = int(cells[2])
+                seconds = float(cells[3])
+            except (IndexError, ValueError):
+                continue
+            peak = None
+            if len(cells) > 7 and cells[7]:
+                try:
+                    peak = float(cells[7])
+                except ValueError:
+                    peak = None
+            c["rows"] += 1
+            c["counts"] += counts
+            c["seconds"] += seconds
+            c["first"] = when if c["first"] is None else min(c["first"], when)
+            c["last"] = when if c["last"] is None else max(c["last"], when)
+            if peak is not None and (c["peak"] is None or peak > c["peak"]):
+                c["peak"] = peak
+            if len(cells) > 11 and cells[11]:
+                c["sites"].add(cells[11])
+            day = time.strftime("%Y-%m-%d", time.localtime(when))
+            d = c["days"].setdefault(day, {"rows": 0, "counts": 0,
+                                           "seconds": 0.0, "peak": None})
+            d["rows"] += 1
+            d["counts"] += counts
+            d["seconds"] += seconds
+            if peak is not None and (d["peak"] is None or peak > d["peak"]):
+                d["peak"] = peak
+            c["latest"].append((when, cells))
+    for c in counters.values():
+        c["latest"].sort(key=lambda r: r[0])
+        c["latest"] = c["latest"][-300:]
+        c["cpm"] = (c["counts"] * 60.0 / c["seconds"]) if c["seconds"] else 0.0
+        c["usvh"] = c["cpm"] / cpm_per_usvh if cpm_per_usvh else 0.0
+    return counters
+
+
+def esc(text):
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
+                title="Radiation monitor"):
+    """One self-contained page. DataTables does the sorting and the search."""
+    when = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t))
+    out = []
+    a = out.append
+    a("<!doctype html>")
+    a("<html lang=\"en\"><head><meta charset=\"utf-8\">")
+    a("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">")
+    a("<title>" + esc(title) + "</title>")
+    a("<link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/"
+      "libs/datatables.net-dt/2.1.8/dataTables.dataTables.min.css\">")
+    a("<style>")
+    a(":root{color-scheme:light dark;--fg:#181818;--bg:#faf9f7;"
+      "--dim:#6b6b6b;--line:#e0ddd8;--card:#fff}")
+    a("@media (prefers-color-scheme:dark){:root{--fg:#e8e6e3;--bg:#16161a;"
+      "--dim:#9a9a9a;--line:#2e2e35;--card:#1e1e24}}")
+    a("body{margin:0;padding:2rem 1rem;background:var(--bg);color:var(--fg);"
+      "font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}")
+    a("main{max-width:1100px;margin:0 auto}")
+    a("h1{font-size:1.6rem;margin:0 0 .2rem}")
+    a("h2{font-size:1.1rem;margin:2.2rem 0 .6rem;font-weight:600}")
+    a(".sub{color:var(--dim);margin:0 0 1.6rem}")
+    a(".cards{display:grid;gap:.9rem;"
+      "grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}")
+    a(".card{background:var(--card);border:1px solid var(--line);"
+      "border-radius:10px;padding:.9rem 1rem}")
+    a(".card .k{color:var(--dim);font-size:.78rem;text-transform:uppercase;"
+      "letter-spacing:.04em}")
+    a(".card .v{font-size:1.5rem;font-variant-numeric:tabular-nums;"
+      "margin-top:.15rem}")
+    a(".card .n{color:var(--dim);font-size:.8rem}")
+    a("table.dataTable{font-variant-numeric:tabular-nums;font-size:.88rem}")
+    a("table.dataTable td,table.dataTable th{border-color:var(--line)!important}")
+    a("footer{color:var(--dim);font-size:.82rem;margin-top:3rem;"
+      "border-top:1px solid var(--line);padding-top:1rem}")
+    a("code{background:var(--card);padding:.1rem .3rem;border-radius:4px}")
+    a("</style></head><body><main>")
+    a("<h1>" + esc(title) + "</h1>")
+    a("<p class=\"sub\">Generated " + esc(when(time.time()))
+      + " by radbeeper " + VERSION
+      + " &middot; tube factor " + ("%.1f" % cpm_per_usvh)
+      + " CPM per &micro;Sv/h</p>")
+
+    if not counters:
+        a("<p>No logs found. Put <code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code> "
+          "files beside this page and run <code>radbeeper export</code>.</p>")
+    for serial in sorted(counters):
+        c = counters[serial]
+        here = site_at(serial, c["last"] or time.time(), sites)
+        a("<h2>Counter " + esc(serial) + "</h2>")
+        a("<div class=\"cards\">")
+
+        def card(k, v, n=""):
+            a("<div class=\"card\"><div class=\"k\">" + esc(k)
+              + "</div><div class=\"v\">" + esc(v) + "</div>"
+              + ("<div class=\"n\">" + esc(n) + "</div>" if n else "")
+              + "</div>")
+
+        card("Mean", "%.1f CPM" % c["cpm"], "%.3f uSv/h" % c["usvh"])
+        card("Highest 3s peak",
+             "--" if c["peak"] is None else "%.0f CPM" % c["peak"],
+             "" if c["peak"] is None
+             else "%.3f uSv/h" % (c["peak"] / cpm_per_usvh))
+        card("Rows", "{:,}".format(c["rows"]),
+             "%.1f hours counted" % (c["seconds"] / 3600.0))
+        card("Covering", when(c["first"]) if c["first"] else "--",
+             "to " + (when(c["last"]) if c["last"] else "--"))
+        if here:
+            card("Site", here[2])
+        a("</div>")
+
+        a("<h2>By day</h2>")
+        a("<table class=\"rb\"><thead><tr><th>Day</th><th>Mean CPM</th>"
+          "<th>&micro;Sv/h</th><th>Peak 3s CPM</th><th>Rows</th>"
+          "<th>Hours</th></tr></thead><tbody>")
+        for day in sorted(c["days"], reverse=True):
+            d = c["days"][day]
+            cpm = d["counts"] * 60.0 / d["seconds"] if d["seconds"] else 0.0
+            a("<tr><td>" + esc(day) + "</td><td>" + "%.1f" % cpm
+              + "</td><td>" + "%.3f" % (cpm / cpm_per_usvh)
+              + "</td><td>" + ("--" if d["peak"] is None
+                               else "%.0f" % d["peak"])
+              + "</td><td>" + str(d["rows"])
+              + "</td><td>" + "%.1f" % (d["seconds"] / 3600.0) + "</td></tr>")
+        a("</tbody></table>")
+
+        a("<h2>Latest rows</h2>")
+        a("<table class=\"rb\"><thead><tr><th>Time</th><th>CPS</th>"
+          "<th>3s</th><th>30s</th><th>300s</th><th>Peak 3s</th>"
+          "<th>Source</th><th>Site</th></tr></thead><tbody>")
+        for _t, cells in reversed(c["latest"]):
+            cell = lambda i: esc(cells[i]) if len(cells) > i and cells[i] else "--"
+            a("<tr><td>" + esc(cells[0]) + "</td><td>" + cell(1) + "</td><td>"
+              + cell(4) + "</td><td>" + cell(5) + "</td><td>" + cell(6)
+              + "</td><td>" + cell(7) + "</td><td>" + cell(10) + "</td><td>"
+              + cell(11) + "</td></tr>")
+        a("</tbody></table>")
+
+    a("<footer>Rows marked <code>live</code> were measured by a monitor on "
+      "this machine; rows marked <code>flash</code> were reconstructed from "
+      "the counter's own recorded history. Gaps are gaps: nothing is "
+      "interpolated. Built by "
+      "<code>radbeeper export</code>.</footer>")
+    a("</main>")
+    a("<script src=\"https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/"
+      "jquery.min.js\"></script>")
+    a("<script src=\"https://cdnjs.cloudflare.com/ajax/libs/datatables.net/"
+      "2.1.8/dataTables.min.js\"></script>")
+    a("<script>document.addEventListener('DOMContentLoaded',function(){"
+      "document.querySelectorAll('table.rb').forEach(function(t){"
+      "new DataTable(t,{pageLength:25,order:[]});});});</script>")
+    a("</body></html>")
+    return "\n".join(out) + "\n"
+
+
+def cmd_export(args):
+    directory = args.logs or state_dir()
+    counters = summarise(directory, args.cpm_per_usvh)
+    sites = read_sites(directory)
+    html = render_html(counters, sites, args.cpm_per_usvh, args.title)
+    out = args.output or "index.html"
+    with open(out, "w") as f:
+        f.write(html)
+    rows = sum(c["rows"] for c in counters.values())
+    print("radbeeper: %s -- %d counter%s, %d rows"
+          % (out, len(counters), "" if len(counters) == 1 else "s", rows))
     return 0
 
 
@@ -1540,7 +2084,15 @@ def cmd_service(args):
                 time.sleep(0.5)
                 slept += 0.5
 
-    log_path = os.path.join(state_dir(), LOG_NAME)
+    # An undated log from an older version, folded into the dated ones. Once,
+    # before anything reads or writes them.
+    try:
+        moved, files = migrate_legacy_log(args, serial=counter.serial_no)
+        if moved:
+            print("radbeeper: %d rows from %s split across %d dated log%s"
+                  % (moved, LOG_NAME, files, "" if files == 1 else "s"))
+    except OSError as e:
+        print("radbeeper: could not split %s -- %s" % (LOG_NAME, e))
 
     # BEFORE ANYTHING IS APPENDED, because backfilled rows belong in the past
     # and merging rewrites the file. This is also the moment it is worth doing:
@@ -1557,65 +2109,82 @@ def cmd_service(args):
                 offset = measure_clock_offset(counter) or 0.0
             blob = read_history_tail(counter, args.backfill_bytes)
             if blob:
-                say_backfill(backfill(blob, args, offset, log_path), offset)
+                say_backfill(backfill(blob, args, offset,
+                                      serial=counter.serial_no), offset)
         except (OSError, ValueError) as e:
             print("radbeeper: backfill skipped -- %s" % e)
 
     write_status("monitoring %s (%s)" % (counter.path, counter.version))
-    new = not os.path.exists(log_path)
     w = Windows(args.spans)
     iv = Interval(args.spans)
     every = args.log_every
 
     def row(averages):
-        return log_row(time.time(), iv.cps(), iv.counts, iv.seconds,
-                       averages, iv.peaks, SRC_LIVE) + "\n"
+        now = time.time()
+        return log_row(now, iv.cps(), iv.counts, iv.seconds,
+                       averages, iv.peaks, SRC_LIVE, site_now(now)) + "\n"
 
+    out = LogWriter(w.spans, serial=counter.serial_no, every=every)
+
+    # The site is re-read whenever sites.tsv changes, so `radbeeper site` takes
+    # effect on the next row rather than at the next restart. One getmtime per
+    # row, against the two syscalls the row costs anyway.
+    seen = {"mtime": None, "sites": ensure_site(counter.serial_no)}
+
+    def site_now(when):
+        try:
+            mtime = os.path.getmtime(os.path.join(state_dir(), SITES_NAME))
+        except OSError:
+            mtime = None
+        if mtime != seen["mtime"]:
+            seen["mtime"] = mtime
+            seen["sites"] = read_sites()
+        found = site_at(counter.serial_no, when, seen["sites"])
+        return found[2] if found else ""
+
+    here = site_at(counter.serial_no, time.time(), seen["sites"])
     print("radbeeper: monitoring %s -- %s" % (counter.path, counter.version))
-    print("radbeeper: logging to %s, a row every %gs" % (log_path, every))
+    print("radbeeper: counter %s at %s"
+          % (counter.serial_no, here[2] if here else "an unrecorded place"))
+    print("radbeeper: logging to %s, a row every %gs"
+          % (log_path(time.time(), serial=counter.serial_no), every))
     try:
-        with open(log_path, "a") as f:
-            if new:
-                f.write(log_header(w.spans) + "\n")
-                f.flush()
-            due = None
-            try:
-                for when, counts in counter.samples():
-                    w.add(when, counts)
-                    averages = [w.average(s) for s in w.spans]
-                    iv.add(counts, averages)
-                    if due is None:
-                        due = when + every
-                    # One write and one flush per interval instead of per
-                    # second: at the default that is two syscalls a minute
-                    # rather than a hundred and twenty, which is the whole
-                    # difference on a Pi Zero logging to an SD card. Nothing
-                    # is buffered up to pay for it -- the row is computed from
-                    # four numbers that were already being kept.
-                    if when >= due:
-                        f.write(row(averages))
-                        f.flush()
-                        iv.reset()
-                        due = when + every
-                    if stop["now"]:
-                        break
-                    # --duration is what makes this path testable at all:
-                    # without it the only way to exercise the logger is to
-                    # start a daemon and kill it, which is not something a
-                    # test suite should do.
-                    if args.duration and w.elapsed() >= args.duration:
-                        break
-            except KeyboardInterrupt:
-                pass
-            # Whatever the last interval collected is worth keeping: a service
-            # stopped four seconds after a spike should still have the spike on
-            # disk, and the seconds column says the row is short.
-            if iv.seconds:
-                f.write(row([w.average(s) for s in w.spans]))
-                f.flush()
+        due = None
+        try:
+            for when, counts in counter.samples():
+                w.add(when, counts)
+                averages = [w.average(s) for s in w.spans]
+                iv.add(counts, averages)
+                if due is None:
+                    due = when + every
+                # One write and one flush per interval instead of per second:
+                # at the default that is two syscalls a minute rather than a
+                # hundred and twenty, which is the whole difference on a Pi
+                # Zero logging to an SD card. Nothing is buffered up to pay
+                # for it -- the row is computed from four numbers that were
+                # already being kept.
+                if when >= due:
+                    out.write(time.time(), row(averages))
+                    iv.reset()
+                    due = when + every
+                if stop["now"]:
+                    break
+                # --duration is what makes this path testable at all: without
+                # it the only way to exercise the logger is to start a daemon
+                # and kill it, which is not something a test suite should do.
+                if args.duration and w.elapsed() >= args.duration:
+                    break
+        except KeyboardInterrupt:
+            pass
+        # Whatever the last interval collected is worth keeping: a service
+        # stopped four seconds after a spike should still have the spike on
+        # disk, and the seconds column says the row is short.
+        if iv.seconds:
+            out.write(time.time(), row([w.average(s) for s in w.spans]))
     except KeyboardInterrupt:
         pass
     finally:
+        out.close()
         counter.close()
         write_status("stopped")
     return 0
@@ -1813,6 +2382,10 @@ def build_parser():
     bf.add_argument("--image", metavar="FILE",
                     help="decode a .bin from `log pull` instead of reading "
                          "the counter")
+    bf.add_argument("--serial", metavar="SERIAL",
+                    help="which counter the rows belong to (default: ask the "
+                         "counter; required with --image, since a dumped "
+                         "image does not carry its own serial)")
     bf.add_argument("-o", "--log", metavar="FILE",
                     help="the log to fold rows into (default: %s in the "
                          "state directory)" % LOG_NAME)
@@ -1834,6 +2407,22 @@ def build_parser():
     hp.add_argument("--tries", type=int, default=DEFAULT_TRIES,
                     help="attempts per plug event before it is written off "
                          "(default %d)" % DEFAULT_TRIES)
+    ex = sub.add_parser("export", help="build an index.html of the logs, for "
+                                       "a fork to publish")
+    ex.add_argument("--logs", metavar="DIR",
+                    help="where the dated logs are (default: the state "
+                         "directory)")
+    ex.add_argument("-o", "--output", metavar="FILE",
+                    help="where to write the page (default index.html)")
+    ex.add_argument("--title", default="Radiation monitor",
+                    help="the page's heading")
+    st = sub.add_parser("site", help="where a counter is, and where it has "
+                                     "been; naming all three moves it")
+    st.add_argument("--serial", metavar="SERIAL",
+                    help="which counter (default: ask the one plugged in)")
+    st.add_argument("--name", help="move the counter: what the new place is "
+                                   "called. A name, not a coordinate -- these "
+                                   "logs are meant to be published")
     lg = sub.add_parser("log", help="the counter's stored history")
     lg.add_argument("log_action", choices=("pull", "info"), nargs="?",
                     default="info")
@@ -1853,12 +2442,15 @@ def main(argv=None):
                              ("bytes", None), ("poll", DEFAULT_POLL),
                              ("settle", DEFAULT_SETTLE),
                              ("tries", DEFAULT_TRIES), ("backfill", True),
-                             ("image", None), ("log", None)):
+                             ("image", None), ("log", None),
+                             ("serial", None), ("name", None),
+                             ("logs", None), ("title", "Radiation monitor")):
         if not hasattr(args, missing):
             setattr(args, missing, default)
     handlers = {"probe": cmd_probe, "cpm": cmd_cpm, "watch": cmd_watch,
                 "log": cmd_log, "service": cmd_service, "window": cmd_window,
-                "hotplug": cmd_hotplug, "backfill": cmd_backfill}
+                "hotplug": cmd_hotplug, "backfill": cmd_backfill,
+                "site": cmd_site, "export": cmd_export}
     try:
         return handlers[args.command](args)
     except KeyboardInterrupt:

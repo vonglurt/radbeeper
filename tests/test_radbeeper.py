@@ -365,21 +365,22 @@ class TestService(unittest.TestCase):
                              "4", "--log-every", "2", "--duration", "9",
                              "service"])
         self.assertEqual(rc, 0)
-        with open(os.path.join(self.tmp, "cpm.tsv")) as f:
+        with open(radbeeper.log_path(time.time(), self.tmp,
+                                    "simulated")) as f:
             lines = f.read().split("\n")
         rows = [ln for ln in lines if ln and not ln.startswith("#")]
         head = lines[0]
 
         self.assertEqual(head, "#time\tcps\tcounts\tseconds"
                                "\tcpm_3\tcpm_30\tcpm_300"
-                               "\tpeak_3\tpeak_30\tpeak_300\tsrc")
+                               "\tpeak_3\tpeak_30\tpeak_300\tsrc\tsite")
         # Every row is the full width, trailing empties included, or a column
         # count is not a reliable way to read the file.
         for r in rows:
-            self.assertEqual(len(r.split("\t")), 11)
+            self.assertEqual(len(r.split("\t")), 12)
         # And every one of them says it was measured here, not reconstructed.
         for r in rows:
-            self.assertEqual(r.split("\t")[-1], radbeeper.SRC_LIVE)
+            self.assertEqual(r.split("\t")[10], radbeeper.SRC_LIVE)
         # A row every 2s over ~9s is a handful, NOT one per second. This is
         # the whole point of the change and the cheapest thing to regress.
         self.assertLessEqual(len(rows), 6)
@@ -397,7 +398,8 @@ class TestService(unittest.TestCase):
                              "--log-every", "600", "--duration", "3",
                              "service"])
         self.assertEqual(rc, 0)
-        with open(os.path.join(self.tmp, "cpm.tsv")) as f:
+        with open(radbeeper.log_path(time.time(), self.tmp,
+                                    "simulated")) as f:
             rows = [ln for ln in f.read().split("\n")
                     if ln and not ln.startswith("#")]
         # The interval never came due, so the only row is the partial one.
@@ -565,7 +567,7 @@ class TestSlotsAndMerging(unittest.TestCase):
 
     def test_backfilled_rows_say_so(self):
         line = self.rows(self.samples(60))[0][1]
-        self.assertEqual(line.rstrip("\n").split("\t")[-1], radbeeper.SRC_FLASH)
+        self.assertEqual(line.split("\t")[10], radbeeper.SRC_FLASH)
 
     def test_a_slot_that_already_has_a_row_is_left_alone(self):
         header = radbeeper.log_header(self.spans)
@@ -584,7 +586,7 @@ class TestSlotsAndMerging(unittest.TestCase):
         # The live row survived intact -- it is the better evidence.
         self.assertIn(live, body)
         self.assertEqual(sum(1 for ln in body
-                             if ln.endswith(radbeeper.SRC_LIVE)), 1)
+                             if ln.split("\t")[10] == radbeeper.SRC_LIVE), 1)
 
     def test_the_merged_file_sorts_chronologically_as_plain_text(self):
         header = radbeeper.log_header(self.spans)
@@ -694,3 +696,284 @@ class TestTheRing(unittest.TestCase):
         self.assertEqual(got, sorted(got))
         self.assertLess(got[0][0], base + 86400)
         self.assertGreater(got[-1][0], base + 6 * 86400)
+
+
+class TestDatedLogs(unittest.TestCase):
+    """One file per month, which is the whole of rotation.
+
+    A row goes to the file for its own month, so a month ending is not an
+    event: that file stops growing and the next one starts. Nothing is
+    scheduled, nothing renames a log while a service is appending to it, and a
+    backfill carrying rows for a month that ended weeks ago needs to know
+    nothing about what has already been rotated.
+    """
+
+    spans = (3, 30, 300)
+    every = 30.0
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+
+    def at(self, y, m, d, hh=12, mm=0):
+        return time.mktime((y, m, d, hh, mm, 0, 0, 1, -1))
+
+    def row(self, when, src=radbeeper.SRC_FLASH):
+        return (when, radbeeper.log_row(when, 1.0, 30, 30.0,
+                                        [None] * 3, [None] * 3, src))
+
+    def test_the_file_is_named_for_the_counter_and_the_month(self):
+        # Two counters on one machine are two measurements, not one, and a
+        # file that mixed them could not be unmixed afterwards.
+        self.assertTrue(radbeeper.log_path(self.at(2026, 9, 4), self.tmp, "A1")
+                        .endswith("cpm-A1-2026-09.tsv"))
+        self.assertTrue(radbeeper.log_path(self.at(2026, 12, 31), self.tmp,
+                                           "B2").endswith("cpm-B2-2026-12.tsv"))
+
+    def test_the_names_sort_chronologically_within_a_counter(self):
+        names = sorted(os.path.basename(radbeeper.log_path(
+            self.at(2026, m, 1), self.tmp, "A1")) for m in (12, 2, 9, 1))
+        self.assertEqual(names, ["cpm-A1-2026-01.tsv", "cpm-A1-2026-02.tsv",
+                                 "cpm-A1-2026-09.tsv", "cpm-A1-2026-12.tsv"])
+
+    def test_a_writer_rolls_over_at_the_month_boundary(self):
+        out = radbeeper.LogWriter(self.spans, self.tmp, "A1")
+        for when in (self.at(2026, 9, 30, 23, 59), self.at(2026, 10, 1, 0, 0)):
+            out.write(when, self.row(when)[1] + "\n")
+        out.close()
+        names = sorted(os.listdir(self.tmp))
+        self.assertEqual(names, ["cpm-A1-2026-09.tsv", "cpm-A1-2026-10.tsv"])
+        # And each new file gets its own header, not a bare row.
+        for n in names:
+            with open(os.path.join(self.tmp, n)) as f:
+                self.assertTrue(f.readline().startswith("#time"))
+
+    def test_a_writer_notices_its_file_being_replaced_under_it(self):
+        # merge_log renames a new file over the old one, which leaves an
+        # appender writing to an orphaned inode: everything after that is lost
+        # and nothing says so. The writer stats before each row for this.
+        when = time.time()
+        out = radbeeper.LogWriter(self.spans, self.tmp, "A1")
+        out.write(when, self.row(when)[1] + "\n")
+        path = radbeeper.log_path(when, self.tmp, "A1")
+        os.rename(path, path + ".moved")          # as a merge would
+        out.write(when, self.row(when)[1] + "\n")
+        out.close()
+        with open(path) as f:
+            body = [ln for ln in f.read().splitlines() if not ln.startswith("#")]
+        self.assertEqual(len(body), 1)            # the second row is not lost
+
+    def test_backfill_files_each_month_where_it_belongs(self):
+        rows = [self.row(self.at(2026, 8, 20)), self.row(self.at(2026, 9, 2))]
+        header = radbeeper.log_header(self.spans)
+        for when, line in rows:
+            radbeeper.merge_log(radbeeper.log_path(when, self.tmp, "A1"),
+                                header, [(when, line)], self.every)
+        self.assertEqual(sorted(os.listdir(self.tmp)),
+                         ["cpm-A1-2026-08.tsv", "cpm-A1-2026-09.tsv"])
+
+    def test_an_undated_log_is_split_and_kept(self):
+        # What an upgrade finds: one cpm.tsv in the old ten-column format,
+        # spanning two months.
+        old = os.path.join(self.tmp, radbeeper.LOG_NAME)
+        with open(old, "w") as f:
+            f.write("#time\tcps\tcounts\tseconds\tcpm_3\tcpm_30\tcpm_300"
+                    "\tpeak_3\tpeak_30\tpeak_300\n")
+            for when in (self.at(2026, 8, 20), self.at(2026, 9, 2)):
+                f.write("%s\t1.000\t30\t30\t\t\t\t\t\t\n"
+                        % time.strftime("%Y-%m-%dT%H:%M:%S",
+                                        time.localtime(when)))
+
+        class Args(object):
+            spans = self.spans
+            log_every = self.every
+        moved, files = radbeeper.migrate_legacy_log(Args(), self.tmp, "A1")
+        self.assertEqual((moved, files), (2, 2))
+        self.assertEqual(
+            sorted(os.listdir(self.tmp)),
+            ["cpm-A1-2026-08.tsv", "cpm-A1-2026-09.tsv",
+             "cpm.tsv.pre-rotation"])
+        # The rows were widened, and marked as what they were: live readings
+        # from a counter that had not been asked where it was.
+        with open(os.path.join(self.tmp, "cpm-A1-2026-09.tsv")) as f:
+            body = [ln for ln in f.read().splitlines()
+                    if not ln.startswith("#")]
+        self.assertEqual(len(body[0].split("\t")), 12)
+        self.assertEqual(body[0].split("\t")[10], radbeeper.SRC_LIVE)
+
+    def test_splitting_an_undated_log_twice_is_harmless(self):
+        class Args(object):
+            spans = self.spans
+            log_every = self.every
+        self.assertEqual(radbeeper.migrate_legacy_log(Args(), self.tmp, "A1"),
+                         (0, 0))
+
+
+class TestOneRowPerSlotLive(unittest.TestCase):
+    """The slot rule has to hold for the logger too, not only for the merge.
+
+    A service that comes back mid-interval writes a short first row covering a
+    stretch the previous run already wrote in full. Two rows, one slot -- the
+    exact clash the format is built to prevent, arriving from the one source
+    that was not checking.
+    """
+
+    spans = (3, 30, 300)
+    every = 30.0
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.base = float(int(time.time() // 3000) * 3000)
+
+    def line(self, when):
+        return radbeeper.log_row(when, 1.0, 30, 30.0, [None] * 3, [None] * 3,
+                                 radbeeper.SRC_LIVE, "here") + "\n"
+
+    def writer(self):
+        return radbeeper.LogWriter(self.spans, self.tmp, "A1", self.every)
+
+    def test_a_second_row_in_one_slot_is_refused(self):
+        out = self.writer()
+        self.assertTrue(out.write(self.base + 1, self.line(self.base + 1)))
+        self.assertFalse(out.write(self.base + 9, self.line(self.base + 9)))
+        self.assertTrue(out.write(self.base + 31, self.line(self.base + 31)))
+        out.close()
+
+    def test_a_restart_does_not_duplicate_the_slot_it_lands_in(self):
+        first = self.writer()
+        first.write(self.base + 1, self.line(self.base + 1))
+        first.close()
+        again = self.writer()          # a new run, reading what is on disk
+        self.assertFalse(again.write(self.base + 20, self.line(self.base + 20)))
+        self.assertTrue(again.write(self.base + 40, self.line(self.base + 40)))
+        again.close()
+        with open(radbeeper.log_path(self.base, self.tmp, "A1")) as f:
+            body = [ln for ln in f.read().splitlines()
+                    if not ln.startswith("#")]
+        self.assertEqual(len(body), 2)
+
+
+class TestSites(unittest.TestCase):
+    """Where a counter was, which is a property of a serial over time.
+
+    Not of the machine and not of the file: these things get carried about, so
+    a reading from last Tuesday has to resolve to where the counter was last
+    Tuesday and not to where it is now.
+    """
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+
+    def at(self, y, m, d):
+        return time.mktime((y, m, d, 12, 0, 0, 0, 1, -1))
+
+    def test_a_counter_seen_for_the_first_time_gets_the_default(self):
+        sites = radbeeper.ensure_site("A1", self.tmp)
+        self.assertEqual([r[2] for r in sites], [radbeeper.DEFAULT_SITE])
+
+    def test_the_default_covers_readings_older_than_the_record(self):
+        # ensure_site dates the first record at the epoch on purpose: a
+        # counter's flash goes back further than the day somebody first wrote
+        # down where it was, and those readings were still somewhere.
+        sites = radbeeper.ensure_site("A1", self.tmp)
+        found = radbeeper.site_at("A1", self.at(2020, 1, 1), sites)
+        self.assertEqual(found[2], radbeeper.DEFAULT_SITE)
+
+    def test_a_move_applies_from_when_it_happened_and_not_before(self):
+        radbeeper.ensure_site("A1", self.tmp)
+        radbeeper.record_site("A1", "The garage", self.at(2026, 9, 3),
+                              self.tmp)
+        sites = radbeeper.read_sites(self.tmp)
+        self.assertEqual(
+            radbeeper.site_at("A1", self.at(2026, 9, 1), sites)[2],
+            radbeeper.DEFAULT_SITE)
+        self.assertEqual(
+            radbeeper.site_at("A1", self.at(2026, 9, 4), sites)[2],
+            "The garage")
+
+    def test_it_is_a_history_and_not_a_setting(self):
+        radbeeper.ensure_site("A1", self.tmp)
+        radbeeper.record_site("A1", "The garage", self.at(2026, 9, 3),
+                              self.tmp)
+        radbeeper.record_site("A1", "The roof", self.at(2026, 9, 5), self.tmp)
+        self.assertEqual(len(radbeeper.read_sites(self.tmp)), 3)
+
+    def test_counters_do_not_borrow_each_others_places(self):
+        radbeeper.ensure_site("A1", self.tmp)
+        radbeeper.record_site("A1", "The garage", self.at(2026, 9, 3),
+                              self.tmp)
+        sites = radbeeper.read_sites(self.tmp)
+        self.assertIsNone(radbeeper.site_at("B2", self.at(2026, 9, 4), sites))
+
+    def test_a_place_is_a_name_and_nothing_finer(self):
+        # These logs are published. A place name is what a reader needs; a
+        # decimal fix is a street address for whoever is holding the counter,
+        # so the file has no column to put one in.
+        radbeeper.ensure_site("A1", self.tmp)
+        with open(os.path.join(self.tmp, radbeeper.SITES_NAME)) as f:
+            for line in f:
+                self.assertEqual(len(line.rstrip("\n").split("\t")), 3)
+
+
+class TestExport(unittest.TestCase):
+    """The page a fork publishes."""
+
+    spans = (3, 30, 300)
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.base = time.mktime((2026, 9, 2, 10, 0, 0, 0, 1, -1))
+        radbeeper.ensure_site("A1", self.tmp)
+        rows = []
+        for i in range(4):
+            when = self.base + i * 30
+            rows.append((when, radbeeper.log_row(
+                when, 1.0, 30, 30.0, [60.0, 60.0, 60.0], [90.0, 70.0, 60.0],
+                radbeeper.SRC_FLASH, radbeeper.DEFAULT_SITE)))
+        radbeeper.merge_log(radbeeper.log_path(self.base, self.tmp, "A1"),
+                            radbeeper.log_header(self.spans), rows, 30.0)
+
+    def test_a_log_name_says_which_counter_and_which_month(self):
+        self.assertEqual([s for s, _p in radbeeper.log_files(self.tmp)], ["A1"])
+
+    def test_a_serial_with_dashes_in_it_still_parses(self):
+        open(os.path.join(self.tmp, "cpm-A-B-C-2026-09.tsv"), "w").close()
+        self.assertIn("A-B-C", [s for s, _p in radbeeper.log_files(self.tmp)])
+
+    def test_the_mean_is_counts_over_seconds_not_a_mean_of_means(self):
+        # Rows are not all the same length -- a service stopped mid-interval
+        # writes a short one -- so averaging the per-row averages would weight
+        # a four-second row like a thirty-second one.
+        short = self.base + 300
+        radbeeper.merge_log(
+            radbeeper.log_path(self.base, self.tmp, "A1"),
+            radbeeper.log_header(self.spans),
+            [(short, radbeeper.log_row(short, 15.0, 60, 4.0, [None] * 3,
+                                       [None] * 3, radbeeper.SRC_FLASH, ""))],
+            30.0)
+        got = radbeeper.summarise(self.tmp)["A1"]
+        self.assertAlmostEqual(got["cpm"], (120 + 60) * 60.0 / (120 + 4))
+
+    def test_the_page_names_the_counter_and_where_it_was(self):
+        counters = radbeeper.summarise(self.tmp)
+        html = radbeeper.render_html(counters, radbeeper.read_sites(self.tmp))
+        self.assertIn("A1", html)
+        self.assertIn(radbeeper.DEFAULT_SITE, html)
+        self.assertIn("<table", html)
+        self.assertTrue(html.startswith("<!doctype html>"))
+
+    def test_the_page_survives_having_no_logs_at_all(self):
+        import tempfile
+        html = radbeeper.render_html(radbeeper.summarise(tempfile.mkdtemp()),
+                                     [])
+        self.assertIn("No logs found", html)
+
+    def test_a_site_name_with_markup_in_it_is_escaped(self):
+        radbeeper.record_site("A1", "<script>x</script>", self.base, self.tmp)
+        html = radbeeper.render_html(radbeeper.summarise(self.tmp),
+                                     radbeeper.read_sites(self.tmp))
+        self.assertNotIn("<script>x</script>", html)
+        self.assertIn("&lt;script&gt;", html)

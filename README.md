@@ -15,6 +15,9 @@ radbeeper cpm              # the counter's own CPM, once, for a script
 radbeeper log pull         # download the stored history to .bin and .csv
 radbeeper service          # what the boot service runs
 radbeeper hotplug          # sit in the session; open the monitor on plug-in
+radbeeper backfill         # fill the log's gaps from the counter's history
+radbeeper site             # where this counter is, and where it has been
+radbeeper export           # build index.html from the logs
 ```
 
 No counter on the desk? Every command works against a built-in source:
@@ -82,9 +85,51 @@ State lives in `/var/log/radbeeper` when that is writable and
 | File | What it holds |
 |---|---|
 | `status` | one line: monitoring what, or dormant and why |
-| `cpm.tsv` | one row every 30s: the rate, the windows, and their peaks |
+| `cpm-<serial>-YYYY-MM.tsv` | one counter, one month: a row every 30s |
+| `sites.tsv` | which counter was where, and from when |
 | `history-*.bin` | a raw flash image from `log pull` |
 | `history-*.csv` | the decoded version of the same image |
+
+## One file per counter per month
+
+Rotation, by construction, so there is no rotation code and nothing to
+schedule. A row is written to the file for its own counter and its own month,
+so a month ending is not an event: that file stops growing and the next one
+starts. Nothing renames a log while a service is appending to it, and there is
+no window in which one is half-moved.
+
+**The serial is in the name** because two counters on one machine are two
+measurements, not one, and a file that mixed them could not be unmixed
+afterwards. The names sort chronologically within a counter, so
+`sort cpm-A1-*.tsv` is still one stream.
+
+An older undated `cpm.tsv` is split across the dated files the first time it
+is seen, its rows widened to the current columns and marked `live`, and the
+original kept as `cpm.tsv.pre-rotation` rather than deleted.
+
+## Where the counter is
+
+A reading without a place is half a measurement -- 40 CPM means one thing in a
+basement and another on a hillside -- and these things get carried about. So
+the place is not a property of the machine or of the file: it is a property of
+a **serial number over time**, which is what `sites.tsv` records.
+
+```sh
+radbeeper site                        # where is it, and where has it been
+radbeeper site --name "The garage"    # it moved, from now
+radbeeper site --serial A1            # without it plugged in
+```
+
+Append-only, one row per move, so a reading from last Tuesday resolves to
+where the counter was last Tuesday and not to where it is now. A counter seen
+for the first time is recorded at the default site, dated from the epoch --
+its flash goes back further than the day somebody first wrote down where it
+was, and those readings were still somewhere.
+
+**A name, and nothing finer, on purpose.** These logs are meant to be
+published. A place name is what a reader needs; a decimal fix to six places is
+a street address for whoever is holding the counter. There is nowhere in the
+file to put one.
 
 ## Opening on plug-in, in two halves
 
@@ -163,9 +208,14 @@ other:
 One row every 30 seconds, tab-separated:
 
 ```
-#time	cps	counts	seconds	cpm_3	cpm_30	cpm_300	peak_3	peak_30	peak_300
-2026-09-04T11:54:37	0.633	19	30	40.0	38.0	36.8	140.0	52.0	37.1
+#time	cps	counts	seconds	cpm_3	cpm_30	cpm_300	peak_3	peak_30	peak_300	src	site
+2026-09-04T11:54:37	0.633	19	30	40.0	38.0	36.8	140.0	52.0	37.1	live	Bellevue High School
 ```
+
+`src` is `live` for a row this machine measured and `flash` for one
+reconstructed from the counter's own history. `site` is where the counter was
+at that row's own time, so a counter that moved mid-month leaves a file whose
+rows are not all from one place and can still say which is which.
 
 **The peaks are the point.** A row carrying only the averages as they stood at
 the instant it was written would miss a source that came and went between two
@@ -275,6 +325,28 @@ backfill would file last week under this afternoon.
 
 Against the counter here -- a full, wrapped megabyte -- that is 844,809 samples
 over eleven days, 28,544 rows, and 42 holes left as holes.
+
+## Publishing: fork it
+
+The export turns the logs into one self-contained page -- summary cards per
+counter, a by-day table and the latest rows, sortable and searchable.
+
+```sh
+radbeeper export                      # index.html from the state directory
+radbeeper export --logs logs -o index.html
+```
+
+To put it on the web: **fork this repository, copy your `cpm-*.tsv` and
+`sites.tsv` into `logs/`, and push.** `.github/workflows/pages.yml` rebuilds
+`index.html` and commits it back, so GitHub Pages serves it with no build step
+and no artifact to expire. There is nothing to install in the workflow: the
+generator is the same one-file stdlib program the counter is read with, which
+is also why the page cannot drift from the row format -- a column added to the
+log is a column the export knows about in the same commit.
+
+The page pulls DataTables from a CDN. That is a different question from what
+this program depends on: a browser fetching a table widget is not a Pi Zero
+fetching a package.
 
 ## Pulling the log
 

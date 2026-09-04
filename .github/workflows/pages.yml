@@ -1,0 +1,43 @@
+# Rebuild index.html from the logs in this repository, on every push that
+# changes them.
+#
+# WHAT A FORK HAS TO DO: fork, copy your own cpm-<serial>-YYYY-MM.tsv files
+# (and sites.tsv, if you have one) into logs/, push. That is the whole of it.
+# The page is regenerated and committed back here, so it is servable from
+# GitHub Pages with no build step and no artifact to expire.
+#
+# The generator is the same one-file program the counter is read with, so the
+# page cannot drift from the row format: a column added to the log is a column
+# the export knows about in the same commit.
+name: build the page
+
+on:
+  push:
+    paths:
+      - 'logs/**'
+      - 'radbeeper'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # No pip install, no requirements.txt, no lockfile: the program is one
+      # stdlib Python file, which is the same reason it runs on a Pi Zero.
+      - name: Build index.html
+        run: python3 radbeeper export --logs logs -o index.html
+
+      - name: Commit it if it changed
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          git diff --cached --quiet && { echo "no change"; exit 0; }
+          git commit -m "rebuild index.html from logs/"
+          git push
