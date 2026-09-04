@@ -3014,7 +3014,10 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
 
     a("<h3>Watch it</h3>")
     a("<pre>radbeeper watch</pre>")
-    shot("watch", "the monitor: three time constants at once")
+    shot("watch", "the monitor: three time constants, the counts, the "
+                  "spectrum and a line of decay-derived random")
+    shot("watch-300-320", "seconds 300 to 320 of a real session, at ten times "
+                          "speed")
     a("<p>The counter's own reading is a rolling 60-second count &mdash; one "
       "number with one time constant. RadBeeper counts the blips itself and "
       "keeps three windows at once.</p>")
@@ -3103,8 +3106,10 @@ def cmd_export(args):
     # images.
     shots = {}
     for name in ("probe", "watch", "watch-filling", "watch-spectrum",
-                 "watch-plain", "log-output", "log-tabs", "commands"):
-        rel = os.path.join("docs", "screenshots", name + ".png")
+                 "watch-plain", "log-output", "log-tabs", "commands",
+                 "watch-300-320"):
+        ext = ".gif" if name.endswith("320") else ".png"
+        rel = os.path.join("docs", "screenshots", name + ext)
         if os.path.exists(os.path.join(out_dir, rel)):
             shots[name] = rel.replace(os.sep, "/")
     html = render_html(counters, sites, args.cpm_per_usvh, args.title, shots)
