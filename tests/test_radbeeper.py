@@ -1208,3 +1208,67 @@ class TestBigNumber(unittest.TestCase):
 
     def test_unknown_characters_are_skipped_not_crashed_on(self):
         self.assertEqual(radbeeper.big_number("9x9"), radbeeper.big_number("99"))
+
+
+class TestFalseAlarms(unittest.TestCase):
+    """The tallest of many bins is much taller than any one bin.
+
+    Sigma is computed from a single bin, but the eye picks the largest of a
+    hundred and twenty-seven of them. Reporting the first as a detection is
+    the same mistake as drawing a three-second average as though it were
+    settled.
+    """
+
+    def poisson(self, rng, rate):
+        n, p, limit = 0, 1.0, pow(2.718281828459045, -rate)
+        while True:
+            p *= rng.random()
+            if p <= limit:
+                return n
+            n += 1
+
+    def test_a_quiet_counter_does_not_cry_wolf_early(self):
+        # Two windows of pure background, over and over. The single-bin sigma
+        # sails past 3 almost every time; the chance-adjusted threshold does
+        # not, which is the whole point.
+        loud, flagged = 0, 0
+        for seed in range(25):
+            rng = random.Random(seed)
+            spec = radbeeper.Spectrum(window=128)
+            while spec.runs < 2:
+                spec.add(self.poisson(rng, 0.5))
+            top, _where = spec.loudest()
+            if spec.sigma(top) >= 3.0:
+                loud += 1
+            if top >= spec.chance_max() * 1.25:
+                flagged += 1
+        # Measured over these 25 seeds: the naive test fires on 9 of them,
+        # the chance-adjusted one on almost none.
+        self.assertGreaterEqual(loud, 6)      # a false alarm every few looks
+        self.assertLessEqual(flagged, 3)      # and hardly ever, honestly
+        self.assertLess(flagged, loud)
+
+    def test_the_bar_falls_as_the_averages_pile_up(self):
+        spec = radbeeper.Spectrum(window=128)
+        spec.runs = 2
+        early = spec.chance_max()
+        spec.runs = 40
+        late = spec.chance_max()
+        self.assertGreater(early, 3.0)    # 4x is ordinary luck at two windows
+        self.assertLess(late, 1.3)        # and extraordinary at forty
+        self.assertLess(late, early)
+
+    def test_a_real_line_still_gets_through(self):
+        rng = random.Random(3)
+        spec = radbeeper.Spectrum(window=128)
+        i = 0
+        while spec.runs < 8:
+            n = self.poisson(rng, 0.5) + (6 if i % 8 == 0 else 0)
+            spec.add(n)
+            i += 1
+        top, _where = spec.loudest()
+        self.assertGreater(top, spec.chance_max() * 1.25)
+
+    def test_nothing_is_claimed_before_a_window_closes(self):
+        spec = radbeeper.Spectrum(window=64)
+        self.assertEqual(spec.chance_max(), float("inf"))

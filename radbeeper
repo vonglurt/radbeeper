@@ -729,13 +729,35 @@ class Spectrum:
         bin of one periodogram of white noise is exponentially distributed --
         its standard deviation equals its own mean -- so the average of N has
         a relative scatter of exactly 1/sqrt(N). The threshold is arithmetic
-        on the number of windows, not a variance that has to be accumulated
-        alongside.
+        on the number of windows, not a variance accumulated alongside.
+
+        It is NOT on its own a reason to believe anything: see chance_max.
         """
         n = self.independent()
         if n < 1:
             return 0.0
         return (rel - 1.0) * math.sqrt(n)
+
+    def chance_max(self):
+        """How tall the tallest bin gets on a quiet counter, by luck alone.
+
+        THE TRAP THIS EXISTS TO AVOID. Sigma is computed from one bin, but the
+        eye picks the tallest of a hundred and twenty-seven of them, and the
+        biggest of many draws is much larger than any single draw. Averaged N
+        times, a white bin exceeds r by about exp(-N(r-1)); across B bins the
+        largest lands near 1 + ln(B)/N. With two windows and 127 bins that is
+        nearly 4x -- so a bin at 4.9x, which reads as a confident five sigma,
+        is very close to what an entirely healthy counter produces every time
+        somebody looks. With twenty-eight windows the same arithmetic gives
+        1.2x, and 4.9x is then overwhelming.
+
+        Reporting the first as a detection is the same mistake as drawing a
+        three-second average as though it were settled, one panel up.
+        """
+        n = self.independent()
+        if n < 1 or self.bins < 2:
+            return float("inf")
+        return 1.0 + math.log(self.bins - 1) / n
 
     def wait(self):
         """Samples still needed before the first window closes."""
@@ -1243,14 +1265,18 @@ def run_curses(counter, w, args):
                     top, where = spec.loudest()
                     z = spec.sigma(top)
                     secs = spec.period(where)
-                    if z < 3.0:
+                    # Against what chance gives the LARGEST of this many bins,
+                    # not against what it gives one of them.
+                    luck = spec.chance_max()
+                    if top < luck * 1.25:
                         verdict = ("flat -- arrivals look random, as decay "
                                    "should")
                         attr = curses.A_DIM
                     else:
-                        verdict = ("peak at %.0fs, %.1fx the mean, %.1f sigma"
-                                   % (secs, top, z))
-                        attr = ((curses.color_pair(2 if z < 5 else 3)
+                        verdict = ("peak at %.0fs, %.1fx the mean (chance "
+                                   "gives %.1fx), %.1f sigma"
+                                   % (secs, top, luck, z))
+                        attr = ((curses.color_pair(2 if top < luck * 2 else 3)
                                  | curses.A_BOLD) if use_colour
                                 else curses.A_BOLD)
                     stdscr.addnstr(row, 0, "spectrum   %s (%d windows)"
@@ -1266,11 +1292,12 @@ def run_curses(counter, w, args):
                         for x, glyph in enumerate(line):
                             if glyph == " ":
                                 continue
-                            zc = spec.sigma(cols[x])
+                            v = cols[x]
                             pair = (curses.color_pair(
-                                3 if zc >= 5 else 2 if zc >= 3 else 4)
+                                3 if v >= luck * 2 else
+                                2 if v >= luck * 1.25 else 4)
                                 if use_colour else 0)
-                            if use_colour and zc >= 5:
+                            if use_colour and v >= luck * 2:
                                 pair |= curses.A_BOLD
                             try:
                                 stdscr.addstr(row + i, x, glyph, pair)

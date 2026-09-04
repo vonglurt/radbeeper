@@ -119,6 +119,20 @@ spectrum   flat -- arrivals look random, as decay should (28 windows)
 spectrum   peak at 8s, 9.4x the mean, 7.2 sigma (28 windows)
 ```
 
+**Sigma alone is not a reason to believe anything**, and this is the trap the
+panel is most likely to fall into. Sigma is computed for one bin, but the eye
+picks the *tallest of 127*, and the largest of many draws is far bigger than any
+single draw. Averaged *N* times, the largest white bin lands near 1 + ln(B)/*N* —
+which at two windows is nearly 4×. So a bin at 4.9×, reading as a confident five
+sigma, is very close to what a perfectly healthy counter produces every time you
+look. At twenty-eight windows the same arithmetic gives 1.2×, and 4.9× is then
+overwhelming. The headline compares against *that*, and says what chance would
+have given:
+
+```
+spectrum   peak at 8s, 9.4x the mean (chance gives 1.2x), 7.2 sigma
+```
+
 Windows are **half-overlapped** (Welch rather than Bartlett), which gets two
 averages out of each window's worth of data instead of one — the noise settles
 about 1.4× faster for the same waiting. The segments share half their samples,
