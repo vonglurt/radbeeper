@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: MIT
 """Tests for radbeeper. Stdlib unittest, no hardware, no network."""
 import importlib.util
+import math
 import os
+import random
 import struct
 import time
 import unittest
@@ -988,3 +990,134 @@ class TestExport(unittest.TestCase):
                                      radbeeper.read_sites(self.tmp))
         self.assertNotIn("<script>x</script>", html)
         self.assertIn("&lt;script&gt;", html)
+
+
+class TestSpectrum(unittest.TestCase):
+    """The accumulating spectrum, and why a flat one is the good answer.
+
+    Radioactive decay is Poisson and the power spectrum of a Poisson process
+    is white: every frequency carrying the same expected power. So a healthy
+    counter watching background produces no shape at all, and the feature
+    earns its place on the other case -- something arriving on a schedule,
+    which decay does not have.
+    """
+
+    def test_the_transform_puts_a_sine_in_its_own_bin(self):
+        n, k = 64, 7
+        wave = [math.sin(2 * math.pi * k * i / n) for i in range(n)]
+        power = [abs(c) ** 2 for c in radbeeper.fft(wave)[:n // 2]]
+        self.assertEqual(power.index(max(power)), k)
+
+    def test_a_constant_is_all_at_dc(self):
+        power = [abs(c) ** 2 for c in radbeeper.fft([3.0] * 32)]
+        self.assertGreater(power[0], 1e-9)
+        self.assertLess(max(power[1:]), 1e-9)
+
+    def test_a_length_that_is_not_a_power_of_two_is_refused(self):
+        # Rather than silently padding, which would change the bin the answer
+        # lands in without saying so.
+        with self.assertRaises(ValueError):
+            radbeeper.fft([1.0] * 10)
+
+    def test_it_says_nothing_until_a_window_has_closed(self):
+        spec = radbeeper.Spectrum(window=32)
+        for _ in range(31):
+            self.assertFalse(spec.add(1))
+        self.assertEqual(spec.relative(), [])
+        self.assertEqual(spec.wait(), 1)
+        self.assertTrue(spec.add(1))
+        self.assertEqual(spec.wait(), 0)
+
+    def test_poisson_background_comes_out_flat(self):
+        # The result that means "nothing is wrong". Averaging periodograms is
+        # what makes it readable: one is flat in expectation and violently
+        # noisy in fact.
+        rng = random.Random(7)
+        spec = radbeeper.Spectrum(window=64)
+        for _ in range(64 * 40):
+            # A Poisson draw at 0.5 counts a second, as background is.
+            n, p, limit = 0, 1.0, pow(2.718281828459045, -0.5)
+            while True:
+                p *= rng.random()
+                if p <= limit:
+                    break
+                n += 1
+            spec.add(n)
+        rel = spec.relative()
+        self.assertEqual(len(rel), 31)
+        self.assertLess(max(rel), 3.0)     # no bin stands out
+        self.assertAlmostEqual(sum(rel) / len(rel), 1.0, places=6)
+
+    def test_a_periodic_source_stands_out_of_the_grass(self):
+        # Something arriving every eight seconds, buried in the same
+        # background. This is the whole point of the panel.
+        rng = random.Random(11)
+        spec = radbeeper.Spectrum(window=64)
+        for i in range(64 * 40):
+            n = 1 if rng.random() < 0.5 else 0
+            if i % 8 == 0:
+                n += 6
+            spec.add(n)
+        rel = spec.relative()
+        peak = max(rel)
+        self.assertGreater(peak, 5.0)
+        # Bin k of the DC-dropped spectrum is k+1 cycles per window, so a
+        # period of 8 samples in a 64-sample window is bin 8 -- and an impulse
+        # train carries the same power in every harmonic of it, so 16, 24 and
+        # 32 stand up just as tall and which one happens to be tallest is
+        # noise. What must be true is that the fundamental is loud and that
+        # the loudest bin is one of its harmonics.
+        self.assertGreater(rel[7], 5.0)
+        self.assertAlmostEqual(spec.period(7), 8.0)
+        self.assertEqual((rel.index(peak) + 1) % 8, 0)
+
+    def test_columns_take_the_loudest_bin_they_cover(self):
+        # A single sharp line is what is being looked for, and averaging it
+        # with its quiet neighbours is how it disappears.
+        rel = [1.0] * 32
+        rel[9] = 12.0
+        cols = radbeeper.spectrum_columns(rel, 8)
+        self.assertEqual(len(cols), 8)
+        self.assertEqual(max(cols), 12.0)
+        self.assertEqual(cols.count(12.0), 1)
+
+    def test_columns_of_nothing_are_nothing(self):
+        self.assertEqual(radbeeper.spectrum_columns([], 40), [])
+
+
+class TestBarRows(unittest.TestCase):
+    """The counts chart, four rows tall instead of one."""
+
+    def samples(self, values):
+        return [(float(i), v) for i, v in enumerate(values)]
+
+    def test_it_returns_the_height_asked_for(self):
+        rows = radbeeper.bar_rows(self.samples([1, 2, 3]), 3, 4)
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(all(len(r) == 3 for r in rows))
+
+    def test_the_tallest_column_fills_every_row(self):
+        rows = radbeeper.bar_rows(self.samples([0, 8]), 2, 4)
+        self.assertEqual([r[1] for r in rows], ["█"] * 4)
+        self.assertEqual([r[0] for r in rows], [" "] * 4)
+
+    def test_a_half_height_column_fills_the_bottom_half(self):
+        rows = radbeeper.bar_rows(self.samples([10, 5]), 2, 4)
+        column = [r[1] for r in rows]
+        self.assertEqual(column[0], " ")        # top row empty
+        self.assertEqual(column[3], "█")   # bottom row full
+
+    def test_four_rows_resolve_what_one_cannot(self):
+        # One row has eight levels, so 30 and 32 out of 32 land on the same
+        # glyph. Four rows have thirty-two and tell them apart.
+        one = radbeeper.bar_rows(self.samples([32, 30]), 2, 1)
+        four = radbeeper.bar_rows(self.samples([32, 30]), 2, 4)
+        self.assertEqual(one[0][0], one[0][1])
+        self.assertNotEqual([r[0] for r in four], [r[1] for r in four])
+
+    def test_nothing_to_draw_is_not_a_crash(self):
+        self.assertEqual(radbeeper.bar_rows([], 10, 4), [""] * 4)
+
+    def test_all_zeroes_do_not_divide_by_zero(self):
+        rows = radbeeper.bar_rows(self.samples([0, 0, 0]), 3, 4)
+        self.assertEqual(rows, [" " * 3] * 4)

@@ -264,3 +264,54 @@ class TestTheLock(SerialCase):
         finally:
             held.close()
             radbeeper.state_dir = real
+
+
+class TestTheFullScreenMonitor(SerialCase):
+    """run_curses, actually drawing.
+
+    It only executes when stdout is a terminal, so every other test in this
+    suite takes the plain path and never touches it -- which is how a
+    NameError in its draw loop shipped: a local named `level` shadowed the
+    module-level level() that band() calls, and the first coloured row raised.
+    A pseudo-terminal is cheap and this would have caught it.
+    """
+
+    def test_it_draws_on_a_terminal_without_falling_over(self):
+        import pty
+        import subprocess
+        import threading
+
+        master, slave = pty.openpty()
+        prog = os.path.join(HERE, os.pardir, "radbeeper")
+        env = dict(os.environ, TERM="xterm-256color")
+        proc = subprocess.Popen(
+            [sys.executable, prog, "-d", self.dev.path, "--duration", "3",
+             "watch"],
+            stdin=slave, stdout=slave, stderr=subprocess.PIPE, env=env)
+        os.close(slave)
+
+        # Drain the terminal, or the child blocks once its buffer fills.
+        drawn = []
+
+        def drain():
+            try:
+                while True:
+                    chunk = os.read(master, 4096)
+                    if not chunk:
+                        break
+                    drawn.append(chunk)
+            except OSError:
+                pass
+
+        reader = threading.Thread(target=drain)
+        reader.daemon = True
+        reader.start()
+        err = proc.communicate(timeout=60)[1].decode("utf-8", "replace")
+        os.close(master)
+        reader.join(timeout=5)
+
+        self.assertEqual(proc.returncode, 0, err)
+        self.assertNotIn("Traceback", err)
+        painted = b"".join(drawn).decode("utf-8", "replace")
+        self.assertIn("radbeeper", painted)
+        self.assertIn("q to quit", painted)

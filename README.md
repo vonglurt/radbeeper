@@ -84,6 +84,42 @@ and somebody goes hunting for a leak.
 The colour bands are calm / raised / high. `q` quits. The row of blocks along
 the bottom is the last few minutes, one block per second.
 
+### The spectrum, and why flat is the good answer
+
+The monitor also accumulates a power spectrum of the per-second counts and
+draws it along the bottom, coloured, one column per column of your terminal.
+
+![the accumulating spectrum](docs/screenshots/watch-spectrum.png)
+
+**Radioactive decay is a Poisson process, and the power spectrum of a Poisson
+process is flat** — white noise, every frequency carrying the same expected
+power. So a healthy counter watching background produces no shape at all, and
+that featureless strip is the useful result: a statement that nothing periodic
+is happening.
+
+The feature earns its place on the other case. A peak means something is
+arriving on a schedule, and decay does not have a schedule — mains hum on the
+tube's high-voltage supply, a fan or a pump carrying a source past, a loose
+connector chattering, firmware that batches its reporting. In the time domain
+all of those look exactly like more counts, and no amount of staring at a CPM
+number separates them from noise.
+
+It **accumulates**, which is what makes it readable: a single 128-sample
+periodogram of a Poisson process is flat in expectation and violently noisy in
+fact — every bin an exponential variable with standard deviation equal to its
+own mean. Averaging *N* of them divides that scatter by √*N*, so a real line
+climbs out of the grass while the grass settles. Ten minutes is five windows;
+an hour is twenty-eight, and by then a peak at twice the mean is worth
+believing.
+
+The axis runs from long periods on the left (128 s, the window) to short on the
+right (2 s, the Nyquist limit). The headline says which it is:
+
+```
+spectrum   flat -- arrivals look random, as decay should (28 windows)
+spectrum   peak at 8s, 9.4x the mean -- something periodic (28 windows)
+```
+
 ### Line output, for a pipe or a log
 
 `--plain` gives one line per second instead of the full-screen monitor. It is
