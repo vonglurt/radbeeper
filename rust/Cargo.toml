@@ -1,0 +1,31 @@
+[package]
+name = "radbeeper"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.70"
+description = "A GQ GMC Geiger-Muller counter on the desk: find it, watch it, three time constants at once"
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/vonglurt/radbeeper"
+homepage = "https://github.com/vonglurt/radbeeper"
+keywords = ["geiger", "radiation", "serial", "gmc", "tui"]
+categories = ["command-line-utilities", "science"]
+exclude = ["/target"]
+
+[[bin]]
+name = "radbeeper"
+path = "src/main.rs"
+
+# ONE DEPENDENCY, AND IT IS libc. A serial port is termios, and termios is
+# libc; everything else here -- the FFT, the digits, the terminal drawing --
+# is arithmetic and escape codes. The Python this was ported from has no
+# dependencies at all, and the Rust is allowed exactly the one that a raw
+# serial port cannot be written without.
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+panic = "abort"

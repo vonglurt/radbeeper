@@ -346,6 +346,38 @@ To put it on the web: **fork this repository, copy your `cpm-*.tsv` and
 There is nothing to install in the workflow — the generator is this same file,
 which is also why the page cannot drift from the log format.
 
+## 9. The native build
+
+```sh
+cargo install radbeeper
+```
+
+`rust/` is a Cargo crate carrying the **read side** natively: `probe`, `cpm`
+and the full monitor — the same three time constants, coloured counts chart,
+accumulating spectrum ladder and twelve-row digits. One dependency, `libc`,
+because a serial port is termios and termios is libc; the FFT, the digits and
+the drawing are arithmetic and escape codes.
+
+```sh
+make rust            # build it
+make rust-install    # cargo install --path rust
+```
+
+A full probe against the counter takes **82 ms** and the binary is 400 KB.
+
+Everything that writes the log format — `service`, `backfill`, `export`,
+`site`, `random`, `recompute`, `hotplug` — stays in the Python and the binary
+says so if you ask it for one. That is not a staging post: the Python runs on a
+machine with no toolchain and no network, which is the whole reason it has no
+dependencies, and the format is still moving. Two implementations of a file
+format is how a file format acquires two dialects.
+
+**Where the speed actually was.** The monitor's budget is one sample a second
+and Python used a fraction of a percent of it, so this is about start-up and
+footprint rather than throughput. The one genuinely slow path was `backfill`,
+and that was an algorithm — fixed in the Python for a 7× win before any of this
+was written.
+
 ## Troubleshooting
 
 **1. No serial node.** Either nothing is plugged in, or the running kernel has no
@@ -379,6 +411,7 @@ the monitor.
 | `hotplug` | sit in the session, open the monitor on plug-in |
 | `backfill` | fill the log's gaps from the counter's flash |
 | `random` | 256 bits from decay timing, with the accounting for it |
+| `recompute` | fill long-window columns in existing logs from their own counts |
 | `site` | where a counter is, and where it has been |
 | `export` | build `index.html` from the logs |
 | `log info` / `log pull` | how much history flash, and download it |
