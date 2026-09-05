@@ -577,6 +577,16 @@ has only ever seen one block.
 The Rust monitor also has the random line and its countdown now, which it
 never had at all.
 
+**The history decoder is where GQ's document is wrong twice**, so it gets the
+most testing of anything here: thirteen constructed images covering truncation
+mid-record, corrupt timestamps, notes, erased flash, marker bytes appearing as
+ordinary counts and the measured-interval median — and then
+`tests/fixtures/flash-gmc320re.bin`, **16 KiB cut out of this counter's own
+flash at a timestamp marker**. 82,084 records off a 96 KiB read decode
+identically in both. Then the whole chain end to end: `backfill --image`
+through both command lines, into a fresh log, and the two files compared byte
+for byte — 394 rows, decoder to merge, identical.
+
 It earned its place on the first run. Python's `%g` — which formats the
 `seconds` column and every span in the header, and which Rust has no formatter
 for — picks scientific notation from the exponent the value has **after**
@@ -587,8 +597,8 @@ chronological.
 
 | | |
 |---|---|
-| **native now** | `probe`, `cpm`, `watch`, `service`, **`random`** and **`random --check`**; the log format — header, rows, dated paths, name-matched columns, the merge that never writes over a live row; the entropy pool, the SP 800-90B estimator and SHA-256; local time, which Rust's standard library does not have at all |
-| **next** | the flash history — `backfill` and `log pull`, with the two corrections to GQ's published format — then `export` |
+| **native now** | `probe`, `cpm`, `watch`, `service`, `random`, `random --check`, **`backfill`** and **`log info`/`log pull`**; the log format; the entropy pool, the SP 800-90B estimator and SHA-256; the history decoder with both corrections to GQ's published format, the wrapped-ring search and the measured sample intervals; local time, which Rust's standard library does not have at all |
+| **next** | `export` — the two pages. Biggest and most mechanical, and the only one with no correctness risk beyond "the HTML differs" |
 | **the rule** | one dependency, still `libc`. It has `strftime`, `strptime` and `mktime`, so the port does not need a date crate; the one primitive that must be written out is SHA-256 |
 
 Nothing about this is a reason to hurry the Python out: it runs on a machine
@@ -708,7 +718,7 @@ per sample. **Same output, byte for byte, in 2.3 s instead of 16.5.**
 ### Tests
 
 ```sh
-make check        # syntax, then 192 tests: no hardware, no network
+make check        # syntax, then 208 tests: no hardware, no network
 ```
 
 `tests/fake_gmc.py` serves a fake GMC-320 on a pseudo-terminal, so the serial path

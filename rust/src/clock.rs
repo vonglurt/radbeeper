@@ -87,6 +87,35 @@ pub fn parse(text: &str, fmt: &str) -> Option<f64> {
     }
 }
 
+/// A local time built from its parts, as the counter's clock records them.
+///
+/// The fields are range-checked by the caller BEFORE this is reached, because
+/// mktime normalises rather than refuses: month 99 day 99 is not an error to
+/// it, it is 2034. Corrupt or half-erased flash throws up a timestamp marker
+/// followed by rubbish, and a mark accepted from that would place every
+/// sample after it in the wrong decade.
+#[allow(deprecated)]
+pub fn from_parts(year: i32, mon: i32, day: i32, hour: i32, min: i32, sec: i32)
+    -> Option<f64>
+{
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        tm.tm_year = year - 1900;
+        tm.tm_mon = mon - 1;
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min = min;
+        tm.tm_sec = sec;
+        tm.tm_isdst = -1;
+        let t = libc::mktime(&mut tm);
+        if t == -1 {
+            None
+        } else {
+            Some(t as f64)
+        }
+    }
+}
+
 /// The timestamp a written row carries.
 pub fn parse_stamp(text: &str) -> Option<f64> {
     parse(text, "%Y-%m-%dT%H:%M:%S")
@@ -131,6 +160,15 @@ mod tests {
         assert_eq!(parse_stamp("2026-13-45T99:99:99"), None);
         // An embedded NUL cannot become a C string, and must not panic.
         assert_eq!(parse_stamp("2026-09-04T\0"), None);
+    }
+
+    #[test]
+    fn a_time_built_from_parts_is_the_time_it_names() {
+        let t = from_parts(2026, 9, 4, 12, 0, 0).unwrap();
+        assert_eq!(stamp(t), "2026-09-04T12:00:00");
+        // mktime normalises, which is why the caller range-checks first.
+        // This is here to record that it does, not to endorse it.
+        assert!(from_parts(2026, 13, 45, 0, 0, 0).is_some());
     }
 
     #[test]

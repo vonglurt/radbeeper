@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
 *.bin
+!tests/fixtures/*.bin
 *.csv
 /.casts/

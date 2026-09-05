@@ -236,6 +236,228 @@ class TestTheSameBitsComeOut(unittest.TestCase):
             self.assertTrue(radbeeper.check_entropy_record(record))
 
 
+def flash(records):
+    """Build a history image out of a little script.
+
+    ("mark", y, m, d, hh, mm, ss)  a timestamp marker
+    ("tick",)                      the 55 AA 01 that follows every timestamp
+    ("note", text)                 a note typed on the device
+    ("counts", [n, ...])           ordinary samples
+    ("raw", bytes)                 whatever is wanted, verbatim
+    """
+    out = bytearray()
+    for r in records:
+        if r[0] == "mark":
+            out += bytes([0x55, 0xAA, 0x00]) + bytes(r[1:])
+        elif r[0] == "tick":
+            out += bytes([0x55, 0xAA, 0x01])
+        elif r[0] == "note":
+            body = r[1].encode("ascii")
+            out += bytes([0x55, 0xAA, 0x02, len(body)]) + body
+        elif r[0] == "counts":
+            out += bytes(r[1])
+        elif r[0] == "raw":
+            out += bytes(r[1])
+    return bytes(out)
+
+
+@unittest.skipIf(ORACLE_PATH is None, "no Rust toolchain; nothing to diff")
+class TestTheHistoryDecodesTheSame(unittest.TestCase):
+    """GQ's history format, decoded by both, record for record.
+
+    This is where the two corrections to GQ's published document live -- the
+    nine-byte datetime record and the three-byte marker carrying no payload --
+    and both of them were found by noticing that the decoded numbers were
+    impossible. A second decoder that got either one subtly different would
+    produce a plausible CSV and a wrong one, which is the failure this format
+    is most prone to and the reason the raw image is always kept.
+    """
+
+    def rust(self, blob):
+        out = subprocess.run(
+            [ORACLE_PATH], input="history\t" + blob.hex() + "\n",
+            capture_output=True, text=True, check=True)
+        return [l for l in out.stdout.splitlines() if l != "--"]
+
+    def python(self, blob):
+        rows = []
+        for off, when, dt, count, note in radbeeper.history_records(blob):
+            rows.append("\t".join([
+                str(off),
+                "-" if when is None else "%.6f" % when,
+                "-" if dt is None else "%.9f" % dt,
+                "-" if count is None else str(count),
+                note,
+            ]))
+        return rows
+
+    def same(self, blob, why):
+        self.assertEqual(self.rust(blob), self.python(blob), why)
+
+    def test_an_ordinary_recording(self):
+        img = flash([
+            ("mark", 26, 9, 4, 12, 0, 0), ("tick",),
+            ("counts", [0, 1, 0, 2, 0, 0, 3, 1]),
+            ("mark", 26, 9, 4, 12, 0, 9), ("tick",),
+            ("counts", [1, 0, 0, 4, 0, 1, 0, 0, 2]),
+            ("mark", 26, 9, 4, 12, 0, 18), ("tick",),
+            ("counts", [0, 0, 1]),
+        ])
+        self.same(img, "the shape every real image has")
+
+    def test_the_datetime_record_is_nine_bytes(self):
+        # If either side read a tenth byte it would swallow the 0x55 of the
+        # next marker and decode 0xAA as a count of 170 -- which is exactly
+        # the bug the Python's comment describes.
+        img = flash([
+            ("mark", 26, 9, 4, 12, 0, 0), ("tick",), ("counts", [1, 2]),
+            ("mark", 26, 9, 4, 12, 0, 3), ("tick",), ("counts", [3]),
+        ])
+        self.same(img, "nine bytes, no save-mode byte")
+        self.assertNotIn("\t170\t", "\n".join(self.rust(img)))
+
+    def test_the_marker_after_a_timestamp_carries_no_payload(self):
+        # Read as a two-byte count it would invent a reading in the tens of
+        # thousands per second on a tube that saturates far below that.
+        img = flash([
+            ("mark", 26, 9, 4, 12, 0, 0), ("tick",),
+            ("counts", [0, 0]),
+            ("mark", 26, 9, 4, 12, 0, 2), ("tick",), ("counts", [0]),
+        ])
+        self.same(img, "three bytes, and the two after it are samples")
+
+    def test_a_note_typed_on_the_device(self):
+        img = flash([
+            ("mark", 26, 9, 4, 12, 0, 0), ("tick",), ("counts", [1]),
+            ("note", "bench"),
+            ("counts", [2, 3]),
+            ("mark", 26, 9, 4, 12, 0, 4), ("tick",), ("counts", [0]),
+        ])
+        self.same(img, "notes come back as text and do not count as samples")
+
+    def test_unwritten_flash_is_skipped_rather_than_counted(self):
+        img = flash([
+            ("mark", 26, 9, 4, 12, 0, 0), ("tick",), ("counts", [1, 2]),
+            ("raw", [0xFF] * 32),
+            ("mark", 26, 9, 4, 12, 0, 3), ("tick",), ("counts", [4]),
+        ])
+        self.same(img, "0xFF is absence, not a count of 255")
+
+    def test_a_corrupt_timestamp_is_refused_by_both(self):
+        # mktime normalises rather than refuses, so month 99 day 99 is 2034 to
+        # it. Half-erased flash throws these up and a mark accepted from one
+        # would place every sample after it in the wrong decade.
+        for bad in ((26, 99, 99, 0, 0, 0), (26, 0, 1, 0, 0, 0),
+                    (26, 1, 0, 0, 0, 0), (26, 1, 1, 99, 0, 0),
+                    (26, 1, 1, 0, 99, 0), (26, 1, 1, 0, 0, 99)):
+            img = flash([
+                ("mark", 26, 9, 4, 12, 0, 0), ("tick",), ("counts", [1]),
+                ("mark",) + bad, ("counts", [2, 3]),
+                ("mark", 26, 9, 4, 12, 0, 4), ("tick",), ("counts", [0]),
+            ])
+            self.same(img, "refused %r" % (bad,))
+
+    def test_samples_before_the_first_timestamp_cannot_be_placed(self):
+        img = flash([
+            ("counts", [5, 6, 7]),
+            ("mark", 26, 9, 4, 12, 0, 0), ("tick",), ("counts", [1, 2]),
+            ("mark", 26, 9, 4, 12, 0, 3), ("tick",), ("counts", [0]),
+        ])
+        self.same(img, "a partial read of the middle of the flash")
+
+    def test_a_truncated_record_at_the_end_of_the_image(self):
+        # A tail read cuts wherever it cuts, and every one of these is a
+        # marker chopped mid-record.
+        base = flash([("mark", 26, 9, 4, 12, 0, 0), ("tick",),
+                      ("counts", [1, 2, 3])])
+        for tail in ([0x55], [0x55, 0xAA], [0x55, 0xAA, 0x00],
+                     [0x55, 0xAA, 0x00, 26, 9], [0x55, 0xAA, 0x02],
+                     [0x55, 0xAA, 0x02, 40, 0x61]):
+            self.same(base + bytes(tail), "truncated %r" % (tail,))
+
+    def test_the_interval_is_measured_and_an_outlier_takes_the_median(self):
+        # Nine samples over ten seconds is 1.111 s each; the counter's second
+        # is not ours and assuming 1.000 files an hour-old sample most of a
+        # minute from where it belongs. And a four-hour hole is a hole, not a
+        # stretch that recorded one sample every eighty seconds.
+        img = flash([
+            ("mark", 26, 9, 4, 12, 0, 0), ("tick",), ("counts", [1] * 9),
+            ("mark", 26, 9, 4, 12, 0, 10), ("tick",), ("counts", [1] * 9),
+            ("mark", 26, 9, 4, 12, 0, 20), ("tick",), ("counts", [1] * 9),
+            ("mark", 26, 9, 4, 16, 0, 0), ("tick",), ("counts", [1] * 9),
+            ("mark", 26, 9, 4, 16, 0, 10), ("tick",), ("counts", [1] * 3),
+        ])
+        self.same(img, "measured intervals, and the median for an outlier")
+
+    def test_an_image_with_one_timestamp_measures_nothing_and_says_so(self):
+        img = flash([("mark", 26, 9, 4, 12, 0, 0), ("tick",),
+                     ("counts", [1, 2, 3])])
+        self.same(img, "None rather than assuming a second")
+
+    def test_an_empty_image_and_an_all_erased_one(self):
+        self.same(b"", "nothing at all")
+        self.same(bytes([0xFF] * 64), "erased flash")
+
+    def test_a_real_image_off_a_real_counter(self):
+        """The one that is not a construction.
+
+        16 KiB out of the flash of the GMC-320Re these logs come from, cut at
+        a timestamp marker so it is a recording rather than a slice through
+        the middle of one. Synthetic images test the cases somebody thought
+        of; this tests the case the firmware actually produces, including
+        whatever it does that nobody has noticed yet.
+        """
+        path = os.path.join(ROOT, "tests", "fixtures", "flash-gmc320re.bin")
+        if not os.path.exists(path):
+            self.skipTest("no flash fixture in the repository")
+        with open(path, "rb") as f:
+            blob = f.read()
+        mine = self.python(blob)
+        self.assertGreater(len(mine), 10000, "the fixture decoded to nothing")
+        self.assertEqual(self.rust(blob), mine)
+        # And it is a recording, not a field of 0xFF that trivially agrees.
+        marks = [l for l in mine if l.split("\t")[3] == "-"
+                 and l.split("\t")[4] == ""]
+        self.assertGreater(len(marks), 40, "too few timestamps to be a test")
+
+    def test_the_rows_a_backfill_would_write_are_the_same_rows(self):
+        """The whole chain, on real bytes.
+
+        Decode the image, measure the sample intervals, replay the samples
+        through four averaging windows, break the averages at every hole, and
+        format one row per slot. Every step of that is arithmetic on floats
+        with a chance to differ in the last place, and the output is what
+        would be merged into a month of somebody's log.
+        """
+        path = os.path.join(ROOT, "tests", "fixtures", "flash-gmc320re.bin")
+        if not os.path.exists(path):
+            self.skipTest("no flash fixture in the repository")
+        with open(path, "rb") as f:
+            blob = f.read()
+        spans = (3.0, 30.0, 300.0, 3000.0)
+        samples = sorted(radbeeper.history_samples(blob, 0.0))
+        want = [line for _when, line in radbeeper.rows_from_samples(
+            samples, spans, 30.0, 300.0)]
+        self.assertGreater(len(want), 100, "the fixture produced too few rows")
+        got = subprocess.run(
+            [ORACLE_PATH],
+            input="rows\t%s\t%s\t30.0\t300.0\t0.0\n"
+                  % (blob.hex(), ",".join(repr(s) for s in spans)),
+            capture_output=True, text=True, check=True)
+        self.assertEqual(
+            [l for l in got.stdout.splitlines() if l != "--"], want)
+
+    def test_a_marker_byte_appearing_as_an_ordinary_count(self):
+        # 0x55 not followed by 0xAA is a count of 85, and 0xAA on its own is a
+        # count of 170. Both are perfectly ordinary readings.
+        img = flash([
+            ("mark", 26, 9, 4, 12, 0, 0), ("tick",),
+            ("raw", [0x55, 0x01, 0xAA, 0x55, 0xAA]),
+            ("mark", 26, 9, 4, 12, 0, 3), ("tick",), ("counts", [1]),
+        ])
+        self.same(img, "0x55 and 0xAA are counts unless they are a marker")
+
+
 @unittest.skipIf(ORACLE_PATH is None, "no Rust toolchain; nothing to run")
 class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
     """A file one implementation wrote, read by the other.
@@ -311,6 +533,55 @@ class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
             lines = [l.rstrip("\n") for l in f if not l.startswith("#")]
         self.assertEqual(lines, sorted(lines),
                          "the one promise the format makes")
+
+    def test_a_backfill_of_the_same_image_writes_the_same_file(self):
+        """End to end, through both command lines.
+
+        Not a function against a function: the actual `backfill --image`
+        command in each program, folding a real 16 KiB flash image into a
+        fresh log, and the two files compared byte for byte. Everything is in
+        this one -- the decoder, the measured sample intervals, four averaging
+        windows replayed sample by sample, the peaks, the gap handling, the
+        slot arithmetic, the row formatting and the merge.
+        """
+        import tempfile
+        image = os.path.join(ROOT, "tests", "fixtures", "flash-gmc320re.bin")
+        if not os.path.exists(image):
+            self.skipTest("no flash fixture in the repository")
+        d = tempfile.mkdtemp()
+        py = os.path.join(d, "py.tsv")
+        rs = os.path.join(d, "rs.tsv")
+        args = ["backfill", "--image", image, "--serial", "F48824B8207F7E"]
+        a = subprocess.run([sys.executable, os.path.join(ROOT, "radbeeper")]
+                           + args + ["-o", py],
+                           capture_output=True, text=True, timeout=120)
+        b = subprocess.run([self.BINARY] + args + ["-o", rs],
+                           capture_output=True, text=True, timeout=120)
+        self.assertEqual(a.returncode, 0, a.stderr)
+        self.assertEqual(b.returncode, 0, b.stderr)
+        with open(py) as f:
+            want = f.read()
+        with open(rs) as f:
+            got = f.read()
+        self.assertGreater(len(want.splitlines()), 100, "too few rows to test")
+        self.assertEqual(got, want)
+
+    def test_a_backfill_will_not_guess_which_counter_an_image_came_from(self):
+        # A dumped image carries no serial, and rows that cannot say which
+        # counter they came from are half a measurement. Both refuse.
+        import tempfile
+        image = os.path.join(ROOT, "tests", "fixtures", "flash-gmc320re.bin")
+        if not os.path.exists(image):
+            self.skipTest("no flash fixture in the repository")
+        d = tempfile.mkdtemp()
+        for cmd in ([sys.executable, os.path.join(ROOT, "radbeeper")],
+                    [self.BINARY]):
+            out = subprocess.run(
+                cmd + ["backfill", "--image", image, "-o",
+                       os.path.join(d, "x.tsv")],
+                capture_output=True, text=True, timeout=120)
+            self.assertNotEqual(out.returncode, 0, "%r accepted it" % cmd[-1])
+            self.assertIn("--serial", out.stdout + out.stderr)
 
     def test_a_second_run_does_not_write_a_row_for_a_finished_slot(self):
         # One row per slot is the rule the whole format rests on, and a

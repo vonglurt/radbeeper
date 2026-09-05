@@ -10,7 +10,7 @@
 mod counter;
 mod serial;
 
-use radbeeper::{analysis, clock, entropy, log};
+use radbeeper::{analysis, clock, entropy, history, log};
 use analysis::{
     bar_rows, level, spectrum_columns, Ladder, Level, Windows,
 };
@@ -436,6 +436,13 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     println!("radbeeper: backfill is not in this build yet -- \
               the Python does that one");
 
+    // THE COUNTER HAS TO BE ASKED TO TALK. Without this the first read times
+    // out, the loop breaks on the spot and the service exits 0 having written
+    // nothing -- which is what it did, silently, until a test asked for the
+    // file afterwards. It appeared to work only because a `watch` killed
+    // without its cleanup leaves the counter streaming, and the next process
+    // inherits that.
+    c.heartbeat(true);
     let mut due: Option<f64> = None;
     loop {
         let counts = match c.next_sample(Duration::from_millis(2500)) {
@@ -495,6 +502,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
         let _ = out.write(now, &line);
     }
     out.close();
+    c.heartbeat(false);
     log::write_status("stopped");
     0
 }
@@ -544,6 +552,7 @@ fn random(spans: &[f64], duration: Option<f64>, device: Option<&str>,
     let mut pool = entropy::Entropy::new(want);
     let mut ladder = Ladder::new();
     println!("radbeeper: collecting {} bits from {}", want as i64, c.path);
+    c.heartbeat(true);
     let started = clock::now();
     while !pool.ready() {
         let counts = match c.next_sample(Duration::from_millis(2500)) {
@@ -559,6 +568,7 @@ fn random(spans: &[f64], duration: Option<f64>, device: Option<&str>,
             break;
         }
     }
+    c.heartbeat(false);
     if !pool.ready() {
         eprintln!("radbeeper: only {:.0} of {} bits -- {}",
                   pool.bits(), want as i64,
@@ -624,6 +634,263 @@ fn check_random(path: &std::path::Path) -> i32 {
     if bad > 0 { 1 } else { 0 }
 }
 
+
+/// The time of the first timestamp in a probe read at `address`.
+fn first_mark_time(c: &counter::Counter, address: usize, probe: usize)
+    -> Option<f64>
+{
+    let chunk = c.read_history(address, probe);
+    history::raw(&chunk).find_map(|r| match r {
+        history::Raw::Mark { when, .. } => Some(when),
+        _ => None,
+    })
+}
+
+/// (newest byte address, whether the flash has wrapped).
+///
+/// Pulling a full megabyte over 115200 baud takes ten minutes and the rows a
+/// backfill wants are the NEWEST, so the first job is to find where they are.
+/// Two shapes of flash, two searches.
+///
+/// NOT YET FULL: writing runs forward from zero and the rest is 0xFF, so
+/// eleven probes bisect for where the 0xFF starts.
+///
+/// ALREADY WRAPPED, which is what the counter on the bench does -- a megabyte
+/// of ring with no unwritten byte in it. The newest sample is immediately
+/// before the write pointer and the oldest immediately after, so the flash
+/// reads as one long climb in time with exactly one step backwards in it, and
+/// that step bisects. Getting this wrong is not a small error: reading the
+/// physical tail of a wrapped ring hands back the OLDEST hours while claiming
+/// they are the newest, and a backfill would file last week under this
+/// afternoon.
+fn find_history_end(c: &counter::Counter, size: usize) -> (usize, bool) {
+    const PROBE: usize = 2048;
+    let tail = c.read_history(size.saturating_sub(PROBE), PROBE);
+    if !tail.iter().any(|b| *b != 0xFF) {
+        if !c.read_history(0, PROBE).iter().any(|b| *b != 0xFF) {
+            return (0, false);
+        }
+        let (mut lo, mut hi) = (0usize, size);
+        while hi - lo > PROBE {
+            let mid = (lo + hi) / 2;
+            if c.read_history(mid, PROBE).iter().any(|b| *b != 0xFF) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        // Bisection lands within a probe of the truth; the last step reads
+        // that window and takes the exact byte, so the tail read does not
+        // carry a kilobyte of 0xFF with it.
+        let window = c.read_history(lo, PROBE * 2);
+        let last = window.iter().rposition(|b| *b != 0xFF);
+        return (last.map(|j| lo + j + 1).unwrap_or(lo), false);
+    }
+    let start = match first_mark_time(c, 0, PROBE) {
+        Some(t) => t,
+        None => return (size, true), // no marks to steer by; take it as it lies
+    };
+    let (mut lo, mut hi) = (0usize, size);
+    while hi - lo > PROBE {
+        let mid = (lo + hi) / 2;
+        match first_mark_time(c, mid, PROBE) {
+            Some(seen) if seen < start => hi = mid,
+            _ => lo = mid,
+        }
+    }
+    let window = c.read_history(lo, PROBE * 2);
+    for r in history::raw(&window) {
+        if let history::Raw::Mark { off, when } = r {
+            if when < start {
+                return (lo + off, true);
+            }
+        }
+    }
+    (lo + PROBE, true)
+}
+
+/// The newest `want` bytes of the flash, in the order they were recorded.
+///
+/// In a wrapped ring the newest bytes end at the write pointer and, if more
+/// are asked for than lie before it, continue from the physical end of the
+/// chip. What comes back is always chronological, so nothing downstream has
+/// to know the flash is a circle.
+fn read_history_tail(c: &counter::Counter, want: usize, quiet: bool) -> Vec<u8> {
+    let size = c.flash_size();
+    if size == 0 {
+        return Vec::new();
+    }
+    let (end, wrapped) = find_history_end(c, size);
+    if end == 0 {
+        return Vec::new();
+    }
+    if !quiet {
+        println!("radbeeper: newest history at {} KiB of {} KiB{}; reading {} KiB",
+                 end / 1024, size / 1024,
+                 if wrapped { " (wrapped)" } else { "" },
+                 want.min(size) / 1024);
+    }
+    if want <= end {
+        return c.read_history(end - want, want);
+    }
+    let head = c.read_history(0, end);
+    if !wrapped {
+        return head;
+    }
+    let over = (want - end).min(size - end);
+    let mut out = c.read_history(size - over, over);
+    out.extend_from_slice(&head);
+    out
+}
+
+/// Seconds to add to the counter's timestamps to land on this clock.
+///
+/// The counter's RTC is not this machine's. On the unit here it reads about
+/// half an hour behind, which is six hundred slots at the default row
+/// spacing: backfilling without this correction would file four hours of
+/// recording under the wrong four hours. Bracketed by two readings of our own
+/// clock and taken from the middle, because the counter's answer takes a
+/// measurable fraction of a second to arrive.
+fn measure_clock_offset(c: &counter::Counter) -> Option<f64> {
+    let before = clock::now();
+    let text = c.datetime()?;
+    let after = clock::now();
+    let theirs = clock::parse(&text, "%Y-%m-%d %H:%M:%S")?;
+    Some((before + after) / 2.0 - theirs)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn backfill_cmd(spans: &[f64], every: f64, max_gap: f64, bytes: usize,
+                device: Option<&str>, baud: Option<u32>,
+                logs: Option<std::path::PathBuf>, image: Option<&std::path::Path>,
+                serial_arg: Option<&str>, one_file: Option<&str>)
+    -> i32
+{
+    let dir = logs.unwrap_or_else(log::state_dir);
+    let _ = std::fs::create_dir_all(&dir);
+    let (blob, offset, serial) = match image {
+        // An image on disk needs no counter, which is what makes a decoder
+        // fix testable against last week's dump.
+        Some(p) => match std::fs::read(p) {
+            // A dumped image does not carry its own serial, and rows that
+            // cannot say which counter they came from are half a measurement.
+            Ok(b) => match serial_arg {
+                Some(sn) => (b, 0.0, sn.to_string()),
+                None => {
+                    eprintln!("radbeeper: --serial is how a dumped image says \
+                               which counter it came from");
+                    return 1;
+                }
+            },
+            Err(e) => {
+                eprintln!("radbeeper: cannot read {} -- {}", p.display(), e);
+                return 1;
+            }
+        },
+        None => {
+            let c = match counter::find(device, baud) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("no counter: {}", e.reason);
+                    return 1;
+                }
+            };
+            let off = measure_clock_offset(&c).unwrap_or(0.0);
+            let b = read_history_tail(&c, bytes, false);
+            (b, off, c.serial_no.clone())
+        }
+    };
+    if blob.is_empty() {
+        eprintln!("radbeeper: nothing to read");
+        return 1;
+    }
+    let sites = log::read_sites(&dir);
+    let serial_opt = if serial.is_empty() { None } else { Some(serial.as_str()) };
+    let r = history::backfill(&blob, spans, every, max_gap, offset, &dir,
+                              serial_opt, &sites, one_file.map(std::path::Path::new));
+    if r.samples == 0 {
+        println!("radbeeper: no placeable samples in the history read");
+        return 0;
+    }
+    println!("radbeeper: {} samples, {} rows, {} added, {} already logged",
+             r.samples, r.rows, r.added, r.clashed);
+    if let (Some(a), Some(b)) = (r.first, r.last) {
+        println!("           {} .. {}", clock::stamp(a), clock::stamp(b));
+    }
+    println!("           clock offset {:+.0}s, {} hole{}", offset, r.holes,
+             if r.holes == 1 { "" } else { "s" });
+    for f in &r.files {
+        println!("           {}", f.display());
+    }
+    0
+}
+
+fn log_cmd(action: &str, bytes: Option<usize>, out_stem: Option<&str>,
+           device: Option<&str>, baud: Option<u32>) -> i32 {
+    let c = match counter::find(device, baud) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("no counter: {}", e.reason);
+            return 1;
+        }
+    };
+    if action == "info" {
+        println!("model     {}", c.model());
+        println!("flash     {} KiB", c.flash_size() / 1024);
+        println!("pull it   radbeeper log pull -o FILE");
+        return 0;
+    }
+    let size = bytes.unwrap_or_else(|| c.flash_size());
+    let stem = match out_stem {
+        Some(s) => s.to_string(),
+        None => log::state_dir()
+            .join(format!("history-{}", clock::format(clock::now(), "%Y%m%d-%H%M%S")))
+            .display()
+            .to_string(),
+    };
+    println!("reading {} KiB of history from {}", size / 1024, c.path);
+    let got = c.read_history(0, size);
+    if got.is_empty() {
+        eprintln!("the counter returned nothing");
+        return 1;
+    }
+    let raw_path = format!("{}.bin", stem);
+    let csv_path = format!("{}.csv", stem);
+    // THE RAW BYTES FIRST, ALWAYS. A decoder that mis-reads a marker costs a
+    // bad CSV and never the data, and a better decoder can be run over the
+    // same image later. That rule is what found both corrections to GQ's
+    // published format.
+    if let Err(e) = std::fs::write(&raw_path, &got) {
+        eprintln!("radbeeper: cannot write {} -- {}", raw_path, e);
+        return 1;
+    }
+    println!("raw    {}  ({} KiB)", raw_path, got.len() / 1024);
+    let mut text = String::from("offset,time,interval_s,count,note\n");
+    let mut rows = 0usize;
+    for r in history::records(&got) {
+        text.push_str(&format!(
+            "{},{},{},{},{}\n",
+            r.off,
+            r.when.map(clock::stamp).unwrap_or_default(),
+            r.dt.map(|d| format!("{:.4}", d)).unwrap_or_default(),
+            r.count.map(|c| c.to_string()).unwrap_or_default(),
+            r.note.replace(',', " ")
+        ));
+        rows += 1;
+    }
+    if let Err(e) = std::fs::write(&csv_path, text) {
+        eprintln!("radbeeper: cannot write {} -- {}", csv_path, e);
+        return 1;
+    }
+    println!("csv    {}  ({} rows)", csv_path, rows);
+    println!("       times are the COUNTER's clock; interval_s is the measured");
+    println!("       spacing of its samples. radbeeper backfill corrects both.");
+    if rows == 0 {
+        println!("nothing was recorded -- the counter's history may be empty.");
+    }
+    0
+}
+
 fn parse_spans(text: &str) -> Option<Vec<f64>> {
     let mut out = Vec::new();
     for part in text.split(',') {
@@ -645,6 +912,8 @@ fn usage() {
     println!("  radbeeper service          log to disk, a row every 30 seconds");
     println!("  radbeeper random           256 bits of hex, out of decay timing");
     println!("  radbeeper random --check F recompute every line in an emission log");
+    println!("  radbeeper backfill         fill the log's gaps from the counter's flash");
+    println!("  radbeeper log info|pull    what history it holds, or download it");
     println!();
     println!("  -d, --device PATH          serial port (default: search /dev)");
     println!("  -b, --baud RATE            baud (default: try 115200 then 57600)");
@@ -653,10 +922,14 @@ fn usage() {
     println!("      --duration SECONDS     stop after this long");
     println!("      --log-every SECONDS    row spacing for service (default {})",
              log::g(log::DEFAULT_LOG_EVERY));
-    println!("      --logs DIR             where service writes (default: the");
-    println!("                             state directory)");
+    println!("      --logs DIR             where service and backfill write");
+    println!("      --image FILE           backfill from a saved .bin, no counter");
+    println!("      --serial SERIAL        which counter an image came from");
+    println!("      --bytes N              how much flash to read");
+    println!("      --max-gap SECONDS      a longer hole ends the averages");
+    println!("  -o, --output STEM          where log pull writes .bin and .csv");
     println!();
-    println!("backfill, export, site, recompute and hotplug are in the");
+    println!("export, site, recompute and hotplug are in the");
     println!("Python program in the same repository. They are being ported; the");
     println!("log format is here already, and tests/test_differential.py is what");
     println!("says it is the same format and not a second dialect of it.");
@@ -673,6 +946,12 @@ fn main() {
     let mut log_every = log::DEFAULT_LOG_EVERY;
     let mut logs: Option<std::path::PathBuf> = None;
     let mut check: Option<std::path::PathBuf> = None;
+    let mut image: Option<std::path::PathBuf> = None;
+    let mut bytes: Option<usize> = None;
+    let mut max_gap = 300.0f64;
+    let mut output: Option<String> = None;
+    let mut log_action = "info".to_string();
+    let mut serial: Option<String> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -710,7 +989,15 @@ fn main() {
                 log_every = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(log_every)
             }
             "--check" => check = next(&mut i).map(std::path::PathBuf::from),
-            "backfill" | "export" | "site" | "hotplug" | "log" => {
+            "--image" => image = next(&mut i).map(std::path::PathBuf::from),
+            "--serial" => serial = next(&mut i),
+            "--bytes" => bytes = next(&mut i).and_then(|v| v.parse().ok()),
+            "--max-gap" => {
+                max_gap = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(max_gap)
+            }
+            "-o" | "--output" => output = next(&mut i),
+            "info" | "pull" if command == "log" => log_action = a.to_string(),
+            "export" | "site" | "hotplug" => {
                 eprintln!(
                     "radbeeper: `{}` is not in the Rust build -- it writes the log\n\
                      format, which the Python program owns. Use that one:\n\
@@ -732,6 +1019,17 @@ fn main() {
         return;
     }
 
+    if command == "backfill" {
+        std::process::exit(backfill_cmd(
+            &spans, log_every, max_gap, bytes.unwrap_or(64 * 1024),
+            device.as_deref(), baud, logs, image.as_deref(),
+            serial.as_deref(), output.as_deref(),
+        ));
+    }
+    if command == "log" {
+        std::process::exit(log_cmd(&log_action, bytes, output.as_deref(),
+                                   device.as_deref(), baud));
+    }
     if command == "random" {
         // --check needs no hardware, so it runs before anything looks for a
         // counter: an audit of a file from another machine is the ordinary

@@ -12,6 +12,7 @@ use std::time::Duration;
 pub const BAUD_RATES: [u32; 2] = [115200, 57600];
 pub const COUNT_MASK: u16 = 0x3FFF;
 pub const DEFAULT_CPM_PER_USVH: f64 = 151.5;
+pub const SPIR_CHUNK: usize = 2048;
 
 pub struct Counter {
     port: Serial,
@@ -98,10 +99,64 @@ impl Counter {
         })
     }
 
+    /// How much history flash the model carries.
+    pub fn flash_size(&self) -> usize {
+        match self.model().as_str() {
+            "GMC-320" | "GMC-500" | "GMC-600" => 0x100000,
+            _ => 0x10000,
+        }
+    }
+
+    /// `length` bytes of the history flash from `address`.
+    ///
+    /// The reply has no framing, so each chunk asks for exactly what it
+    /// expects and stops short rather than falling out of step with the
+    /// device -- a short read here is the end of what the counter will give,
+    /// not something to retry into.
+    pub fn read_history(&self, address: usize, length: usize) -> Vec<u8> {
+        let mut out = Vec::with_capacity(length);
+        while out.len() < length {
+            let n = SPIR_CHUNK.min(length - out.len());
+            let a = address + out.len();
+            let mut cmd = b"<SPIR".to_vec();
+            cmd.push(((a >> 16) & 0xFF) as u8);
+            cmd.push(((a >> 8) & 0xFF) as u8);
+            cmd.push((a & 0xFF) as u8);
+            cmd.push(((n >> 8) & 0xFF) as u8);
+            cmd.push((n & 0xFF) as u8);
+            cmd.extend_from_slice(b">>");
+            self.port.flush_input();
+            let _ = self.port.write_all(&cmd);
+            let chunk = self
+                .port
+                .read_exact_or_timeout(n, Duration::from_millis(5000));
+            if chunk.is_empty() {
+                break;
+            }
+            let short = chunk.len() < n;
+            out.extend_from_slice(&chunk);
+            if short {
+                break;
+            }
+        }
+        out
+    }
+
     pub fn heartbeat(&self, on: bool) {
+        self.port.flush_input();
         let _ = self
             .port
             .write_all(if on { b"<HEARTBEAT1>>" } else { b"<HEARTBEAT0>>" });
+        if !on {
+            // THE DEVICE MAY ALREADY HAVE QUEUED A SAMPLE. Turning the
+            // stream off does not unsend the two bytes already on their way,
+            // and the next thing to open this port asks <GETVER>> and could
+            // read them as its answer. The Python has done this since the
+            // beginning; this is parity with it. Costs a fifth of a second,
+            // once, at the end of a session.
+            std::thread::sleep(Duration::from_millis(200));
+            self.port.flush_input();
+        }
     }
 
     /// One counts-per-second sample, or None if the counter went quiet.

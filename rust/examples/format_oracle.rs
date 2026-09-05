@@ -20,7 +20,10 @@
 //   pack <count,count,...>                 counts as hex nibbles
 //   mcv <count,count,...>                  measured min-entropy per sample
 //   poisson <rate>                         what the model would have claimed
-use radbeeper::{clock, entropy, log, sha256};
+//   history <hex image>                    every decoded record, one per line
+//   rows <hex image> <spans> <every> <max gap> <offset>
+//                                          the log rows a backfill would fold in
+use radbeeper::{clock, entropy, history, log, sha256};
 use std::io::Read;
 
 fn opts(text: &str) -> Vec<Option<f64>> {
@@ -98,6 +101,51 @@ fn main() {
                 e.counts = entropy::unpack_counts(f[3]);
                 e.total = e.counts.iter().map(|c| *c as u64).sum();
                 println!("{}", e.digest(f[1].parse().unwrap()));
+            }
+            "history" => {
+                let blob: Vec<u8> = f[1]
+                    .as_bytes()
+                    .chunks(2)
+                    .map(|p| {
+                        u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16)
+                            .unwrap()
+                    })
+                    .collect();
+                for r in history::records(&blob) {
+                    println!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        r.off,
+                        r.when.map(|w| format!("{:.6}", w))
+                            .unwrap_or_else(|| "-".into()),
+                        r.dt.map(|d| format!("{:.9}", d))
+                            .unwrap_or_else(|| "-".into()),
+                        r.count.map(|c| c.to_string())
+                            .unwrap_or_else(|| "-".into()),
+                        r.note
+                    );
+                }
+                println!("--");
+            }
+            "rows" => {
+                let blob: Vec<u8> = f[1]
+                    .as_bytes()
+                    .chunks(2)
+                    .map(|p| {
+                        u8::from_str_radix(std::str::from_utf8(p).unwrap(), 16)
+                            .unwrap()
+                    })
+                    .collect();
+                let spans = floats(f[2]);
+                let mut s = history::samples(&blob, f[5].parse().unwrap());
+                s.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+                let none = |_: f64| String::new();
+                for (_when, line) in history::rows_from_samples(
+                    &s, &spans, f[3].parse().unwrap(), f[4].parse().unwrap(),
+                    log::SRC_FLASH, &none,
+                ) {
+                    println!("{}", line);
+                }
+                println!("--");
             }
             other => panic!("unknown directive {:?}", other),
         }
