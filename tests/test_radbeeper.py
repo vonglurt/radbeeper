@@ -383,15 +383,16 @@ class TestService(unittest.TestCase):
         head = lines[0]
 
         self.assertEqual(head, "#time\tcps\tcounts\tseconds"
-                               "\tcpm_3\tcpm_30\tcpm_300"
-                               "\tpeak_3\tpeak_30\tpeak_300\tsrc\tsite")
+                               "\tcpm_3\tcpm_30\tcpm_300\tcpm_3000"
+                               "\tpeak_3\tpeak_30\tpeak_300\tpeak_3000"
+                               "\tsrc\tsite")
         # Every row is the full width, trailing empties included, or a column
         # count is not a reliable way to read the file.
         for r in rows:
-            self.assertEqual(len(r.split("\t")), 12)
+            self.assertEqual(len(r.split("\t")), 14)
         # And every one of them says it was measured here, not reconstructed.
         for r in rows:
-            self.assertEqual(r.split("\t")[10], radbeeper.SRC_LIVE)
+            self.assertEqual(r.split("\t")[12], radbeeper.SRC_LIVE)
         # A row every 2s over ~9s is a handful, NOT one per second. This is
         # the whole point of the change and the cheapest thing to regress.
         self.assertLessEqual(len(rows), 6)
@@ -783,6 +784,46 @@ class TestDatedLogs(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(self.tmp)),
                          ["cpm-A1-2026-08.tsv", "cpm-A1-2026-09.tsv"])
 
+    def test_columns_move_by_name_when_a_span_is_added(self):
+        # THE BUG THIS EXISTS FOR. Adding a span inserts cpm_3000 after
+        # cpm_300 and peak_3000 after peak_300 -- in the middle of the row,
+        # twice. Padding on the right slid every value after the insertion
+        # point one column left and wrote a counter's `src` into a `peak`
+        # column. The row still parsed; it was just wrong.
+        old_names = ["time", "cps", "counts", "seconds", "cpm_3", "cpm_30",
+                     "cpm_300", "peak_3", "peak_30", "peak_300", "src", "site"]
+        new_names = ["time", "cps", "counts", "seconds", "cpm_3", "cpm_30",
+                     "cpm_300", "cpm_3000", "peak_3", "peak_30", "peak_300",
+                     "peak_3000", "src", "site"]
+        row = ["2026-08-24T02:37:00", "0.994", "22", "22.1", "80.0", "", "",
+               "160.0", "", "", "flash", "here"]
+        got = radbeeper.align_row(row, old_names, new_names)
+        self.assertEqual(len(got), len(new_names))
+        by = dict(zip(new_names, got))
+        self.assertEqual(by["cpm_3"], "80.0")
+        self.assertEqual(by["peak_3"], "160.0")
+        self.assertEqual(by["src"], "flash")     # not in a peak column
+        self.assertEqual(by["site"], "here")
+        self.assertEqual(by["cpm_3000"], "")     # new, and honestly empty
+        self.assertEqual(by["peak_3000"], "")
+
+    def test_a_log_is_read_under_its_own_header(self):
+        import tempfile
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "cpm-A1-2026-08.tsv")
+        with open(path, "w") as f:
+            f.write("#time\tcps\tcounts\tseconds\tcpm_3\tpeak_3\tsrc\n")
+            f.write("2026-08-24T02:37:00\t0.9\t22\t22.1\t80.0\t160.0"
+                    "\tflash\n")
+        to = radbeeper.log_columns(radbeeper.log_header((3, 30)))
+        rows = radbeeper.read_table(path, to)
+        self.assertEqual(len(rows), 1)
+        by = dict(zip(to, rows[0][1]))
+        self.assertEqual(by["cpm_3"], "80.0")
+        self.assertEqual(by["peak_3"], "160.0")
+        self.assertEqual(by["src"], "flash")
+        self.assertEqual(by["cpm_30"], "")
+
     def test_an_undated_log_is_split_and_kept(self):
         # What an upgrade finds: one cpm.tsv in the old ten-column format,
         # spanning two months.
@@ -809,8 +850,10 @@ class TestDatedLogs(unittest.TestCase):
         with open(os.path.join(self.tmp, "cpm-A1-2026-09.tsv")) as f:
             body = [ln for ln in f.read().splitlines()
                     if not ln.startswith("#")]
-        self.assertEqual(len(body[0].split("\t")), 12)
-        self.assertEqual(body[0].split("\t")[10], radbeeper.SRC_LIVE)
+        names = radbeeper.log_columns(radbeeper.log_header(self.spans))
+        self.assertEqual(len(body[0].split("\t")), len(names))
+        by = dict(zip(names, body[0].split("\t")))
+        self.assertEqual(by["src"], radbeeper.SRC_LIVE)
 
     def test_splitting_an_undated_log_twice_is_harmless(self):
         class Args(object):
@@ -1381,3 +1424,119 @@ class TestEntropy(unittest.TestCase):
         grouped = radbeeper.group_hex("a" * 64)
         self.assertEqual(len(grouped.split(" ")), 8)
         self.assertEqual(grouped.replace(" ", ""), "a" * 64)
+
+
+class TestLongWindows(unittest.TestCase):
+    """A window of hours costs what a window of seconds costs.
+
+    The running sums make each window O(1) per sample, so the only thing a
+    longer one spends is the memory to hold its own samples -- which is what
+    makes a counter that has been running since Tuesday a reasonable thing to
+    ask for rather than a quadratic apology.
+    """
+
+    def test_a_very_long_window_still_fills_and_reads(self):
+        w = radbeeper.Windows((3, 3000))
+        for i in range(3001):
+            w.add(float(i), 2)
+        self.assertIsNotNone(w.average(3000))
+        self.assertAlmostEqual(w.average(3000), 2 * 60.0)
+
+    def test_it_holds_only_what_the_longest_window_needs(self):
+        w = radbeeper.Windows((3, 30, 300))
+        for i in range(5000):
+            w.add(float(i), 1)
+        # Not five thousand: only the longest span's worth, plus one so a
+        # full window is recognisable.
+        self.assertLess(len(w.samples), 320)
+
+    def test_the_cost_per_sample_does_not_grow_with_the_window(self):
+        import time as _t
+
+        def per_sample(spans, n=4000):
+            w = radbeeper.Windows(spans)
+            start = _t.time()
+            for i in range(n):
+                w.add(float(i), i % 3)
+            return (_t.time() - start) / n
+
+        short = per_sample((3, 30, 300))
+        long = per_sample((3, 30, 300, 3000))
+        # Ten times the window, nothing like ten times the work. Generous
+        # bound: this runs on whatever the CI box feels like today.
+        self.assertLess(long, short * 4)
+
+    def test_a_window_says_how_long_it_still_needs(self):
+        w = radbeeper.Windows((3, 30000))
+        for i in range(10):
+            w.add(float(i), 1)
+        self.assertIsNone(w.average(30000))
+
+
+class TestRecompute(unittest.TestCase):
+    """A window longer than the row spacing is already in the file.
+
+    Every row carries counts and seconds, so the mean rate over any stretch of
+    rows is their sum over their sum. Adding a 3000-second window to a program
+    that has been logging for a fortnight does not mean waiting a fortnight.
+    """
+
+    spans = (3, 30, 300)
+
+    def rows(self, n, counts=15, seconds=30.0, gap_at=None):
+        base = float(int(time.time() // 3000) * 3000)
+        out, t = [], base
+        for i in range(n):
+            if gap_at is not None and i == gap_at:
+                t += 3600.0                      # an hour not recorded
+            cells = radbeeper.log_row(t, counts / seconds, counts, seconds,
+                                      [None] * 3, [None] * 3,
+                                      radbeeper.SRC_LIVE, "").split("\t")
+            out.append(cells)
+            t += seconds
+        return out
+
+    def test_a_long_window_is_filled_from_the_counts_already_there(self):
+        rows = self.rows(20)                     # 20 x 30s = 600 seconds
+        filled, _w = radbeeper.recompute_rows(rows, [3, 30, 300], 10.0)
+        self.assertGreater(filled, 0)
+        # 15 counts in 30 seconds is 30 CPM, whatever the window.
+        last = rows[-1]
+        self.assertAlmostEqual(float(last[6]), 30.0, places=3)
+
+    def test_a_window_shorter_than_a_row_is_left_alone(self):
+        rows = self.rows(20)
+        radbeeper.recompute_rows(rows, [3, 30, 300], 10.0)
+        # 3s is finer than a 30s row: not in the file at any resolution.
+        self.assertEqual(rows[-1][4], "")
+
+    def test_a_measurement_is_never_overwritten(self):
+        rows = self.rows(20)
+        rows[-1][6] = "999.9"
+        radbeeper.recompute_rows(rows, [3, 30, 300], 10.0)
+        self.assertEqual(rows[-1][6], "999.9")
+
+    def test_a_window_that_is_not_covered_stays_empty(self):
+        rows = self.rows(4)                      # only 120 seconds of file
+        radbeeper.recompute_rows(rows, [3, 30, 300], 10.0)
+        self.assertEqual(rows[-1][6], "")        # 300s never covered
+
+    def test_a_gap_stops_the_window_rather_than_being_averaged_across(self):
+        # An hour the counter was not recording, in the middle of the reach of
+        # the 300-second window.
+        rows = self.rows(30, gap_at=15)
+        radbeeper.recompute_rows(rows, [3, 30, 300], 10.0)
+        self.assertEqual(rows[15][6], "")
+        # Rows just after the hole cannot reach back 300 seconds without
+        # crossing it, so they stay empty too...
+        self.assertEqual(rows[18][6], "")
+        # ...and only once 300 seconds of unbroken recording has accumulated
+        # on the far side does the column come back.
+        self.assertNotEqual(rows[29][6], "")
+
+    def test_the_peaks_are_left_empty(self):
+        rows = self.rows(20)
+        radbeeper.recompute_rows(rows, [3, 30, 300], 10.0)
+        # peak_3, peak_30, peak_300 are columns 7, 8, 9. The file records
+        # where a window got to, not the path it took between two rows.
+        self.assertEqual([rows[-1][7], rows[-1][8], rows[-1][9]], ["", "", ""])

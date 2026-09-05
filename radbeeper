@@ -1033,7 +1033,7 @@ class Windows:
     doing was measured, not guessed.
     """
 
-    def __init__(self, spans=(3, 30, 300)):
+    def __init__(self, spans=(3, 30, 300, 3000)):
         self.spans = tuple(spans)
         self.longest = max(self.spans)
         self.samples = []
@@ -1385,13 +1385,16 @@ def run_curses(counter, w, args):
             pool.add(when, counts)
             stdscr.erase()
             h, width = stdscr.getmaxyx()
-            title = "radbeeper %s -- %s" % (VERSION, counter.version)
-            stdscr.addnstr(0, 0, title, width - 1,
-                           curses.color_pair(4) if use_colour else 0)
-            stdscr.addnstr(1, 0, "%s @ %s baud   serial %s"
+            footer = {"text": "", "attr": curses.A_DIM}
+            # NO TITLE ROW. The program's own name is the one thing on this
+            # screen nobody needs telling -- they typed it -- and it was
+            # costing a row the readout can use. The firmware moves in beside
+            # the port, where somebody looks for it anyway.
+            stdscr.addnstr(0, 0, "%s @ %s baud   %s   serial %s"
                            % (counter.path, counter.baud or "n/a",
-                              counter.serial_no), width - 1, curses.A_DIM)
-            row = 3
+                              counter.version, counter.serial_no),
+                           width - 1, curses.A_DIM)
+            row = 2
             for span in w.spans:
                 cpm = w.average(span)
                 usvh = w.usvh(span, args.cpm_per_usvh)
@@ -1425,11 +1428,14 @@ def run_curses(counter, w, args):
             wide = max(len(d) for d in digits)
             # Clear of the serial on the line above, which runs to about 50.
             left = 54
-            if width > left + wide + 6 and h > 2 + BIG_ROWS:
+            if width > left + wide + 6 and h > BIG_ROWS:
                 attr = band(headline) if headline is not None else curses.A_DIM
                 for i, line in enumerate(digits):
-                    stdscr.addnstr(1 + i, left, line, width - left - 1, attr)
+                    stdscr.addnstr(i, left, line, width - left - 1, attr)
             row += 2
+            # Three rows of air: the chart is the only picture on the screen
+            # and it was sitting straight on top of the arithmetic.
+            row += 3
             if width > 20:
                 # COLOURED BY WHAT IT MEANS, not by what it is. A column is
                 # one second, so its count times sixty is the rate it implies,
@@ -1458,11 +1464,9 @@ def run_curses(counter, w, args):
             if h > row + 5 and width > 30:
                 rel = spec.relative()
                 if not rel:
-                    left = spec.wait()
-                    stdscr.addnstr(row, 0,
-                                   "spectrum   accumulating, %ds to the first"
-                                   " window of %d" % (left, spec.window),
-                                   width - 1, curses.A_DIM)
+                    footer["text"] = ("spectrum   accumulating, %ds to the "
+                                      "first window of %d"
+                                      % (spec.wait(), spec.window))
                 else:
                     cols = spectrum_columns(rel, width - 1)
                     top, where = spec.loudest()
@@ -1482,9 +1486,14 @@ def run_curses(counter, w, args):
                         attr = ((curses.color_pair(2 if top < luck * 2 else 3)
                                  | curses.A_BOLD) if use_colour
                                 else curses.A_BOLD)
-                    stdscr.addnstr(row, 0, "spectrum   %s (%d windows)"
-                                   % (verdict, spec.runs), width - 1, attr)
-                    row += 1
+                    # THE WORDS GO TO THE FOOT OF THE SCREEN. A sentence
+                    # sitting between the chart and its own axis broke the
+                    # picture in half, and the picture is the part being read
+                    # at a glance; the sentence is what you go and look at
+                    # once something in the picture catches your eye.
+                    footer["text"] = ("spectrum   %s (%d windows)"
+                                      % (verdict, spec.runs))
+                    footer["attr"] = attr
                     # Four rows here too, and coloured by significance rather
                     # than by height: a bin twice the mean is exciting after
                     # fifty windows and meaningless after two, and the colour
@@ -1548,6 +1557,9 @@ def run_curses(counter, w, args):
                                    % ("%ds to go" % left if left is not None
                                       else "no counts yet"),
                                    width - 1, curses.A_DIM)
+            if footer["text"] and h > row + 1:
+                stdscr.addnstr(h - 2, 0, footer["text"], width - 1,
+                               footer["attr"])
             if h > row + 1:
                 stdscr.addnstr(h - 1, 0, "q to quit", width - 1, curses.A_DIM)
             stdscr.refresh()
@@ -2067,22 +2079,58 @@ def log_path(when, directory=None, serial=None):
                            time.strftime("%Y-%m", time.localtime(when))))
 
 
-def fit_row(line, width):
-    """An older row widened to the current format.
+def align_row(cells, from_names, to_names):
+    """One row re-columned from the header it was written under.
 
-    Rows written before the src column existed were all measured live, so
-    that is what they are marked. Anything of an unexpected width is left
-    exactly as found: a log is somebody's data and a format guess is not worth
-    editing it over.
+    COLUMNS ARE MATCHED BY NAME, NOT BY POSITION, and the difference is not
+    academic. Adding a span inserts `cpm_3000` after `cpm_300` and
+    `peak_3000` after `peak_300` -- in the MIDDLE of the row, twice. Padding
+    such a row on the right, which is what an earlier version of this did,
+    slid every value after the insertion point one column left and wrote a
+    counter's `src` into a `peak` column. The row still parsed. It was just
+    wrong, which is the worst way for a log to be broken.
     """
-    cells = line.split("\t")
-    if len(cells) >= width:
-        return line
-    # src was added first and site second, so a short row is missing a suffix
-    # of the columns and padding on the right restores the right meaning.
-    while len(cells) < width:
-        cells.append(SRC_LIVE if len(cells) == width - 2 else "")
-    return "\t".join(cells)
+    have = dict(zip(from_names, cells))
+    return [have.get(name, "") for name in to_names]
+
+
+def log_columns(header_line):
+    """The column names a header line declares, '#' stripped from the first."""
+    if not header_line.startswith("#"):
+        return []
+    return header_line[1:].rstrip("\n").split("\t")
+
+
+def read_table(path, to_names):
+    """(when, cells) for a log written under any header, aligned to `to_names`.
+
+    Missing columns come back empty rather than shifted.
+    """
+    from_names = to_names
+    out = []
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if line.startswith("#"):
+                    names = log_columns(line)
+                    if names:
+                        from_names = names
+                    continue
+                when = row_time(line)
+                if when is None:
+                    continue
+                cells = align_row(line.split("\t"), from_names, to_names)
+                # A file written before the src column existed predates the
+                # backfill that made the column necessary, so every row in it
+                # was measured here. That is knowledge, not a guess, and it is
+                # the one default worth filling in.
+                if "src" not in from_names and "src" in to_names:
+                    cells[to_names.index("src")] = SRC_LIVE
+                out.append((when, cells))
+    except IOError:
+        pass
+    return out
 
 
 def slot_of(when, every):
@@ -2129,7 +2177,8 @@ def merge_log(path, header, rows, every):
     file in the same directory and renamed over the original, so an
     interrupted backfill leaves the old log intact rather than half a new one.
     """
-    existing = read_log(path)
+    names = log_columns(header)
+    existing = [(w, "\t".join(cells)) for w, cells in read_table(path, names)]
     taken = set(slot_of(w, every) for w, _ in existing)
     keep = []
     added = clashed = 0
@@ -2143,9 +2192,7 @@ def merge_log(path, header, rows, every):
         added += 1
     if not added:
         return 0, clashed
-    width = len(header.split("\t"))
-    merged = sorted([(w, fit_row(ln, width)) for w, ln in existing + keep],
-                    key=lambda r: r[1])
+    merged = sorted(existing + keep, key=lambda r: r[1])
     tmp = path + ".new"
     with open(tmp, "w") as f:
         f.write(header + "\n")
@@ -2241,10 +2288,13 @@ def migrate_legacy_log(args, directory=None, serial=None):
     strength of the first run.
     """
     old = os.path.join(directory or state_dir(), LOG_NAME)
-    rows = read_log(old)
+    header = log_header(args.spans)
+    # Read under ITS OWN header, so a file written before a span was added
+    # comes across by column name rather than by position.
+    rows = [(when, "\t".join(cells)) for when, cells
+            in read_table(old, log_columns(header))]
     if not rows:
         return 0, 0
-    header = log_header(args.spans)
     files = {}
     for when, line in rows:
         files.setdefault(log_path(when, directory, serial),
@@ -2520,6 +2570,113 @@ def cmd_random(args):
                                                  suspect))
     except OSError as e:
         print("  not recorded: %s" % e)
+    return 0
+
+
+# -------------------------------------------------------------- recompute ---
+#
+# A WINDOW LONGER THAN THE ROW SPACING IS ALREADY IN THE FILE. Every row
+# carries `counts` and `seconds`, so the mean rate over any stretch of rows is
+# their sum divided by their sum -- no per-second data needed. Adding a 3000
+# second window to a program that has been logging for a fortnight therefore
+# does not mean waiting a fortnight: the column can be filled backwards from
+# what is on disk.
+#
+# WHAT CANNOT BE RECOVERED, and is left empty rather than guessed:
+#
+#   * Anything SHORTER than the row spacing. A 3-second window inside a
+#     30-second row is not in the file at any resolution, and averaging the
+#     row down to it would be inventing structure.
+#   * The PEAKS. peak_N is the highest the window reached at any instant
+#     between two rows; the file records where it got to, not the path it
+#     took. The maximum of the row-level averages is a different and smaller
+#     quantity, and writing it into a column that means something else would
+#     be worse than leaving the column empty.
+#   * Any window whose rows are not contiguous. A gap means the counter was
+#     not recording, and a mean across it would average two different
+#     afternoons and call it one number.
+def recompute_rows(rows, spans, max_gap):
+    """Fill empty window cells from the counts already in the rows.
+
+    `rows` is a list of already-split cell lists. Returns how many cells were
+    filled. Cells that hold a measurement are never touched.
+    """
+    width = 4 + 2 * len(spans) + 2
+    times, counts, seconds = [], [], []
+    for cells in rows:
+        when = row_time("\t".join(cells))
+        try:
+            counts.append(int(cells[2]))
+            seconds.append(float(cells[3]))
+        except (IndexError, ValueError):
+            counts.append(0)
+            seconds.append(0.0)
+        times.append(when if when is not None else 0.0)
+
+    filled = 0
+    for i in range(len(rows)):
+        for k, span in enumerate(spans):
+            col = 4 + k
+            if col >= len(rows[i]) or rows[i][col]:
+                continue          # measured, or the row is too short
+            if span <= seconds[i]:
+                continue          # finer than the file records
+            total_c, total_s = 0, 0.0
+            j = i
+            ok = True
+            while j >= 0 and total_s < span:
+                if j < i:
+                    # Contiguous? The next row must start where this one ended.
+                    hole = times[j + 1] - (times[j] + seconds[j])
+                    if hole > max_gap:
+                        ok = False
+                        break
+                total_c += counts[j]
+                total_s += seconds[j]
+                j -= 1
+            if not ok or total_s < span or total_s <= 0:
+                continue          # the window is not covered: leave it empty
+            rows[i][col] = "%.1f" % (total_c * 60.0 / total_s)
+            filled += 1
+    return filled, width
+
+
+def cmd_recompute(args):
+    """Fill long-window columns in existing logs from the counts in them."""
+    directory = args.logs or state_dir()
+    header = log_header(args.spans)
+    width = len(header.split("\t"))
+    files = log_files(directory)
+    if not files:
+        print("radbeeper: no dated logs in %s" % directory, file=sys.stderr)
+        return 1
+    short = [s for s in args.spans if s <= args.log_every]
+    if short:
+        print("radbeeper: %s cannot be recovered -- shorter than a %gs row"
+              % (", ".join("%gs" % s for s in short), args.log_every))
+    total = 0
+    for _serial, path in files:
+        rows = [cells for _when, cells
+                in read_table(path, log_columns(header))]
+        if not rows:
+            continue
+        filled, _w = recompute_rows(rows, list(args.spans), args.max_gap)
+        if not filled:
+            print("  %-44s nothing to fill" % os.path.basename(path))
+            continue
+        tmp = path + ".new"
+        with open(tmp, "w") as f:
+            f.write(header + "\n")
+            for cells in rows:
+                f.write("\t".join(cells) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        print("  %-44s %d cells filled" % (os.path.basename(path), filled))
+        total += filled
+    print("radbeeper: %d cells filled from counts already on disk" % total)
+    print("           peaks are left empty: the file records where a window")
+    print("           got to, not the path it took between two rows.")
     return 0
 
 
@@ -3448,8 +3605,11 @@ def build_parser():
                    help="background rate for --source sim (default 25 CPM)")
     p.add_argument("--seed", type=int, help="seed for --source sim, so a run "
                                             "can be repeated exactly")
-    p.add_argument("--spans", type=spans_arg, default=(3, 30, 300),
-                   help="averaging windows in seconds (default 3,30,300)")
+    p.add_argument("--spans", type=spans_arg, default=(3, 30, 300, 3000),
+                   help="averaging windows in seconds (default 3,30,300,3000)."
+                        " Longer costs nothing per sample -- the windows keep"
+                        " running sums, so 30000 is 8 microseconds a sample"
+                        " like the rest and about 2.8 MB of samples held")
     p.add_argument("--cpm-per-usvh", type=float, default=DEFAULT_CPM_PER_USVH,
                    help="tube conversion factor (default %.1f, the M4011)"
                         % DEFAULT_CPM_PER_USVH)
@@ -3528,6 +3688,11 @@ def build_parser():
                     help="the page's heading")
     sub.add_parser("random", help="one line of random hex, out of decay "
                                   "timing, with the accounting for it")
+    rc = sub.add_parser("recompute", help="fill long-window columns in "
+                                          "existing logs from their own counts")
+    rc.add_argument("--logs", metavar="DIR",
+                    help="where the dated logs are (default: the state "
+                         "directory)")
     st = sub.add_parser("site", help="where a counter is, and where it has "
                                      "been; naming all three moves it")
     st.add_argument("--serial", metavar="SERIAL",
@@ -3563,7 +3728,7 @@ def main(argv=None):
                 "log": cmd_log, "service": cmd_service, "window": cmd_window,
                 "hotplug": cmd_hotplug, "backfill": cmd_backfill,
                 "site": cmd_site, "export": cmd_export,
-                "random": cmd_random}
+                "random": cmd_random, "recompute": cmd_recompute}
     try:
         return handlers[args.command](args)
     except KeyboardInterrupt:

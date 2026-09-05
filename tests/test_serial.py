@@ -322,5 +322,10 @@ class TestTheFullScreenMonitor(SerialCase):
         self.assertEqual(proc.returncode, 0, err)
         self.assertNotIn("Traceback", err)
         painted = b"".join(drawn).decode("utf-8", "replace")
-        self.assertIn("radbeeper", painted)
+        # There is no title row any more -- the program's name is the one
+        # thing on that screen nobody needs telling. What must be there is
+        # the counter's identity, the readout, and the footer.
+        self.assertIn(self.dev.path, painted)
+        self.assertIn("GMC-320Re", painted)
+        self.assertIn("counts this second", painted)
         self.assertIn("q to quit", painted)

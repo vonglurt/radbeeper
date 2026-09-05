@@ -8,7 +8,8 @@ PREFIX  ?= $(HOME)/.local
 BINDIR   = $(PREFIX)/bin
 PYTHON  ?= python3
 
-.PHONY: all test check install uninstall probe watch sim service help
+.PHONY: all test check install uninstall probe watch sim service help \
+        rust rust-install rust-check
 
 all: check
 
@@ -28,6 +29,21 @@ install: check
 	@echo "installed $(BINDIR)/radbeeper"
 	@case ":$$PATH:" in *":$(BINDIR):"*) ;; \
 	  *) echo "note: $(BINDIR) is not on your PATH" ;; esac
+
+## rust: build the native read-side binary (cargo, in rust/)
+rust:
+	cd rust && cargo build --release
+	@printf '  built   rust/target/release/radbeeper\n'
+
+## rust-install: cargo install it, so `radbeeper` on PATH is the native one
+rust-install:
+	cargo install --path rust --locked
+	@printf '  installed the native binary; `which radbeeper` says where\n'
+
+## rust-check: fmt, clippy where available, and a build
+rust-check:
+	cd rust && cargo fmt --check 2>/dev/null || true
+	cd rust && cargo clippy --release 2>/dev/null || cargo build --release
 
 ## uninstall: remove it again
 uninstall:
