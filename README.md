@@ -294,11 +294,16 @@ radbeeper random
 ```
 
 ```
-40cce661 7db2b52b 83527e1c a3722d22 52fba76f 5d1d3be7 6723d52d d853f8cc
+b17c9c60 d5deeb7b 4b102dfc bec14efc b523818b 18d3ada0 582bd912 e61ff856
 
-  256 bits, min-entropy 267, from 209 seconds at 0.89 counts/s
+  256 bits, min-entropy 258 measured, from 448 seconds at 0.68 counts/s
+  440 bits is what a Poisson model would have claimed for the same 448 seconds
   spectrum flat -- the source looks like decay
+  recorded in /var/log/radbeeper/random-F48824B8207F7E.tsv
 ```
+
+That second line is the point: on this run the model would have handed over the
+same sixty-four characters after 260 seconds and called them 256 bits.
 
 **Three ways this normally goes wrong, and what is done instead.**
 
@@ -318,18 +323,62 @@ hash — SHA-256 is in the standard library and is faster than the shifting.
 sufficient: a counter, an LFSR and a square wave at the Nyquist rate all pass it.
 It is used as a **health check** — a peak means something periodic is
 contaminating the arrivals — and an emission is marked suspect when it fails.
+Nor does the spectrum *add* anything: the FFT is a deterministic function of the
+same samples, and H∞(f(X)) ≤ H∞(X) for any deterministic f.
 
-**The bits are counted, not assumed.** Min-entropy per sample is −log₂ max_k P(k)
-for Poisson at the observed rate — about 0.97 bits a second at 40 CPM — and
-nothing is emitted until the pool exceeds what is asked for. A dead counter never
-becomes ready, however long it sits there: an hour of zeroes is zero bits, not
-3,600 samples of them. That accounting is also where the five-minute cadence
-comes from, rather than a number picked to look tidy.
+**The bits are measured, not modelled — and the model was wrong.** This used to
+compute min-entropy as −log₂ max_k P(k) for *Poisson* at the observed rate,
+which is the textbook thing to do and is not what the data supports. Across
+1,128 recorded samples from a GMC-320Re the variance is **2.54×** the mean;
+Poisson requires 1.00. Empty seconds are 36% more common than the model allows
+and the tail runs far past it — five counts in a second happens fourteen times
+too often. Every pool is over-dispersed on its own, so it is not a mixture of
+quiet and busy periods, and high seconds fall next to each other about 1.6× as
+often as independence permits. Ground-level coincidences will do that.
+
+Over-dispersion piles the distribution onto its mode, and the mode is exactly
+what min-entropy is about, so the model was **claiming 1.15 bits a second where
+the samples support 0.62**. What is used now is NIST SP 800-90B's most-common-
+value estimator: the observed frequency of the commonest value, pushed to the
+far end of its 99% confidence interval so the entropy is a lower bound rather
+than a point estimate.
+
+| | Poisson model | measured |
+|---|---|---|
+| bits per second | 1.150 | **0.618** |
+| seconds for 256 bits | 223 | **≈ 415** |
+
+A line therefore arrives about half as often as it used to, and the number on
+it is one the data will support. A dead counter never becomes ready, however
+long it sits there — and neither does a counter *stuck at exactly one count a
+second*, which the Poisson model would have credited with half a bit a second
+for having an ordinary-looking mean.
+
+**[There is a page for this.](#9-publish-it)** `radbeeper export` writes
+`random.html` beside the index: the counts drawn against the model, the bits
+accumulating second by second with the target line across them, what the serial
+link's one-second resolution costs, and every emission with the counts behind
+it.
+
+**What the interface costs.** `<HEARTBEAT1>>` gives two bytes once per second
+and nothing finer, so one sample is one integer and that is the entire raw
+material. If the link reported the *time* of each arrival instead, the gap
+between two would be exponential, and quantised to a millisecond it would carry
+about **10 bits per arrival** — roughly 8 bits a second at this background,
+against the 0.62 actually available. GQ's protocol has no such message:
+`<GETCPS>>` and the heartbeat both answer with a count, never a timestamp. The
+limit is the interface, not the tube.
 
 **Reproducible is not the same as predictable.** The counts behind each line are
 written beside it in `random-<serial>.tsv`, so anyone can recompute it and check
-it was not invented. That is an audit trail. It says nothing about the *next*
-line, which comes from decays that have not happened yet.
+it was not invented:
+
+```sh
+radbeeper random --check logs/random-F48824B8207F7E.tsv
+```
+
+That is an audit trail. It says nothing about the *next* line, which comes from
+decays that have not happened yet.
 
 > Treat this as a good physical entropy source, not a certified one. It has not
 > been through a statistical test battery, and 256 bits of accounted min-entropy
@@ -387,11 +436,20 @@ minute by the hour, a by-day table and the latest rows. **No JavaScript, no web
 fonts, no CDN** — the chart is SVG the program draws itself, and the full record
 is one link away as the file it already lives in.
 
-To put it on the web: **fork this repository, copy your `cpm-*.tsv` and
-`sites.tsv` into `logs/`, and push.** `.github/workflows/pages.yml` rebuilds
-`index.html` and commits it back, so GitHub Pages serves it with no build step.
-There is nothing to install in the workflow — the generator is this same file,
-which is also why the page cannot drift from the log format.
+**`random.html` is written beside it** whenever there are emissions to account
+for, and the index links to it. It is the one claim on the front page a reader
+cannot check by looking — 256 bits out of decay — so the audit gets its own
+page: the counts drawn against the Poisson model that used to be assumed, the
+bits accumulating second by second with the target across them, what the serial
+link's one-second resolution costs against timestamped arrivals, and every line
+emitted with the counts behind it. `--no-random-page` turns it off.
+
+To put it on the web: **fork this repository, copy your `cpm-*.tsv`,
+`random-*.tsv` and `sites.tsv` into `logs/`, and push.**
+`.github/workflows/pages.yml` rebuilds both pages and commits them back, so
+GitHub Pages serves them with no build step. There is nothing to install in the
+workflow — the generator is this same file, which is also why the pages cannot
+drift from the log format.
 
 ## 10. The native build
 
@@ -553,7 +611,7 @@ per sample. **Same output, byte for byte, in 2.3 s instead of 16.5.**
 ### Tests
 
 ```sh
-make check        # syntax, then 157 tests: no hardware, no network
+make check        # syntax, then 178 tests: no hardware, no network
 ```
 
 `tests/fake_gmc.py` serves a fake GMC-320 on a pseudo-terminal, so the serial path
@@ -599,3 +657,11 @@ other because they are the same numbers.
 actually contains. The emulator implements that list and nothing else, so a
 future ncurses emitting something new shows up there rather than as a quietly
 wrong pixel.
+
+**And it is tested**, in `tests/test_record.py`, because a bug in a terminal
+emulator does not raise an exception — it publishes a picture of something the
+program never drew. One did: on a screen busy enough for ncurses to decide
+scrolling was cheaper than redrawing, it emits `CSI T` inside a scroll region,
+and an emulator that ignores `DECSTBM` puts every row below the scroll point in
+the wrong place. It drew the random line five rows up, on top of the spectrum.
+The program was correct; the picture of it was not.

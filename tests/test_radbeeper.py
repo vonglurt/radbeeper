@@ -1035,6 +1035,91 @@ class TestExport(unittest.TestCase):
         self.assertIn("&lt;script&gt;", html)
 
 
+class TestRandomPage(unittest.TestCase):
+    """The audit page, which exists because the front page makes a claim.
+
+    "256 bits out of decay" is the one thing on the index a reader cannot
+    check by looking, so the counts, the estimate, the model it replaced and
+    every emitted line go on a page of their own.
+    """
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        rng = random.Random(3)
+        self.pools = []
+        for seq in range(3):
+            pool = radbeeper.Entropy(bits=256)
+            while not pool.ready():
+                pool.add(0.0, rng.randint(0, 3))
+            _text, record = pool.draw()
+            radbeeper.write_entropy(record, "A1", suspect=False)
+            self.pools.append(record)
+        # write_entropy goes to the state directory; put a copy where the
+        # export will look for it.
+        self.path = os.path.join(self.tmp, "random-A1.tsv")
+        src = os.path.join(radbeeper.state_dir(), "random-A1.tsv")
+        with open(src) as f, open(self.path, "w") as g:
+            g.write(f.read())
+        os.unlink(src)
+
+    def test_an_emission_log_is_found_and_read_back(self):
+        self.assertEqual([s for s, _p in radbeeper.random_files(self.tmp)],
+                         ["A1"])
+        rows = radbeeper.read_random(self.path)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(len(rows[0]["hex"]), 64)
+        self.assertEqual(len(rows[0]["counts"]), rows[0]["seconds"])
+
+    def test_every_line_recomputes_from_the_counts_beside_it(self):
+        self.assertEqual(radbeeper.check_random_log(self.path), 0)
+
+    def test_a_tampered_line_is_caught(self):
+        with open(self.path) as f:
+            rows = f.read().splitlines()
+        cells = rows[1].split("\t")
+        cells[7] = ("2" if cells[7][0] != "2" else "3") + cells[7][1:]
+        rows[1] = "\t".join(cells)
+        with open(self.path, "w") as f:
+            f.write("\n".join(rows) + "\n")
+        self.assertEqual(radbeeper.check_random_log(self.path), 1)
+
+    def test_the_budget_reports_measured_and_modelled_side_by_side(self):
+        rows = radbeeper.read_random(self.path)
+        b = radbeeper.entropy_budget([x for r in rows for x in r["counts"]])
+        self.assertGreater(b["measured"], 0)
+        self.assertGreater(b["modelled"], 0)
+        # A uniform 0..3 source is under-dispersed against Poisson at the
+        # same mean, so here the model happens to be the pessimistic one.
+        # What the page promises is both numbers, not a fixed ordering.
+        self.assertAlmostEqual(b["ratio"], b["modelled"] / b["measured"], 6)
+        self.assertAlmostEqual(b["seconds_for"],
+                               radbeeper.ENTROPY_BITS / b["measured"], 6)
+
+    def test_the_page_carries_the_lines_and_the_arithmetic(self):
+        rows = radbeeper.read_random(self.path)
+        html = radbeeper.render_random_html("A1", rows)
+        self.assertTrue(html.startswith("<!doctype html>"))
+        self.assertIn("A1", html)
+        for r in rows:
+            self.assertIn(radbeeper.group_hex(r["hex"]), html)
+        self.assertIn("SP 800-90B", html)
+        self.assertIn("bits per second", html)
+        # No page without the caveat on it.
+        self.assertIn("not a certified one", html)
+
+    def test_a_serial_with_markup_in_it_is_escaped(self):
+        rows = radbeeper.read_random(self.path)
+        html = radbeeper.render_random_html("<script>x</script>", rows)
+        self.assertNotIn("<script>x</script>", html)
+        self.assertIn("&lt;script&gt;", html)
+
+    def test_the_page_says_so_rather_than_breaking_with_nothing_to_show(self):
+        html = radbeeper.render_random_html("A1", [])
+        self.assertIn("No emissions recorded", html)
+        self.assertTrue(html.rstrip().endswith("</html>"))
+
+
 class TestSpectrum(unittest.TestCase):
     """The accumulating spectrum, and why a flat one is the good answer.
 
@@ -1345,15 +1430,64 @@ class TestEntropy(unittest.TestCase):
         self.assertGreater(radbeeper.poisson_min_entropy(10.0),
                            radbeeper.poisson_min_entropy(0.67))
 
+    def test_the_worth_of_a_sample_is_measured_not_modelled(self):
+        # The estimator is SP 800-90B's most-common-value bound, and the
+        # thing it buys is that it cannot be fooled by a source that has the
+        # right average and none of the variation.
+        even = [0, 1, 2, 3] * 100
+        self.assertGreater(radbeeper.mcv_min_entropy(even), 1.5)
+        # Over-dispersed: same mean, piled onto its mode. Less entropy, and
+        # the estimator says so where the Poisson formula would not.
+        lumpy = ([0] * 300) + ([6] * 100)
+        self.assertLess(radbeeper.mcv_min_entropy(lumpy),
+                        radbeeper.mcv_min_entropy(even))
+        # Too few samples to bound anything is reported as nothing, not as a
+        # guess: the bound is only allowed to make the entropy smaller.
+        self.assertEqual(radbeeper.mcv_min_entropy([0, 1]), 0.0)
+        self.assertEqual(radbeeper.mcv_min_entropy([]), 0.0)
+
+    def test_a_counter_stuck_at_one_count_a_second_earns_nothing(self):
+        # THE CASE THE POISSON MODEL GOT WRONG. A tube reporting exactly one
+        # count every second has a perfectly ordinary rate and no randomness
+        # whatsoever, and the model credited it with half a bit a second
+        # because it only ever looked at the mean.
+        pool = radbeeper.Entropy(bits=256)
+        for i in range(3600):
+            pool.add(float(i), 1)
+        self.assertEqual(pool.bits(), 0.0)
+        self.assertFalse(pool.ready())
+        self.assertIsNone(pool.wait())
+        # The model it replaced would have called this an hour of good bits.
+        self.assertGreater(pool.model_bits(), 256)
+
     def test_it_will_not_hand_over_bits_it_has_not_earned(self):
+        rng = random.Random(11)
         pool = radbeeper.Entropy(bits=256)
         for i in range(50):
-            pool.add(float(i), 1)
+            pool.add(float(i), rng.randint(0, 3))
         self.assertFalse(pool.ready())
         self.assertGreater(pool.wait(), 0)
         for i in range(50, 400):
-            pool.add(float(i), 1)
+            pool.add(float(i), rng.randint(0, 3))
         self.assertTrue(pool.ready())
+
+    def test_the_countdown_only_ever_overruns(self):
+        # It is projected at the entropy per sample measured so far, and that
+        # figure rises as the confidence bound tightens, so the wait quoted
+        # is never shorter than the wait served.
+        rng = random.Random(5)
+        pool = radbeeper.Entropy(bits=256)
+        quoted = None
+        served = 0
+        while not pool.ready():
+            pool.add(float(served), rng.randint(0, 3))
+            served += 1
+            if quoted is None and served == 60:
+                quoted = pool.wait() + served
+            if served > 5000:
+                self.fail("pool never filled")
+        self.assertIsNotNone(quoted)
+        self.assertGreaterEqual(quoted, served)
 
     def test_a_dead_counter_never_becomes_ready(self):
         # Zero counts for an hour is zero entropy, not 3600 samples of it.

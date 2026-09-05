@@ -30,6 +30,7 @@
 #  goes looking for a leak.
 import argparse
 import cmath
+import collections
 import hashlib
 import errno
 import fcntl
@@ -925,6 +926,39 @@ def poisson_min_entropy(rate):
     return -math.log(best, 2)
 
 
+def mcv_min_entropy(counts, confidence=2.576):
+    """Measured min-entropy per sample, bits. NIST SP 800-90B section 6.3.1.
+
+    WHY NOT THE POISSON FORMULA THIS USED TO USE. Decay is Poisson; the
+    per-second counts coming back over the serial link measurably are not.
+    Across 1,128 recorded samples from a GMC-320Re the variance is 2.54x the
+    mean -- Poisson requires 1.00 -- with 36% too many empty seconds and a
+    tail that runs to fourteen times the modelled rate at k=5. Every pool is
+    over-dispersed on its own, so it is not a mixture of quiet and busy
+    periods, and high seconds fall next to each other about 1.6 times as
+    often as independence allows. Ground-level coincidences will do that.
+
+    Over-dispersion concentrates the distribution on its mode, and the mode
+    is what min-entropy is about, so the model was claiming 1.15 bits a
+    second where the data supports 0.62. This estimator asks the samples
+    instead: the frequency of the most common value, pushed to the far end of
+    its 99% confidence interval so that the entropy is a LOWER bound rather
+    than a point estimate.
+
+    Returns 0.0 until there are enough samples for the bound to say anything,
+    which at background is about a dozen seconds.
+    """
+    n = len(counts)
+    if n < 2:
+        return 0.0
+    most = max(collections.Counter(counts).values())
+    p = most / float(n)
+    upper = p + confidence * math.sqrt(p * (1.0 - p) / (n - 1))
+    if upper >= 1.0:
+        return 0.0
+    return -math.log(upper, 2)
+
+
 class Entropy:
     """Random bits from decay timing, with the accounting to justify them."""
 
@@ -940,23 +974,48 @@ class Entropy:
 
     def add(self, when, counts):
         if self.started is None:
-            self.started = when
+            # WALL CLOCK, NOT THE MONOTONIC STAMP THE SAMPLES CARRY. This
+            # value goes into the digest and into the emission log, and the
+            # samples arrive stamped with time.monotonic() -- seconds since
+            # this machine booted. Writing that as an epoch is how every row
+            # in the log came to say 1969-12-31, and a reader recomputing a
+            # line next month has no way to recover a boot-relative number.
+            self.started = time.time()
         self.counts.append(int(counts))
         self.total += int(counts)
 
     def rate(self):
         return self.total / float(len(self.counts)) if self.counts else 0.0
 
+    def per_sample(self):
+        """Measured min-entropy per sample. 0.0 while it cannot yet tell."""
+        return mcv_min_entropy(self.counts)
+
     def bits(self):
-        """The pool's min-entropy, in bits, at the rate it was collected."""
+        """The pool's min-entropy, in bits, as measured from the samples."""
+        return self.per_sample() * len(self.counts)
+
+    def model_bits(self):
+        """What the Poisson model would claim, kept only for the comparison.
+
+        Nothing is emitted on the strength of this number. It is reported
+        beside the measured one so the gap between them is visible rather
+        than argued about.
+        """
         return poisson_min_entropy(self.rate()) * len(self.counts)
 
     def ready(self):
         return self.bits() >= self.want
 
     def wait(self):
-        """Seconds still needed, at the rate seen so far."""
-        per = poisson_min_entropy(self.rate())
+        """Seconds still needed, at the entropy per sample measured so far.
+
+        Deliberately pessimistic: the confidence bound tightens as samples
+        arrive, so bits per sample rises slightly and the true wait is a
+        little shorter than this says. A countdown that overruns is a worse
+        thing to put on a screen than one that finishes early.
+        """
+        per = self.per_sample()
         if per <= 0:
             return None
         return max(0, int(math.ceil((self.want - self.bits()) / per)))
@@ -1001,6 +1060,11 @@ def unpack_counts(text):
     return [int(ch, 16) for ch in text]
 
 
+def pool_bits_modelled(record):
+    """What Poisson at the observed rate would have claimed for this pool."""
+    return poisson_min_entropy(record["rate"]) * record["seconds"]
+
+
 def check_entropy_record(record):
     """Recompute a line from the counts recorded beside it."""
     e = Entropy()
@@ -1008,6 +1072,21 @@ def check_entropy_record(record):
     e.counts = unpack_counts(record["counts"])
     e.total = sum(e.counts)
     return e.digest(record["seq"]) == record["hex"]
+
+
+def pool_status(pool, prefix="next in "):
+    """Where the pool has got to, in the words each state deserves.
+
+    Three states, and they are not the same thing: nothing has arrived yet,
+    something has but not enough of it to measure the source, or the source
+    is measured and there is a number of seconds to say.
+    """
+    left = pool.wait()
+    if left is not None:
+        return "%s%ds" % (prefix, left)
+    if not pool.counts:
+        return "no counts yet"
+    return "measuring the source (%ds)" % len(pool.counts)
 
 
 def group_hex(text, size=8, sep=" "):
@@ -1547,8 +1626,13 @@ def run_curses(counter, w, args):
                                    width - 1,
                                    curses.color_pair(4) if use_colour else 0)
                     if h > row + 2:
-                        note = ("%d bits from decay at %s%s"
+                        # THE COUNTDOWN KEEPS RUNNING. The line stayed on
+                        # screen with no indication of whether the next one
+                        # was a minute away or eight, which is the one thing
+                        # somebody watching it wants to know.
+                        note = ("%d bits from decay at %s   %s%s"
                                 % (args.entropy_bits, shown["at"],
+                                   pool_status(pool),
                                    "  -- SPECTRUM NOT FLAT, treat as suspect"
                                    if shown["suspect"] else ""))
                         stdscr.addnstr(row + 1, 9, note, width - 10,
@@ -1556,10 +1640,7 @@ def run_curses(counter, w, args):
                                        if (shown["suspect"] and use_colour)
                                        else curses.A_DIM)
                 else:
-                    left = pool.wait()
-                    stdscr.addnstr(row, 0, "random   collecting, %s"
-                                   % ("%ds to go" % left if left is not None
-                                      else "no counts yet"),
+                    stdscr.addnstr(row, 0, "random   " + pool_status(pool),
                                    width - 1, curses.A_DIM)
             if footer["text"] and h > row + 1:
                 stdscr.addnstr(h - 2, 0, footer["text"], width - 1,
@@ -2526,8 +2607,45 @@ def write_entropy(record, serial, suspect):
     return path
 
 
+def check_random_log(path):
+    """Recompute every emission from the counts written beside it.
+
+    This is the whole of the audit trail's promise: a line that cannot be
+    recomputed from its own counts was invented, and one that can was not.
+    It proves nothing about the NEXT line, which is the point -- that one
+    comes from decays that have not happened.
+    """
+    pools = read_random(path)
+    if not pools:
+        print("radbeeper: no emissions in %s" % path, file=sys.stderr)
+        return 1
+    bad = 0
+    for p in pools:
+        record = {"seq": p["seq"], "started": 0, "hex": p["hex"],
+                  "counts": pack_counts(p["counts"])}
+        # The pool's opening second is part of the digest, and the log keeps
+        # it as local time; recover the epoch it was written from.
+        try:
+            record["started"] = int(time.mktime(
+                time.strptime(p["time"], "%Y-%m-%dT%H:%M:%S")))
+        except ValueError:
+            record["started"] = 0
+        ok = check_entropy_record(record)
+        measured = mcv_min_entropy(p["counts"])
+        print("  seq %-4d %-20s %4ds  %.3f bits/s  %s"
+              % (p["seq"], p["time"], p["seconds"], measured,
+                 "recomputes" if ok else "DOES NOT RECOMPUTE"))
+        if not ok:
+            bad += 1
+    print("radbeeper: %d of %d emissions recompute from their own counts"
+          % (len(pools) - bad, len(pools)))
+    return 1 if bad else 0
+
+
 def cmd_random(args):
     """Collect until the pool has earned the bits, then print one line."""
+    if getattr(args, "check", None):
+        return check_random_log(args.check)
     try:
         counter = open_counter(args)
     except NotFound as e:
@@ -2539,12 +2657,17 @@ def cmd_random(args):
     print("radbeeper: collecting %d bits from %s"
           % (args.entropy_bits, counter.path))
     try:
+        first = None
         for when, counts in counter.samples():
+            if first is None:
+                first = when
             pool.add(when, counts)
             ladder.add(counts)
             if pool.ready():
                 break
-            if args.duration and when - (pool.started or when) >= args.duration:
+            # Monotonic against monotonic: the pool's own opening time is
+            # wall clock now, and the two are not comparable.
+            if args.duration and when - first >= args.duration:
                 break
     except KeyboardInterrupt:
         pass
@@ -2563,9 +2686,14 @@ def cmd_random(args):
     print()
     print(group_hex(text))
     print()
-    print("  %d bits, min-entropy %.0f, from %d seconds at %.2f counts/s"
-          % (args.entropy_bits, record["bits"], record["seconds"],
-             record["rate"]))
+    print("  %d bits, min-entropy %.0f measured, from %d seconds at %.2f "
+          "counts/s" % (args.entropy_bits, record["bits"], record["seconds"],
+                        record["rate"]))
+    # The number the old Poisson model would have printed, beside the one the
+    # samples actually support. Over-dispersed arrivals make the gap large,
+    # and it is a gap worth seeing rather than a footnote.
+    print("  %.0f bits is what a Poisson model would have claimed for the "
+          "same %d seconds" % (pool_bits_modelled(record), record["seconds"]))
     print("  spectrum %s" % ("flat -- the source looks like decay"
                              if not suspect else
                              "NOT FLAT -- something periodic; treat as suspect"))
@@ -2964,10 +3092,13 @@ def esc(text):
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
-def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
-                title="Radiation monitor", shots=None):
-    """One self-contained page: no scripts, no fetches, no web fonts."""
-    when = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t))
+def page_head(title, extra=()):
+    """The <head> and the one stylesheet both generated pages use.
+
+    Two pages that look like two different projects is how a reader
+    stops believing they came from the same program, so the rules
+    live here once and random.html adds only what is peculiar to it.
+    """
     out = []
     a = out.append
     a("<!doctype html>")
@@ -3052,7 +3183,18 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
     a("footer{color:var(--dim);font-size:.82rem;margin-top:3rem;"
       "border-top:1px solid var(--line);padding-top:1rem}")
     a("code{background:var(--card);padding:.1rem .3rem;border-radius:4px}")
+    for rule in extra:
+        a(rule)
     a("</style></head><body><main>")
+    return out
+
+
+def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
+                title="Radiation monitor", shots=None, random_link=None):
+    """One self-contained page: no scripts, no fetches, no web fonts."""
+    when = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t))
+    out = page_head(title)
+    a = out.append
     a("<h1>" + esc(title) + "</h1>")
     a("<p class=\"sub\">" + esc(TAGLINE) + " &middot; generated "
       + esc(when(time.time()))
@@ -3066,7 +3208,10 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
       "files, and <strong>this page is regenerated from those files by a "
       "GitHub Action</strong> on every push. The whole of it is forkable: copy "
       "your own logs into <code>logs/</code> and you get a page like this "
-      'one. <a href="' + HOMEPAGE + '">Source and instructions</a>.</p>')
+      'one. <a href="' + HOMEPAGE + '">Source and instructions</a>.'
+      + ((' <a href="' + esc(random_link) + '">Where the random comes '
+          "from</a>.") if random_link else "")
+      + "</p>")
 
     if not counters:
         a("<p>No logs found. Put <code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code> "
@@ -3254,6 +3399,21 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
       "process, so the simulator draws Poisson samples.</p>")
     a("<pre>radbeeper --source sim --sim-cpm 400 watch</pre>")
 
+    a("<h3>Random numbers out of decay</h3>")
+    a("<p>The monitor also keeps an entropy pool and prints a line of hex "
+      "whenever the samples have <strong>earned</strong> it. Not modelled "
+      "&mdash; measured: the counts coming back over the serial link are "
+      "measurably burstier than Poisson, so the bits per second are "
+      "estimated from the samples themselves and pushed to the far end of a "
+      "99% confidence interval before anything is emitted.</p>")
+    a("<pre>radbeeper random</pre>")
+    if random_link:
+        a('<p><a href="' + esc(random_link) + '"><strong>Where the random '
+          "comes from</strong></a> &mdash; the counts against the model, the "
+          "bits accumulating second by second, what the serial link's "
+          "one-second resolution costs, and every line emitted with the "
+          "counts behind it.</p>")
+
     a("<h3>Log it</h3>")
     a("<pre>radbeeper service</pre>")
     a("<p>A row every 30 seconds into a dated file per counter, "
@@ -3293,6 +3453,433 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
     return "\n".join(out) + "\n"
 
 
+
+# ------------------------------------------------------------- the random ---
+#
+# WHERE THE BITS COME FROM, AND WHAT THE LINK COSTS. The heartbeat gives two
+# bytes per device-second and nothing finer, so one sample is one integer:
+# how many arrivals landed in that second. That single fact sets the whole
+# budget, and it is the reason the page below spends as much space on the
+# sampling resolution as on the arithmetic.
+RANDOM_GLOB = "random-"
+
+
+def random_files(directory=None):
+    """[(serial, path)] for every emission log in a directory."""
+    d = directory or state_dir()
+    out = []
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        return out
+    for name in names:
+        if not name.startswith(RANDOM_GLOB) or not name.endswith(".tsv"):
+            continue
+        serial = name[len(RANDOM_GLOB):-len(".tsv")]
+        out.append((serial, os.path.join(d, name)))
+    return out
+
+
+def read_random(path):
+    """Emissions, oldest first, each with the counts that produced it."""
+    rows = []
+    try:
+        f = open(path)
+    except OSError:
+        return rows
+    with f:
+        for line in f:
+            if line.startswith("#") or not line.strip():
+                continue
+            c = line.rstrip("\n").split("\t")
+            if len(c) < 8:
+                continue
+            try:
+                rows.append({
+                    "seq": int(c[0]), "time": c[1], "seconds": int(c[2]),
+                    "rate": float(c[3]), "bits": float(c[4]),
+                    "flat": c[5] == "yes", "hex": c[6],
+                    "counts": unpack_counts(c[7]),
+                })
+            except ValueError:
+                continue
+    return rows
+
+
+def entropy_budget(samples):
+    """Everything the page says about a set of per-second counts.
+
+    Measured first, modelled second, and the ratio between them, because the
+    gap is the whole point: the model was the thing that used to be believed.
+    """
+    n = len(samples)
+    if n < 2:
+        return None
+    freq = collections.Counter(samples)
+    mean = sum(samples) / float(n)
+    var = sum((x - mean) ** 2 for x in samples) / (n - 1) if n > 1 else 0.0
+    most = max(freq.values())
+    measured = mcv_min_entropy(samples)
+    modelled = poisson_min_entropy(mean)
+    return {
+        "n": n, "mean": mean, "var": var,
+        "dispersion": (var / mean) if mean else 0.0,
+        "pmax": most / float(n),
+        "measured": measured, "modelled": modelled,
+        "ratio": (modelled / measured) if measured else 0.0,
+        "freq": freq,
+        "seconds_for": (ENTROPY_BITS / measured) if measured else None,
+        "seconds_modelled": (ENTROPY_BITS / modelled) if modelled else None,
+    }
+
+
+def poisson_pmf(lam, k):
+    return math.exp(-lam) * lam ** k / math.factorial(k)
+
+
+def svg_hist(freq, lam, width=1120, height=340, pad_l=54, pad_b=34, pad_t=14,
+             pad_r=12):
+    """Observed counts against the Poisson the model assumed, side by side.
+
+    A log y axis, because the interesting disagreement is in the tail: at
+    k=5 the observed bar is fourteen times the modelled one and on a linear
+    axis both are invisible.
+    """
+    n = sum(freq.values())
+    if not n:
+        return ""
+    kmax = max(max(freq), 8)
+    kmax = min(kmax, 12)
+    obs = [(freq.get(k, 0) / float(n)) for k in range(kmax + 1)]
+    exp = [poisson_pmf(lam, k) for k in range(kmax + 1)]
+    floor = 1e-5
+    lo, hi = floor, 1.0
+    span = math.log10(hi) - math.log10(lo)
+    iw = width - pad_l - pad_r
+    ih = height - pad_t - pad_b
+    slot = iw / float(kmax + 1)
+    bw = slot * 0.36
+
+    def Y(p):
+        return pad_t + ih * (1.0 - (math.log10(max(p, lo)) - math.log10(lo))
+                             / span)
+
+    out = ['<svg class="plot hist" viewBox="0 0 %d %d" width="100%%" '
+           'preserveAspectRatio="xMidYMid meet" role="img" aria-label="'
+           'observed counts per second against the Poisson model">'
+           % (width, height)]
+    for decade in (1.0, 0.1, 0.01, 0.001, 0.0001, 0.00001):
+        y = Y(decade)
+        out.append('<line class="grid" x1="%d" y1="%.1f" x2="%d" y2="%.1f"/>'
+                   % (pad_l, y, width - pad_r, y))
+        out.append('<text class="ylab" x="%d" y="%.1f">%s</text>'
+                   % (pad_l - 8, y + 4,
+                      ("%g" % decade) if decade >= 0.001 else "%.0e" % decade))
+    base = Y(floor)
+    for k in range(kmax + 1):
+        x = pad_l + slot * k + slot / 2
+        for i, (p, cls) in enumerate(((exp[k], "modelled"), (obs[k], "seen"))):
+            if p <= 0:
+                continue
+            y = Y(p)
+            out.append('<rect class="%s" x="%.1f" y="%.1f" width="%.1f" '
+                       'height="%.1f"/>'
+                       % (cls, x + (i - 1) * bw, y, bw, max(0.0, base - y)))
+        out.append('<text class="xlab" x="%.1f" y="%d">%d</text>'
+                   % (x, height - 12, k))
+    out.append('<text class="xcap" x="%d" y="%d">counts in one second</text>'
+               % (pad_l, height - 1))
+    out.append('<text class="ycap" x="%d" y="%d">share of seconds</text>'
+               % (pad_l - 46, pad_t - 2))
+    out.append("</svg>")
+    return "".join(out)
+
+
+def svg_bits(samples, want=ENTROPY_BITS, width=1120, height=320, pad_l=54,
+             pad_b=34, pad_t=14, pad_r=12):
+    """Bits accumulating against seconds: measured, and what was claimed.
+
+    The measured line starts flat -- the confidence bound says nothing until
+    there are a dozen or so samples -- then straightens as the estimate
+    settles. Where it crosses the target is when a line is emitted.
+    """
+    n = len(samples)
+    if n < 30:
+        return ""
+    step = max(1, n // 240)
+    xs, meas, model = [], [], []
+    pool = Entropy(want)
+    for i, x in enumerate(samples, 1):
+        pool.add(0.0, x)
+        if i % step and i != n:
+            continue
+        xs.append(i)
+        meas.append(pool.bits())
+        model.append(poisson_min_entropy(pool.rate()) * i)
+    hi = max(max(model), want) * 1.05
+    iw = width - pad_l - pad_r
+    ih = height - pad_t - pad_b
+    X = lambda t: pad_l + iw * t / float(n)
+    Y = lambda v: pad_t + ih * (1.0 - v / hi)
+
+    def path(ys):
+        return " ".join(("M" if i == 0 else "L") + "%.1f %.1f" % (X(x), Y(y))
+                        for i, (x, y) in enumerate(zip(xs, ys)))
+
+    out = ['<svg class="plot bits" viewBox="0 0 %d %d" width="100%%" '
+           'preserveAspectRatio="xMidYMid meet" role="img" aria-label="'
+           'bits of min-entropy accumulating against seconds">'
+           % (width, height)]
+    # A gridline every 64 bits is twenty-one labels on a long pool. Pick the
+    # coarsest step that still leaves five or more.
+    tick = next((t for t in (64, 128, 256, 512, 1024) if hi / t <= 8), 1024)
+    v = 0
+    while v <= hi:
+        y = Y(v)
+        out.append('<line class="grid" x1="%d" y1="%.1f" x2="%d" y2="%.1f"/>'
+                   % (pad_l, y, width - pad_r, y))
+        out.append('<text class="ylab" x="%d" y="%.1f">%d</text>'
+                   % (pad_l - 8, y + 4, v))
+        v += tick
+    out.append('<line class="target" x1="%d" y1="%.1f" x2="%d" y2="%.1f"/>'
+               % (pad_l, Y(want), width - pad_r, Y(want)))
+    for t in range(0, n + 1, max(60, (n // 8 // 60 or 1) * 60)):
+        if t == 0:
+            continue
+        out.append('<text class="xlab" x="%.1f" y="%d">%ds</text>'
+                   % (X(t), height - 12, t))
+    out.append('<path class="peak" d="%s"/>' % path(model))
+    out.append('<path class="mean" d="%s"/>' % path(meas))
+    out.append('<text class="ycap" x="%d" y="%d">bits</text>'
+               % (pad_l - 46, pad_t - 2))
+    out.append("</svg>")
+    return "".join(out)
+
+
+RANDOM_CSS = (
+    ".hist .seen{fill:var(--accent)}",
+    ".hist .modelled{fill:var(--dim);opacity:.45}",
+    ".bits .target{stroke:var(--warn);stroke-width:1;stroke-dasharray:4 3}",
+    ".plot .xcap{text-anchor:start;font-size:10px;letter-spacing:.05em;"
+    "text-transform:uppercase}",
+    ".ledger{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;"
+    "font-size:.78rem;word-break:break-all}",
+    ".budget td:first-child{width:52%}",
+    ".note{color:var(--dim);font-size:.85rem;max-width:68ch}",
+)
+
+
+def render_random_html(serial, pools, title="Where the random comes from",
+                       index="index.html"):
+    """The audit page: what the source is, what it is worth, and every line.
+
+    Written because the claim on the front page -- 256 bits out of decay --
+    is the one thing on it a reader cannot check by looking. Here the counts
+    behind every emission are on the page next to the emission, the estimate
+    is drawn against the model it replaced, and the arithmetic is small
+    enough to redo by hand.
+    """
+    samples = [x for p in pools for x in p["counts"]]
+    b = entropy_budget(samples)
+    out = page_head(title, RANDOM_CSS)
+    a = out.append
+    a("<h1>" + esc(title) + "</h1>")
+    a('<p class="sub">radbeeper ' + VERSION + " &middot; counter "
+      + esc(serial) + " &middot; " + str(len(pools))
+      + (" emission" if len(pools) == 1 else " emissions")
+      + " &middot; generated "
+      + esc(time.strftime("%Y-%m-%d %H:%M")) + "</p>")
+    a('<p class="lede">The moment a nucleus decays is not determined by '
+      "anything, which makes a Geiger&ndash;M&uuml;ller counter the textbook "
+      "hardware entropy source. What is <em>not</em> textbook is how much "
+      "randomness survives the journey down a serial cable, and that is what "
+      "this page is for. "
+      '<a href="' + esc(index) + '">Back to the monitor</a>.</p>')
+
+    if not b:
+        a("<p>No emissions recorded yet.</p>")
+        a("</main></body></html>")
+        return "\n".join(out)
+
+    # ---------------------------------------------------------- the link ---
+    a("<h2>What the serial link gives you</h2>")
+    a('<p class="note">Everything below follows from one line of the '
+      "protocol. <code>&lt;HEARTBEAT1&gt;&gt;</code> makes the counter send "
+      "<b>two bytes once per second</b>, and those two bytes are a count: "
+      "how many arrivals landed in that second. The device drives the clock, "
+      "so there is no drift between its second and ours &mdash; but there is "
+      "also nothing finer. <b>One integer per second is the entire raw "
+      "material.</b></p>")
+    a('<div class="tablewrap"><table class="budget"><tbody>')
+    rows = [
+        ("Link", "115200 baud &mdash; not the limit, and never has been"),
+        ("What arrives", "2 bytes per second, masked to 14 bits of count"),
+        ("Sampling resolution", "<b>1 second</b>, the finest the protocol "
+                                "offers"),
+        ("Samples measured here", "{:,}".format(b["n"])),
+        ("Mean", "%.3f counts per second" % b["mean"]),
+        ("Variance", "%.3f &mdash; Poisson requires this to equal the mean"
+                     % b["var"]),
+        ("Variance / mean", "<b>%.2f</b>, so the arrivals are over-dispersed"
+                            % b["dispersion"]),
+        ("Most common value", "%d counts, in %.1f%% of seconds"
+                              % (max(b["freq"], key=lambda k: b["freq"][k]),
+                                 100.0 * b["pmax"])),
+        ("Min-entropy, measured",
+         "<b>%.3f bits per second</b> (SP 800-90B, 99%% bound)"
+         % b["measured"]),
+        ("Min-entropy, Poisson model",
+         "%.3f bits per second &mdash; %.1f&times; too generous"
+         % (b["modelled"], b["ratio"])),
+        ("Seconds for %d bits" % ENTROPY_BITS,
+         "<b>%.0f s</b> measured, against %.0f s the model would have claimed"
+         % (b["seconds_for"], b["seconds_modelled"])),
+    ]
+    for k, v in rows:
+        a("<tr><td>" + k + "</td><td>" + v + "</td></tr>")
+    a("</tbody></table></div>")
+
+    # ------------------------------------------------- what it is not ---
+    a("<h2>Why the spectrum contributes nothing</h2>")
+    a('<p class="note">The monitor accumulates a power spectrum of the same '
+      "per-second counts, and it would be easy to think the bits come partly "
+      "from there. They do not, and cannot. The FFT is a <b>deterministic "
+      "function</b> of the samples, and for any deterministic "
+      "<i>f</i>, H<sub>&infin;</sub>(<i>f</i>(X)) &le; H<sub>&infin;</sub>(X): "
+      "a transform moves information about, it does not make any. Worse, "
+      "these coefficients come from a mean-subtracted, Hann-tapered window, "
+      "so neighbouring bins are correlated by construction &mdash; bits "
+      "pulled from them would look beautiful and carry less than they "
+      "appear to. <b>The entropy is in the counts. The spectrum is a "
+      "view of them</b>, used as a health check: a peak means something "
+      "periodic is contaminating the arrivals, and the emission is marked "
+      "suspect.</p>")
+
+    # --------------------------------------------------- the distribution ---
+    a("<h2>The counts, against the model that was assumed</h2>")
+    a('<div class="plotwrap">')
+    a(svg_hist(b["freq"], b["mean"]))
+    a("</div>")
+    a('<div class="legend"><span><i style="border-color:var(--accent)"></i>'
+      "observed</span><span><i style=\"border-color:var(--dim)\"></i>"
+      "Poisson at the same mean</span></div>")
+    # Only bins the model expected to see AT ALL. The ratio at k=10 is six
+    # figures, which is arithmetic on a denominator of nothing and reads as
+    # a mistake rather than as evidence.
+    tail = [(k, b["freq"].get(k, 0) / float(b["n"]), poisson_pmf(b["mean"], k))
+            for k in sorted(b["freq"]) if k >= 3]
+    worst = max(((k, o / e) for k, o, e in tail if e * b["n"] >= 1.0),
+                key=lambda kv: kv[1], default=None)
+    a('<p class="note">Empty seconds are <b>%.0f%% more common</b> than '
+      "Poisson allows, and the tail runs far past it%s. Both push in the "
+      "same direction: an over-dispersed distribution is piled onto its "
+      "mode, and the mode is exactly what min-entropy is about. That is why "
+      "the measured figure is smaller than the modelled one, not larger."
+      % (100.0 * (b["freq"].get(0, 0) / float(b["n"])
+                  / max(poisson_pmf(b["mean"], 0), 1e-12) - 1.0),
+         (" &mdash; %d counts in a second happens %.0f&times; more often "
+          "than the model says it should" % (worst[0], worst[1]))
+         if worst else ""))
+
+    # ----------------------------------------------------- accumulation ---
+    # Every sample recorded here, run as one pool. The individual pools were
+    # collected under the old model and stop around 220 seconds, so none of
+    # them on its own reaches the target the new estimator sets -- which is
+    # the change, and not something to illustrate by cropping the chart
+    # before the line gets there.
+    chart = svg_bits(samples)
+    if chart:
+        a("<h2>How the bits accumulate</h2>")
+        a('<div class="plotwrap">' + chart + "</div>")
+        a('<div class="legend"><span><i style="border-color:var(--accent)">'
+          "</i>measured</span><span><i style=\"border-color:var(--warn)\">"
+          "</i>Poisson model</span></div>")
+        a('<p class="note">Every second recorded here, run as one pool. The '
+          "measured line is flat at first because the confidence bound has "
+          "nothing to say until there are about a dozen samples; it then "
+          "straightens as the estimate settles, and where it crosses the "
+          "dashed target a line is emitted. The modelled line reaches that "
+          "height in roughly half the time, which is precisely the error "
+          "this replaced &mdash; and why the pools listed below, collected "
+          "while the model was believed, all stop short of it.</p>")
+
+    # ------------------------------------------------------- the ceiling ---
+    lam = b["mean"]
+    per_ms = -math.log(1.0 - math.exp(-lam * 0.001), 2) if lam > 0 else 0.0
+    a("<h2>What the resolution costs</h2>")
+    a('<p class="note">Bucketing arrivals into whole seconds throws most of '
+      "the randomness away, and it is worth knowing how much. If the link "
+      "reported the <em>time</em> of each arrival rather than a count per "
+      "second, the gap between two arrivals would be exponential, and "
+      "quantised to a millisecond it would carry about "
+      "<b>%.1f bits per arrival</b> &mdash; roughly %.0f bits a second at "
+      "this background rate, against the %.2f actually available. The "
+      "counter's protocol has no such message: <code>&lt;GETCPS&gt;&gt;</code> "
+      "and the heartbeat both answer with a count, never a timestamp. So "
+      "this is not a limit of the physics or of the tube. <b>It is the "
+      "cost of the interface</b>, and the honest thing is to measure what "
+      "gets through it rather than to claim the ceiling.</p>"
+      % (per_ms, per_ms * lam, b["measured"]))
+
+    # ---------------------------------------------------------- the audit ---
+    a("<h2>Every line, and the counts behind it</h2>")
+    a('<p class="note">Reproducible is not the same as predictable. Each '
+      "emission is SHA-256 over a label, its sequence number, the second the "
+      "pool opened, and the counts &mdash; all of which are here, so anyone "
+      "can recompute a past line and see it was not invented. That says "
+      "nothing whatever about the next one, which comes from decays that "
+      "have not happened.</p>")
+    a("<pre>radbeeper random --check "
+      + esc(RANDOM_GLOB + serial + ".tsv") + "</pre>")
+    # THE BITS COLUMN IS RECOMPUTED HERE, not read out of the file. Rows
+    # written before the estimator changed hold a Poisson figure, and a
+    # column with two different meanings in it is worse than no column. The
+    # counts are on the row, so both numbers are recoverable from what was
+    # recorded -- which is the whole argument for recording the counts.
+    a('<div class="tablewrap"><table><thead><tr>'
+      "<th>seq</th><th>opened</th><th>s</th><th>counts/s</th>"
+      "<th>bits, measured</th><th>Poisson</th><th>flat</th>"
+      "</tr></thead><tbody>")
+    stale = False
+    for p in reversed(pools):
+        when = p["time"]
+        if when < "2000":
+            # Written by a build that put time.monotonic() -- seconds since
+            # boot -- where the wall clock belonged, so every such row dates
+            # itself to 1969. The digest used the same number, so the line
+            # still recomputes; only the label was wrong.
+            when, stale = "not kept", True
+        measured = mcv_min_entropy(p["counts"]) * len(p["counts"])
+        modelled = poisson_min_entropy(p["rate"]) * len(p["counts"])
+        a("<tr><td>%d</td><td>%s</td><td>%d</td><td>%.3f</td>"
+          "<td><b>%.0f</b></td><td>%.0f</td><td>%s</td></tr>"
+          % (p["seq"], esc(when), p["seconds"], p["rate"], measured, modelled,
+             "yes" if p["flat"] else "<b>no</b>"))
+        a('<tr><td colspan="7" class="ledger">' + esc(group_hex(p["hex"]))
+          + "</td></tr>")
+    a("</tbody></table></div>")
+    if stale:
+        a('<p class="note">Rows marked <b>not kept</b> were written by a '
+          "build that recorded <code>time.monotonic()</code> &mdash; seconds "
+          "since this machine booted &mdash; where the wall clock belonged, "
+          "so they dated themselves to 1969. The digest used the same "
+          "number, so those lines still recompute; it was the label that "
+          "was wrong, and it is fixed. Those rows also stopped collecting on "
+          "the Poisson figure, which is why their measured column falls "
+          "short of %d &mdash; they are the evidence, not a warning.</p>"
+          % ENTROPY_BITS)
+    a('<p class="note"><b>Treat this as a good physical entropy source, not '
+      "a certified one.</b> It has not been through a statistical test "
+      "battery, and %d bits of measured min-entropy is a claim about the "
+      "samples that were seen, not a proof about the output.</p>"
+      % ENTROPY_BITS)
+    a("<footer>Generated by <code>radbeeper export</code> "
+      + VERSION + ". <a href=\"" + esc(index) + "\">Back to the monitor</a>."
+      "</footer>")
+    a("</main></body></html>")
+    return "\n".join(out)
+
+
 def cmd_export(args):
     directory = args.logs or state_dir()
     counters = summarise(directory, args.cpm_per_usvh)
@@ -3315,13 +3902,34 @@ def cmd_export(args):
         rel = os.path.join("docs", "screenshots", name + ext)
         if os.path.exists(os.path.join(out_dir, rel)):
             shots[name] = rel.replace(os.sep, "/")
-    html = render_html(counters, sites, args.cpm_per_usvh, args.title, shots)
     out = args.output or "index.html"
+    # The audit page, when there is anything to audit. Written first so the
+    # front page only links to it if it exists.
+    randoms = []
+    for serial, path in random_files(directory):
+        pools = read_random(path)
+        if pools:
+            randoms.append((serial, pools))
+    random_out = None
+    if randoms and not args.no_random_page:
+        random_out = args.random_output or os.path.join(
+            out_dir, "random.html")
+        serial, pools = randoms[0]
+        with open(random_out, "w") as f:
+            f.write(render_random_html(
+                serial, pools, index=os.path.basename(out)))
+    link = os.path.relpath(random_out, out_dir) if random_out else None
+    html = render_html(counters, sites, args.cpm_per_usvh, args.title, shots,
+                       random_link=link)
     with open(out, "w") as f:
         f.write(html)
     rows = sum(c["rows"] for c in counters.values())
     print("radbeeper: %s -- %d counter%s, %d rows"
           % (out, len(counters), "" if len(counters) == 1 else "s", rows))
+    if random_out:
+        print("radbeeper: %s -- %d emission%s"
+              % (random_out, len(randoms[0][1]),
+                 "" if len(randoms[0][1]) == 1 else "s"))
     return 0
 
 
@@ -3732,8 +4340,16 @@ def build_parser():
                     help="where to write the page (default index.html)")
     ex.add_argument("--title", default="Radiation monitor",
                     help="the page's heading")
-    sub.add_parser("random", help="one line of random hex, out of decay "
-                                  "timing, with the accounting for it")
+    ex.add_argument("--random-output", metavar="FILE",
+                    help="where to write the entropy audit page "
+                         "(default random.html beside the index)")
+    ex.add_argument("--no-random-page", action="store_true",
+                    help="do not write the entropy audit page")
+    rn = sub.add_parser("random", help="one line of random hex, out of decay "
+                                       "timing, with the accounting for it")
+    rn.add_argument("--check", metavar="FILE",
+                    help="recompute every line in an emission log from the "
+                         "counts recorded beside it, and say so")
     rc = sub.add_parser("recompute", help="fill long-window columns in "
                                           "existing logs from their own counts")
     rc.add_argument("--logs", metavar="DIR",

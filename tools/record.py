@@ -139,6 +139,12 @@ class Screen:
         self.cols, self.rows = cols, rows
         self.grid = [[Cell() for _ in range(cols)] for _ in range(rows)]
         self.x = self.y = 0
+        # DECSTBM. ncurses sets a region at start-up and then scrolls inside
+        # it when that is cheaper than redrawing, which is what CSI S and
+        # CSI T in a cast are. Ignoring them puts every row below the scroll
+        # point in the wrong place -- visibly, and only on busy screens.
+        self.top = 0
+        self.bot = self.rows - 1
         self.fg = None
         self.bold = self.dim = False
         self.buf = b""
@@ -155,12 +161,24 @@ class Screen:
         c.ch, c.fg, c.bold, c.dim = ch, self.fg, self.bold, self.dim
         self.x += 1
 
+    def _blank_row(self):
+        return [Cell() for _ in range(self.cols)]
+
+    def _scroll_up(self, n=1):
+        for _ in range(n):
+            del self.grid[self.top]
+            self.grid.insert(self.bot, self._blank_row())
+
+    def _scroll_down(self, n=1):
+        for _ in range(n):
+            del self.grid[self.bot]
+            self.grid.insert(self.top, self._blank_row())
+
     def _down(self):
-        if self.y + 1 < self.rows:
+        if self.y == self.bot:
+            self._scroll_up()
+        elif self.y + 1 < self.rows:
             self.y += 1
-        else:
-            self.grid.pop(0)
-            self.grid.append([Cell() for _ in range(self.cols)])
 
     def _blank(self, y, x0, x1):
         for x in range(max(0, x0), min(self.cols, x1)):
@@ -326,16 +344,31 @@ class Screen:
                 row.insert(self.x, Cell())
             del row[self.cols:]
         elif final == "L" or final == "M":
-            k = arg(0)
-            blank = [Cell() for _ in range(self.cols)]
-            for _ in range(k):
+            # Insert and delete line act on the scroll region, and do nothing
+            # at all with the cursor outside it.
+            if not (self.top <= self.y <= self.bot):
+                return
+            for _ in range(arg(0)):
                 if final == "L":
-                    self.grid.insert(self.y, list(blank))
-                    self.grid.pop()
+                    del self.grid[self.bot]
+                    self.grid.insert(self.y, self._blank_row())
                 else:
-                    self.grid.pop(self.y)
-                    self.grid.append([Cell() for _ in range(self.cols)])
-        # r (scroll region), t (window ops), l/h (modes): nothing to draw.
+                    del self.grid[self.y]
+                    self.grid.insert(self.bot, self._blank_row())
+        elif final == "S":
+            self._scroll_up(arg(0))
+        elif final == "T":
+            self._scroll_down(arg(0))
+        elif final == "r":
+            top = arg(0) - 1
+            bot = (nums[1] - 1) if len(nums) > 1 and nums[1] else self.rows - 1
+            if 0 <= top < bot < self.rows:
+                self.top, self.bot = top, bot
+            else:
+                self.top, self.bot = 0, self.rows - 1
+            # DECSTBM homes the cursor, and ncurses relies on that.
+            self.y, self.x = self.top, 0
+        # t (window ops) and l/h (modes): nothing to draw.
 
     # -- what is on it ------------------------------------------------------
     def used_rows(self):
