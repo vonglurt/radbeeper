@@ -1390,10 +1390,10 @@ def run_curses(counter, w, args):
             # screen nobody needs telling -- they typed it -- and it was
             # costing a row the readout can use. The firmware moves in beside
             # the port, where somebody looks for it anyway.
-            stdscr.addnstr(0, 0, "%s @ %s baud   %s   serial %s"
-                           % (counter.path, counter.baud or "n/a",
-                              counter.version, counter.serial_no),
-                           width - 1, curses.A_DIM)
+            head = ("%s @ %s baud   %s   serial %s"
+                    % (counter.path, counter.baud or "n/a",
+                       counter.version, counter.serial_no))
+            stdscr.addnstr(0, 0, head, width - 1, curses.A_DIM)
             row = 2
             for span in w.spans:
                 cpm = w.average(span)
@@ -1426,8 +1426,12 @@ def run_curses(counter, w, args):
             digits = big_number("--" if headline is None
                                 else "%.0f" % headline)
             wide = max(len(d) for d in digits)
-            # Clear of the serial on the line above, which runs to about 50.
-            left = 54
+            # Clear of the header, which is on the row the digits start on.
+            # This was a constant 54 and the header outgrew it: a serial is
+            # fourteen characters and the firmware moved up beside the port,
+            # so the digits were landing on top of the counter's own name.
+            # Measured, not guessed, and it cannot drift again.
+            left = len(head) + 3
             if width > left + wide + 6 and h > BIG_ROWS:
                 attr = band(headline) if headline is not None else curses.A_DIM
                 for i, line in enumerate(digits):
@@ -3153,12 +3157,51 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
               '<figcaption>%s</figcaption></figure>'
               % (esc(shots[name]), esc(caption), esc(caption)))
 
+    # The hardware first. Everything below it is a copy of a file; this is
+    # the part someone reading the page cannot supply by typing.
+    a("<h3>What you need</h3>")
+    a("<p><b>A GQ GMC-320 Plus, plugged into a USB port, switched on.</b> "
+      "That is the hardware, and no amount of software substitutes for it: "
+      "every number on this page came off a real tube over a real serial "
+      "port. A <b>GMC-300</b> works too &mdash; RadBeeper tries its 57600 "
+      "baud as well as the 320's 115200 &mdash; and a 500 or 600 is found "
+      "and read, but its tube is not an M4011, so it needs its own "
+      "<code>--cpm-per-usvh</code>.</p>")
+    a("<ul>")
+    a("<li><b>The USB cable that came with it.</b> A charge-only cable "
+      "carries no data, and is indistinguishable from an empty port until "
+      "you try another one.</li>")
+    a("<li><b>The counter switched on.</b> Its USB-serial chip is powered "
+      "by the counter, not by the bus &mdash; a flat 320 enumerates as "
+      "nothing.</li>")
+    a("<li><b>A kernel with <code>ch341</code>.</b> The 320 Plus presents "
+      "as a CH340. <code>linux-lts</code> and <code>linux-rpi</code> carry "
+      "the driver; Alpine's <code>linux-virt</code> does not, which is the "
+      "commonest reason a counter that is plugged in cannot be "
+      "found.</li>")
+    a("<li><b>Membership of <code>dialout</code>.</b> The serial node is "
+      "<code>root:dialout</code> and RadBeeper does not want root.</li>")
+    a("</ul>")
+    a("<p>Plugged in and working, Linux says so: <code>dmesg</code> ends "
+      "with <code>ch341-uart converter now attached to ttyUSB0</code> and "
+      "<code>/dev/ttyUSB0</code> exists. USB pass-through into a VM counts "
+      "&mdash; these logs came from one &mdash; provided the guest kernel "
+      "is one of the two that has the driver.</p>")
+    a("<p>No counter yet? <code>radbeeper --source sim watch</code> draws "
+      "the whole monitor against a synthetic Poisson background.</p>")
+
     a("<h3>Install</h3>")
     a("<p>One stdlib Python file. No packages, no build, nothing to compile "
       "&mdash; the install is a copy.</p>")
     a("<pre>git clone " + HOMEPAGE + ".git\n"
       "cd radbeeper &amp;&amp; make install\n\n"
       "doas adduser $USER dialout    # then log in again</pre>")
+    a("<p>The read side is also a Rust crate, if a native binary suits the "
+      "machine better: <code>cargo install radbeeper</code>, or a static "
+      "musl build from the <a href=\"" + HOMEPAGE + "/releases\">releases "
+      "page</a> for x86_64, aarch64, armv7 or the Pi Zero's armv6. It does "
+      "<code>probe</code>, <code>cpm</code> and <code>watch</code>; "
+      "everything that writes these logs stays in the Python.</p>")
 
     a("<h3>Find the counter</h3>")
     a("<pre>radbeeper probe</pre>")
@@ -3171,19 +3214,22 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
 
     a("<h3>Watch it</h3>")
     a("<pre>radbeeper watch</pre>")
-    shot("watch", "the monitor: three time constants, the counts, the "
+    shot("watch", "the monitor: four time constants, the counts, the "
                   "spectrum and a line of decay-derived random")
     shot("watch-300-320", "seconds 300 to 320 of a real session, at ten times "
                           "speed")
     a("<p>The counter's own reading is a rolling 60-second count &mdash; one "
       "number with one time constant. RadBeeper counts the blips itself and "
-      "keeps three windows at once.</p>")
+      "keeps four windows at once, each a factor of ten apart.</p>")
     a('<ul class="windows">')
     a("<li><b>3 s</b><span>Watching a source come and go as you move it. "
       "Jumpy, and honestly so.</span></li>")
     a("<li><b>30 s</b><span>Reading the room. Settled enough to compare two "
       "places.</span></li>")
     a("<li><b>300 s</b><span>A number worth writing down.</span></li>")
+    a("<li><b>3000 s</b><span>Fifty minutes. What the background here "
+      "actually is, once the day's traffic through the room has averaged "
+      "out.</span></li>")
     a("</ul>")
     a("<p><strong>A window shows nothing until it is full</strong>, and says "
       "how long it still needs. A three-second CPM built from one sample is "

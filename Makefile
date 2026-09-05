@@ -10,7 +10,7 @@ PYTHON  ?= python3
 
 .PHONY: all test check install uninstall probe watch sim service help \
         rust rust-install rust-check rust-package rust-publish-dry \
-        release-check release
+        release-check release promo promo-fast
 
 all: check
 
@@ -86,6 +86,14 @@ release: release-check
 	@echo
 	@echo "  tagged v$(V). Push it and the release workflow takes over:"
 	@echo "      git push origin main && git push origin v$(V)"
+
+## promo: re-record every screenshot in docs/ from the real program
+promo:
+	$(PYTHON) tools/promo.py $(if $(SHOTS),--only $(SHOTS))
+
+## promo-fast: the same, reusing the last monitor recording
+promo-fast:
+	$(PYTHON) tools/promo.py --keep $(if $(SHOTS),--only $(SHOTS))
 
 ## uninstall: remove it again
 uninstall:

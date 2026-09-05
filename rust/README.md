@@ -10,7 +10,7 @@ radbeeper watch
 
 This crate is the **read side** of [RadBeeper](https://github.com/vonglurt/radbeeper):
 finding a GQ GMC counter on USB, asking it what it is, and the full-screen
-monitor — three time constants at once, a coloured counts chart, an
+monitor — four time constants at once, a coloured counts chart, an
 accumulating power spectrum and the reading in twelve-row block digits.
 
 Everything that writes to the log format — `service`, `backfill`, `export`,
