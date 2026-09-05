@@ -353,3 +353,232 @@ pub fn bar_rows(values: &[f64], width: usize, height: usize) -> Vec<Vec<char>> {
         })
         .collect()
 }
+
+// ----------------------------------------------------------------- tests ---
+//
+// The crate had none. It shares a screen layout, a set of averaging windows
+// and a spectrum with the Python program, and "shares" has already meant
+// "drifted from" once: the big digits were pinned to column 54 in both, the
+// Python was fixed and this was not, so the readout was drawn through the
+// counter's serial number at every terminal width.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Samples a second apart, as the heartbeat delivers them.
+    fn fill(w: &mut Windows, counts: &[u32]) {
+        for (i, &c) in counts.iter().enumerate() {
+            w.add(i as f64, c);
+        }
+    }
+
+    #[test]
+    fn a_window_says_nothing_until_it_is_full() {
+        // NOT ZERO. The difference between "no reading yet" and "a reading of
+        // zero" is the whole reason average() returns an Option, and it
+        // matters most in the first five minutes -- which is exactly when
+        // somebody is watching.
+        let mut w = Windows::new(&[3.0, 30.0]);
+        fill(&mut w, &[1, 1, 1]);
+        assert_eq!(w.average(3.0), None, "three samples span two seconds");
+        w.add(3.0, 1);
+        assert_eq!(w.average(3.0), Some(60.0));
+        assert_eq!(w.average(30.0), None);
+    }
+
+    #[test]
+    fn cpm_is_the_windows_counts_scaled_to_a_minute() {
+        let mut w = Windows::new(&[10.0]);
+        fill(&mut w, &[2; 11]);
+        assert_eq!(w.average(10.0), Some(120.0));
+    }
+
+    #[test]
+    fn a_span_nobody_asked_for_has_no_answer() {
+        let mut w = Windows::new(&[3.0]);
+        fill(&mut w, &[1; 40]);
+        assert_eq!(w.average(300.0), None);
+    }
+
+    #[test]
+    fn the_sample_list_does_not_grow_without_bound() {
+        // One list serves every window, trimmed to the longest of them. A
+        // monitor left running for a week must not be a monitor holding a
+        // week of samples.
+        let mut w = Windows::new(&[3.0, 30.0]);
+        fill(&mut w, &[1; 600]);
+        assert!(w.samples.len() < 40, "kept {} samples", w.samples.len());
+        assert_eq!(w.total, 600);
+    }
+
+    #[test]
+    fn the_bands_are_where_the_constants_say() {
+        assert!(level(0.0) == Level::Calm);
+        assert!(level(LEVEL_RAISED - 0.1) == Level::Calm);
+        assert!(level(LEVEL_RAISED) == Level::Raised);
+        assert!(level(LEVEL_HIGH - 0.1) == Level::Raised);
+        assert!(level(LEVEL_HIGH) == Level::High);
+    }
+
+    #[test]
+    fn a_chart_is_as_tall_as_it_was_asked_for_and_as_wide_as_it_has_data() {
+        let rows = bar_rows(&[1.0, 2.0, 3.0, 4.0], 4, 5);
+        assert_eq!(rows.len(), 5);
+        for r in &rows {
+            assert_eq!(r.len(), 4);
+        }
+        // The tallest column reaches the top row; nothing reaches above it.
+        assert_eq!(rows[0][3], '█');
+        assert_eq!(rows[0][0], ' ');
+        // And the bottom row is full under every non-zero column.
+        assert_eq!(rows[4][3], '█');
+    }
+
+    #[test]
+    fn a_chart_of_nothing_is_blank_rather_than_full() {
+        // peak is floored at 1.0 precisely so a screen of zeroes does not
+        // divide by zero and does not draw a full block for every second.
+        let rows = bar_rows(&[0.0; 6], 6, 3);
+        assert_eq!(rows.len(), 3);
+        assert!(rows.iter().all(|r| r.iter().all(|&c| c == ' ')));
+    }
+
+    #[test]
+    fn a_chart_shows_the_most_recent_samples_when_there_are_too_many() {
+        let values: Vec<f64> = (0..100).map(|i| i as f64).collect();
+        let rows = bar_rows(&values, 10, 1);
+        assert_eq!(rows[0].len(), 10);
+        // The last sample is the largest, so the rightmost column is full.
+        assert_eq!(*rows[0].last().unwrap(), '█');
+    }
+
+    #[test]
+    fn the_spectrum_answers_nothing_until_it_has_a_window() {
+        let mut s = Spectrum::new(16);
+        assert_eq!(s.wait(), 16);
+        for i in 0..15 {
+            assert!(!s.add(i % 3), "fired before the window was full");
+        }
+        assert_eq!(s.wait(), 1);
+        assert!(s.add(1), "the sixteenth sample completes the window");
+        assert_eq!(s.wait(), 0);
+        assert_eq!(s.relative().len(), s.bins - 1);
+    }
+
+    #[test]
+    fn windows_half_overlap_so_two_averages_come_out_of_each_windows_data() {
+        let mut s = Spectrum::new(8);
+        let mut fired = 0;
+        for i in 0..24 {
+            if s.add((i % 5) as u32) {
+                fired += 1;
+            }
+        }
+        // 24 samples, window 8, half-overlapped: fires at 8, then every 4.
+        assert_eq!(fired, 5);
+        assert_eq!(s.runs, 5);
+    }
+
+    #[test]
+    fn a_constant_input_has_no_spectrum_at_all() {
+        // The mean is subtracted before the transform, so a flat line is all
+        // zeroes and every bin is equal -- which is what flat means.
+        let mut s = Spectrum::new(32);
+        for _ in 0..64 {
+            s.add(7);
+        }
+        let rel = s.relative();
+        assert!(!rel.is_empty());
+        assert!(rel.iter().all(|v| v.is_finite()), "{:?}", rel);
+    }
+
+    #[test]
+    fn a_periodic_input_puts_a_peak_where_its_period_is() {
+        // Something arriving on a schedule is the case the spectrum earns its
+        // place on: decay does not have a period, so a peak is contamination.
+        //
+        // A SINUSOID, NOT AN IMPULSE TRAIN. A train of spikes every eighth
+        // second has equal energy in every harmonic of that period, so the
+        // loudest bin is as likely to be 8/3 s as 8 s -- correct physics, and
+        // a test that asserts otherwise is testing its author's expectation.
+        let mut s = Spectrum::new(64);
+        for i in 0..512 {
+            let phase = 2.0 * std::f64::consts::PI * i as f64 / 8.0;
+            s.add((10.0 + 8.0 * phase.sin()).round() as u32);
+        }
+        let (top, where_) = s.loudest();
+        assert!(top > 5.0, "a period-8 signal should stand out, got {}", top);
+        let period = s.period(where_);
+        assert!(
+            (period - 8.0).abs() < 0.5,
+            "peak at {}s, expected 8s",
+            period
+        );
+    }
+
+    #[test]
+    fn poisson_arrivals_do_not_produce_a_peak_worth_reporting() {
+        // The other half of the claim, and the one the screen leans on: a
+        // healthy counter watching background must read as flat. chance_max()
+        // is what "flat" is measured against -- the largest of this many bins,
+        // not one of them -- so the test is that the real peak stays under it.
+        let mut s = Spectrum::new(64);
+        let mut seed = 0x2545f491u32;
+        for _ in 0..2048 {
+            // Poisson(2) by Knuth, on a small xorshift: no dependency here
+            // either, and a fixed seed so a failure is reproducible.
+            let mut k = 0u32;
+            let mut p = 1.0f64;
+            let target = (-2.0f64).exp();
+            loop {
+                seed ^= seed << 13;
+                seed ^= seed >> 17;
+                seed ^= seed << 5;
+                p *= (seed as f64) / (u32::MAX as f64);
+                if p <= target {
+                    break;
+                }
+                k += 1;
+            }
+            s.add(k);
+        }
+        let (top, _) = s.loudest();
+        assert!(
+            top < s.chance_max() * 1.25,
+            "background read as periodic: peak {:.2}x against chance {:.2}x",
+            top,
+            s.chance_max()
+        );
+    }
+
+    #[test]
+    fn columns_take_the_loudest_bin_they_cover() {
+        // A single sharp line is what is being looked for, so averaging a
+        // column would be the one operation guaranteed to hide it.
+        let rel = vec![1.0, 1.0, 9.0, 1.0, 1.0, 1.0, 1.0, 1.0];
+        let cols = spectrum_columns(&rel, 4);
+        assert_eq!(cols.len(), 4);
+        assert_eq!(cols[1], 9.0);
+        assert_eq!(cols[0], 1.0);
+    }
+
+    #[test]
+    fn columns_survive_being_asked_for_more_than_there_are_bins() {
+        let cols = spectrum_columns(&[1.0, 2.0], 8);
+        assert_eq!(cols.len(), 8);
+        assert!(cols.iter().all(|v| *v == 1.0 || *v == 2.0));
+        assert!(spectrum_columns(&[], 8).is_empty());
+        assert!(spectrum_columns(&[1.0], 0).is_empty());
+    }
+
+    #[test]
+    fn the_ladder_prefers_the_window_that_has_actually_run() {
+        // 128, 256 and 512 side by side: the 128 answers first, and the 512
+        // is the better answer once it has anything to say.
+        let mut l = Ladder::new();
+        for i in 0..200 {
+            l.add((i % 4) as u32);
+        }
+        assert!(l.best().runs > 0, "nothing has answered after 200 samples");
+    }
+}

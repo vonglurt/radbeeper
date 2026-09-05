@@ -41,6 +41,14 @@ fn glyph(ch: char) -> Option<&'static [&'static str]> {
     })
 }
 
+/// The column the big digits start at: clear of the header on the same row.
+///
+/// Three spaces of air, because a digit butted against the serial number
+/// reads as part of it.
+fn digits_left(head: &str) -> usize {
+    head.chars().count() + 3
+}
+
 fn big_number(text: &str) -> Vec<String> {
     let mut rows = vec![String::new(); BIG_ROWS];
     for ch in text.chars() {
@@ -147,9 +155,13 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64, duration: Optio
         out.push_str("\x1b[2J");
         // No title row: the program's name is the one thing on this screen
         // nobody needs telling. The firmware moves in beside the port.
+        let head = format!(
+            "{} @ {} baud   {}   serial {}",
+            c.path, c.baud, c.version, c.serial_no
+        );
         out.push_str(&format!(
-            "{}{}{} @ {} baud   {}   serial {}{}",
-            at(0, 0), DIM, c.path, c.baud, c.version, c.serial_no, OFF
+            "{}{}{}{}",
+            at(0, 0), DIM, head, OFF
         ));
 
         let mut row = 2usize;
@@ -188,10 +200,16 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64, duration: Optio
             None => "--".to_string(),
         });
         let wide = digits.iter().map(|d| d.chars().count()).max().unwrap_or(0);
-        if width > 54 + wide + 6 && h > BIG_ROWS {
+        // Clear of the header, which is on the row the digits start on. This
+        // was a constant 54 and the header outgrew it: a serial is fourteen
+        // characters and the firmware sits beside the port, so the digits
+        // were landing on top of the counter's own name. Measured, not
+        // guessed -- the same fix the Python carries.
+        let left = digits_left(&head);
+        if width > left + wide + 6 && h > BIG_ROWS {
             let tint = headline.map(|v| colour_for(level(v))).unwrap_or(DIM);
             for (i, d) in digits.iter().enumerate() {
-                out.push_str(&format!("{}{}{}{}", at(i, 54), tint, d, OFF));
+                out.push_str(&format!("{}{}{}{}", at(i, left), tint, d, OFF));
             }
         }
 
@@ -423,5 +441,93 @@ fn main() {
             eprintln!("radbeeper: unknown command {}", other);
             std::process::exit(2);
         }
+    }
+}
+
+// ----------------------------------------------------------------- tests ---
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The header the monitor draws on row 0, at its real length: a path, a
+    /// baud rate, a firmware string and a fourteen-character serial.
+    const HEAD: &str = "/dev/ttyUSB0 @ 115200 baud   GMC-320Re 4.26   serial F48824B8207F7E";
+
+    #[test]
+    fn the_big_digits_start_clear_of_the_header() {
+        // THE REGRESSION. This was a constant 54 while the header was 67
+        // columns wide, so the readout was drawn straight through the
+        // counter's own serial number -- at every terminal width, on both
+        // implementations, and nowhere near where anyone was looking for it.
+        assert!(HEAD.chars().count() > 54, "the header outgrew the old constant");
+        assert!(digits_left(HEAD) > HEAD.chars().count());
+    }
+
+    #[test]
+    fn a_shorter_header_lets_the_digits_come_left() {
+        // Measured, not a new constant: a counter on a short path with a
+        // short serial should not push the number needlessly right.
+        assert!(digits_left("/dev/ttyUSB0 @ 57600 baud   GMC-300  1.0   serial A1")
+                < digits_left(HEAD));
+    }
+
+    #[test]
+    fn every_character_the_readout_can_contain_has_a_glyph() {
+        // The readout is a formatted f64, or "--" before a window is full.
+        for ch in "0123456789.-".chars() {
+            assert!(glyph(ch).is_some(), "no glyph for {:?}", ch);
+        }
+        assert!(glyph('x').is_none());
+    }
+
+    #[test]
+    fn a_big_number_is_twelve_rows_of_equal_width() {
+        let rows = big_number("40.5");
+        assert_eq!(rows.len(), BIG_ROWS);
+        let w = rows[0].chars().count();
+        assert!(w > 0);
+        for r in &rows {
+            assert_eq!(r.chars().count(), w, "ragged row: {:?}", r);
+        }
+    }
+
+    #[test]
+    fn a_number_with_no_reading_yet_still_draws() {
+        let rows = big_number("--");
+        assert_eq!(rows.len(), BIG_ROWS);
+        assert!(rows.iter().any(|r| r.contains('█')));
+    }
+
+    #[test]
+    fn an_unknown_character_is_skipped_rather_than_drawn_ragged() {
+        // Whatever happens, the twelve rows stay the same width as each
+        // other -- a ragged block is worse than a missing character.
+        let rows = big_number("4x0");
+        let w = rows[0].chars().count();
+        assert!(rows.iter().all(|r| r.chars().count() == w));
+    }
+
+    #[test]
+    fn spans_are_a_comma_list_and_must_be_positive() {
+        assert_eq!(parse_spans("3,30,300,3000"),
+                   Some(vec![3.0, 30.0, 300.0, 3000.0]));
+        assert_eq!(parse_spans(" 1 , 10 "), Some(vec![1.0, 10.0]));
+        assert_eq!(parse_spans("3,0"), None, "a zero-second window is not one");
+        assert_eq!(parse_spans("3,-1"), None);
+        assert_eq!(parse_spans("3,x"), None);
+        assert_eq!(parse_spans(""), None);
+    }
+
+    #[test]
+    fn a_cursor_move_is_one_based_on_the_wire_and_zero_based_here() {
+        // at(0, 0) has to be the top left corner, not one row down from it.
+        assert_eq!(at(0, 0), "\x1b[1;1H");
+        assert_eq!(at(11, 53), "\x1b[12;54H");
+    }
+
+    #[test]
+    fn the_bands_colour_the_number_the_same_way_they_colour_the_bars() {
+        assert_ne!(colour_for(Level::Calm), colour_for(Level::Raised));
+        assert_ne!(colour_for(Level::Raised), colour_for(Level::High));
     }
 }
