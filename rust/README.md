@@ -31,4 +31,4 @@ No toolchain on the target machine? Every tagged release carries static musl
 binaries for x86\_64, aarch64, armv7 and armv6 (Pi Zero), with a `SHA256SUMS`
 alongside: <https://github.com/vonglurt/radbeeper/releases>.
 
-MIT — Copyright (c) 2026 Paul Richeson
+MIT License — Copyright (c) 2026 Paul Richeson

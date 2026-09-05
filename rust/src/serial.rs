@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Paul Richeson
 // A raw serial port, in termios, because that is what a serial port is.
 //
 // Non-blocking with an explicit deadline everywhere: a counter unplugged

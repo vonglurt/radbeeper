@@ -19,3 +19,7 @@ files is meant to be published, and a name is what a reader needs while a
 decimal fix is a street address for whoever is holding the counter. If you
 never record a place, the column stays empty — which is the truthful answer,
 and better than a guess that looks like a measurement.
+
+---
+
+MIT License — Copyright (c) 2026 Paul Richeson

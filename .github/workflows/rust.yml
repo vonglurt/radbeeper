@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Paul Richeson
 # The native build, checked on every push that touches it.
 #
 # Deliberately not `cargo fmt --check`: the sources here are hand-set to a

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Paul Richeson
 // radbeeper -- a GQ GMC Geiger-Muller counter on the desk. The read side,
 // native: find it, ask what it is, and watch it.
 //

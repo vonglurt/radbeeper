@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Paul Richeson
 # radbeeper — all the important targets.
 #
 # There is nothing to compile. The program is one stdlib Python file, and the

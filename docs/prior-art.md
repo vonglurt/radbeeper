@@ -140,3 +140,7 @@ The other difference is the failure path. GeigerLog's answer to "no counter"
 is a dialog; gq-gmc-control's is `ERROR: no device connected`. Neither
 distinguishes *no device* from *no driver*, which is the failure that cost an
 afternoon here and the reason `probe` names all three.
+
+---
+
+MIT License — Copyright (c) 2026 Paul Richeson

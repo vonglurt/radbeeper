@@ -1,6 +1,7 @@
 # RadBeeper
 
-**A GQ GMC-320 Plus Geiger–Müller counter on the desk, read from Alpine Linux.**
+**A GQ GMC-320 Plus Geiger–Müller counter on the desk, read from Alpine Linux —
+and from [Copal](https://github.com/vonglurt/copal), its distillation.**
 
 MIT · `0.1.0` · one file, `python3` and nothing else
 
@@ -85,7 +86,7 @@ before yours arrives.
 | **The counter** | A **GQ GMC-320 Plus**. The 320 is what this was written against and what every screenshot here is. A **GMC-300** works — RadBeeper tries its 57600 baud as well as the 320's 115200 — and a 500 or 600 will be found and read, but its tube is not an M4011, so give it `--cpm-per-usvh` (see [The tube factor](#the-tube-factor)). |
 | **The cable** | The **USB cable that came with it**. The socket on the counter is USB-C on a Plus and micro-B on older units, and it is easy to grab a charge-only cable by mistake: one that carries no data leaves you at [Troubleshooting](#troubleshooting) case 1 with nothing plugged in as far as Linux is concerned. |
 | **The counter, switched on** | The USB-serial chip inside is powered by the counter, not by the bus. A 320 that is off, or flat, enumerates as nothing. |
-| **A kernel with `ch341`** | The 320 Plus presents as a CH340 USB-serial device. `linux-lts` and `linux-rpi` carry the driver; Alpine's `linux-virt` **does not**, which is the single most common reason a counter that is plugged in cannot be found. |
+| **A kernel with `ch341`** | The 320 Plus presents as a CH340 USB-serial device. `linux-lts` and `linux-rpi` carry the driver; Alpine's `linux-virt` **does not**, which is the single most common reason a counter that is plugged in cannot be found. **Copal installs the `linux-lts` Alpine package**, so a Copal machine has the driver already. |
 | **Membership of `dialout`** | The serial node is `root:dialout` and RadBeeper does not want root. |
 
 Plug it in, and Linux should say so:
@@ -102,7 +103,10 @@ things it can be and they have four different fixes.
 **USB pass-through counts.** These logs were taken from a 320 Plus shared into a
 VM, and the counter cannot tell the difference. What the VM's kernel needs is the
 same `ch341` — pass the device through to a guest running `linux-virt` and it will
-never appear, no matter how correct the pass-through is.
+never appear, no matter how correct the pass-through is. This is exactly the
+trap **Copal** avoids by installing the `linux-lts` Alpine package rather than
+the virt kernel a VM image would otherwise default to: the counter appears
+because the driver is there to claim it.
 
 ## 2. Install
 
@@ -301,8 +305,10 @@ a file while a service is appending to it.
 
 ### As a boot service
 
-Copal's stage 10 installs an OpenRC service and a udev rule. **Dormant is the
-normal state**: with no counter plugged in the service writes down why and exits
+[Copal](https://github.com/vonglurt/copal) — the Alpine distillation this was
+written on — carries RadBeeper as stage 10, which installs an OpenRC service and
+a udev rule alongside the `linux-lts` kernel that makes the counter visible in
+the first place. **Dormant is the normal state**: with no counter plugged in the service writes down why and exits
 0 — a stopped service, not a crash loop.
 
 ```sh
@@ -550,7 +556,9 @@ to rule out ([§1](#1-what-you-need)):
 - **The running kernel has no USB-serial driver.** Alpine's `linux-virt` ships
   none — no `ch341`, no `usbserial` — so a counter plugged into a VM running it
   can never appear as `/dev/ttyUSB0`, and `dmesg` is silent because nothing ever
-  claims the device. `linux-lts` and `linux-rpi` carry the drivers.
+  claims the device. `linux-lts` and `linux-rpi` carry the drivers, and Copal
+  installs `linux-lts`, so this case does not arise there:
+  `apk add linux-lts` and reboot is the fix on a plain Alpine that has it wrong.
 
 `dmesg | tail` separates them: a working cable into a switched-on counter on a
 kernel with `ch341` says `ch341-uart converter now attached to ttyUSB0`. Silence
@@ -657,10 +665,6 @@ radbeeper -d /dev/pts/N watch
 The full-screen monitor is tested too, on a 132×46 pty, because it only runs when
 stdout is a terminal and two bugs shipped in the part nothing was executing.
 
----
-
-MIT — Copyright (c) 2026 Paul Richeson
-
 ### The screenshots
 
 Every image in `docs/screenshots` is a recording, not a picture. `tools/record.py`
@@ -695,3 +699,7 @@ scrolling was cheaper than redrawing, it emits `CSI T` inside a scroll region,
 and an emulator that ignores `DECSTBM` puts every row below the scroll point in
 the wrong place. It drew the random line five rows up, on top of the spectrum.
 The program was correct; the picture of it was not.
+
+---
+
+MIT License — Copyright (c) 2026 Paul Richeson

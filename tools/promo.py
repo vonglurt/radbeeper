@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Paul Richeson
 """Regenerate every screenshot in docs/screenshots from the real program.
 
 Nothing here is drawn by hand or edited afterwards. Each shot is a real

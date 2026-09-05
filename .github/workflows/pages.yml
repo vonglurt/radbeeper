@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Paul Richeson
 # Rebuild index.html from the logs in this repository, on every push that
 # changes them.
 #

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Paul Richeson
 """A fake GQ GMC-320 on a pseudo-terminal.
 
 WHY THIS EXISTS. --source sim proves the averaging and the display, and proves

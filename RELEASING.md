@@ -107,3 +107,7 @@ cargo yank --version 0.2.0 --undo     # and back again
 
 Yanking does not remove the version and does not free the name. The fix is
 always a new version.
+
+---
+
+MIT License — Copyright (c) 2026 Paul Richeson

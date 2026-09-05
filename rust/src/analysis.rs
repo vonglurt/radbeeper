@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Paul Richeson
 // Windows, spectrum and digits: the arithmetic the display is made of.
 
 /// Counts per second in, running CPM averages out.

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Paul Richeson
 """The serial path, against a fake GMC-320 on a pty.
 
 These are the tests that cover the code --source sim skips entirely: termios

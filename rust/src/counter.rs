@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MIT
+// Copyright (c) 2026 Paul Richeson
 // The GQ GMC protocol, and finding a counter that speaks it.
 //
 // Commands are ASCII <NAME>> and replies are a fixed number of raw bytes with

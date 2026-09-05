@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Paul Richeson
 """The terminal emulator behind docs/screenshots.
 
 These matter more than they look. Every image in the README is produced by

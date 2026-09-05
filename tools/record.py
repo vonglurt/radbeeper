@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Paul Richeson
 """Record a terminal session to a cast file, and render casts to PNG and GIF.
 
 Stdlib only, like everything else here. A cast is one JSON header line

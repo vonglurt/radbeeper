@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Paul Richeson
 # A tagged release: static binaries on the GitHub release, and the crate on
 # crates.io.
 #

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Paul Richeson
 """Tests for radbeeper. Stdlib unittest, no hardware, no network."""
 import importlib.util
 import math
