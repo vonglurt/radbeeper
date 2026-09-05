@@ -45,8 +45,9 @@ rust-install:
 
 ## rust-check: what CI checks — a warning-free build, tests, clippy's bug lints
 rust-check:
-	cd rust && RUSTFLAGS="-D warnings" cargo build --release --locked
+	cd rust && RUSTFLAGS="-D warnings" cargo build --release --locked --all-targets
 	cd rust && cargo test --locked
+	$(PYTHON) -m unittest discover -q -s tests -k TestSameBytes
 	cd rust && cargo clippy --all-targets --locked \
 	  -- -D clippy::correctness -D clippy::suspicious 2>/dev/null \
 	  || echo "  (clippy not installed — CI will run it)"

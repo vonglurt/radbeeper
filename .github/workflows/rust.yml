@@ -35,7 +35,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build, with no warnings allowed
-        run: cargo build --release --locked
+        run: cargo build --release --locked --all-targets
         env:
           RUSTFLAGS: -D warnings
 
@@ -48,6 +48,13 @@ jobs:
 
       - name: The published .crate builds from its own contents
         run: cargo package --locked
+
+      # The port's safety rail: both implementations on the same input, and
+      # the output compared character for character. It caught a %g that
+      # rounded differently in the sixth significant figure on its first run.
+      - name: The Rust and the Python write the same bytes
+        working-directory: .
+        run: python3 -m unittest discover -v -s tests -k TestSameBytes
 
   msrv:
     runs-on: ubuntu-latest

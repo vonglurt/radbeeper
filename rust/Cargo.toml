@@ -17,6 +17,7 @@ categories = ["command-line-utilities", "science"]
 # the readme and the licence -- and `make rust-package` prints exactly that.
 include = [
     "src/**/*.rs",
+    "examples/*.rs",
     "Cargo.toml",
     "Cargo.lock",
     "README.md",

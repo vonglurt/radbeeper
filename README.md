@@ -529,12 +529,37 @@ make rust-package    # exactly what a publish would upload
 
 A full probe against the counter takes **82 ms** and the binary is 400 KB.
 
-Everything that writes the log format — `service`, `backfill`, `export`,
-`site`, `random`, `recompute`, `hotplug` — stays in the Python and the binary
-says so if you ask it for one. That is not a staging post: the Python runs on a
-machine with no toolchain and no network, which is the whole reason it has no
-dependencies, and the format is still moving. Two implementations of a file
-format is how a file format acquires two dialects.
+### Going native, one piece at a time
+
+`service`, `backfill`, `export`, `site`, `random`, `recompute` and `hotplug`
+are still Python, and the binary says so if you ask it for one. They are being
+ported. **Two implementations of a file format is how a file format acquires
+two dialects**, so the port is arranged around one rule: nothing counts as
+ported until both programs produce the *same characters* on the same input.
+
+`tests/test_differential.py` is that rule. It drives
+`rust/examples/format_oracle.rs` and the Python's own functions with identical
+directives and compares the output byte for byte — not equivalent, identical.
+It skips rather than fails where there is no Rust toolchain, because the
+Python suite has to run on a machine with nothing installed.
+
+It earned its place on the first run. Python's `%g` — which formats the
+`seconds` column and every span in the header, and which Rust has no formatter
+for — picks scientific notation from the exponent the value has **after**
+rounding to six significant figures. Taking it from the unrounded value prints
+`999999.5` as `1000000` where C and Python print `1e+06`. One character, in a
+column nobody reads, in a file whose one promise is that `sort` on it is
+chronological.
+
+| | |
+|---|---|
+| **native now** | `probe`, `cpm`, `watch`; the log format — header, rows, dated paths, name-matched columns, the merge that never writes over a live row; local time, which Rust's standard library does not have at all |
+| **next** | `service`, then the entropy pool (SHA-256 by hand: ~50 lines, no dependency, checked against the NIST vectors), then the flash history, then `export` |
+| **the rule** | one dependency, still `libc`. It has `strftime`, `strptime` and `mktime`, so the port does not need a date crate; the one primitive that must be written out is SHA-256 |
+
+Nothing about this is a reason to hurry the Python out: it runs on a machine
+with no toolchain and no network, which is the whole reason it has no
+dependencies.
 
 **Where the speed actually was.** The monitor's budget is one sample a second
 and Python used a fraction of a percent of it, so this is about start-up and

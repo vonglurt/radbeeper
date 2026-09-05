@@ -7,10 +7,10 @@
 // random, hotplug -- is in the one-file Python program in the same repository
 // and stays there while that format is still moving. Asking this binary for
 // one of them says so rather than pretending.
-mod analysis;
 mod counter;
 mod serial;
 
+use radbeeper::analysis;
 use analysis::{
     bar_rows, level, spectrum_columns, Ladder, Level, Windows,
 };
