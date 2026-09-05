@@ -15,6 +15,19 @@ be true; `--source sim` draws the whole monitor with no hardware at all.
 
 ![the monitor](docs/screenshots/watch.png)
 
+**Twenty seconds of it, at ten times speed.** Seconds 300 to 320 of a real
+session against the counter these logs came from, one frame a second:
+
+![the monitor, seconds 300-320 at 10x](docs/screenshots/watch-300-320.gif)
+
+The 3-second window swings between 0 and 80 CPM while the 300-second one moves
+between 40.6 and 42.2 — which is the whole argument for keeping four of them.
+The 300-second window **arrives two seconds in**, at 302 s, having had nothing
+to say until then; the 3000-second one is still counting down and will be for
+another forty-five minutes. The bars recolour as individual seconds land, the
+spectrum stays flat, and the random line sits where it was until the pool earns
+the next one.
+
 ```sh
 radbeeper probe            # find the counter and say what it is
 radbeeper watch            # the monitor
@@ -127,7 +140,9 @@ four windows at once, each a factor of ten apart.
 | **3000 s** | Fifty minutes. What the background here actually is, once the day's traffic through the room has averaged out |
 
 `--spans` takes the list, so `--spans 1,10,60` is a different set of four
-questions. Every window is a column in the log, whatever you choose.
+questions. Every window is a column in the log, whatever you choose. The
+[animation at the top](#radbeeper) is twenty seconds of exactly this: the
+3-second window swinging 0 to 80 while the 300-second one holds 41.
 
 **A window shows nothing until it is full**, and says how long it still needs:
 
@@ -197,21 +212,6 @@ Nyquist limit), and the bars are coloured by significance rather than height.
 
 256 bits of hex, out of decay timing, refreshed whenever the pool has earned
 them — see [§6](#6-random-numbers-out-of-decay).
-
-### Twenty seconds of it, at ten times speed
-
-Seconds 300 to 320 of a real session against the counter these logs came from,
-one frame a second:
-
-![the monitor, seconds 300-320 at 10x](docs/screenshots/watch-300-320.gif)
-
-The 3-second window swings between 0 and 80 CPM while the 300-second one moves
-between 40.6 and 42.2 — which is the whole argument for keeping four of them.
-The 300-second window **arrives two seconds in**, at 302 s, having had nothing
-to say until then; the 3000-second one is still counting down and will be for
-another forty-five minutes. The bars recolour as individual seconds land, the
-spectrum stays flat, and the random line sits where it was until the pool earns
-the next one.
 
 ### Line output, for a pipe or a log
 
