@@ -28,16 +28,46 @@ another forty-five minutes. The bars recolour as individual seconds land, the
 spectrum stays flat, and the random line sits where it was until the pool earns
 the next one.
 
+## Fast track
+
 ```sh
-radbeeper probe            # find the counter and say what it is
-radbeeper watch            # the monitor
+git clone https://github.com/vonglurt/radbeeper.git
+cd radbeeper
+make install
+
+doas adduser $USER dialout    # once, then log out and back in
+```
+
+No packages and nothing to compile — the install is a copy of one stdlib Python
+file. The `dialout` line is not optional: the serial node is `root:dialout` and
+RadBeeper does not want root.
+
+Then, with the GMC-320 Plus plugged in and switched on:
+
+```sh
+radbeeper probe      # find it, confirm it's talking
+radbeeper watch      # the monitor — q to quit
+```
+
+That is the whole of it. If `probe` finds nothing it says which of four things
+went wrong, and they have four different fixes — [§1](#1-what-you-need) is the
+list of what has to be true. **No counter yet?**
+`radbeeper --source sim --sim-cpm 400 watch` draws the entire monitor against a
+synthetic Poisson background, which is a real one: decay is a Poisson process.
+
+<details>
+<summary>Everything else it does</summary>
+
+```sh
 radbeeper service          # log to disk, a row every 30 seconds
 radbeeper backfill         # fill the log's gaps from the counter's own flash
 radbeeper random           # 256 bits of hex, out of decay timing
 radbeeper site             # where this counter is, and where it has been
-radbeeper export           # build index.html from the logs
+radbeeper export           # build index.html and random.html from the logs
 radbeeper log pull         # download the raw history to .bin and .csv
 ```
+
+</details>
 
 ---
 
