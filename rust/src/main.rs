@@ -10,7 +10,7 @@
 mod counter;
 mod serial;
 
-use radbeeper::{analysis, clock, log};
+use radbeeper::{analysis, clock, entropy, log};
 use analysis::{
     bar_rows, level, spectrum_columns, Ladder, Level, Windows,
 };
@@ -134,10 +134,16 @@ fn at(row: usize, col: usize) -> String {
 }
 
 // ----------------------------------------------------------------- watch ---
-fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64, duration: Option<f64>) {
+fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
+         duration: Option<f64>, logs: Option<std::path::PathBuf>) {
     let screen = Screen::enter();
     let mut w = Windows::new(spans);
     let mut ladder = Ladder::new();
+    let mut pool = entropy::Entropy::default();
+    // The drawn line and the moment it was drawn, kept across frames: a line
+    // stays on screen until the pool has earned the next one.
+    let mut shown: Option<(String, String)> = None;
+    let mut suspect = false;
     c.heartbeat(true);
     let start = Instant::now();
     let mut out = String::with_capacity(16384);
@@ -150,6 +156,7 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64, duration: Optio
         let when = start.elapsed().as_secs_f64();
         w.add(when, counts);
         ladder.add(counts);
+        pool.add(counts);
         let spec = ladder.best();
 
         let (h, width) = screen.size();
@@ -285,6 +292,52 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64, duration: Optio
             let lo = format!("{}s", spec.window);
             let gap = (width - 1).saturating_sub(lo.len() + 2);
             out.push_str(&format!("{}{}{}{}2s{}", at(row, 0), DIM, lo, " ".repeat(gap), OFF));
+        }
+
+        // The rotating line: 256 bits of decay, when the pool has earned
+        // them. See the entropy module for what "earned" is doing there --
+        // it is measured from the samples, not modelled from their mean.
+        if h > row + 2 && width > 84 {
+            row += 1;
+            if pool.ready() {
+                let (top, _) = spec.loudest();
+                suspect = top > 0.0 && top >= spec.chance_max() * 1.25;
+                let (text, record) = pool.draw();
+                shown = Some((text, clock::format(clock::now(), "%H:%M:%S")));
+                if let Some(d) = logs.as_ref() {
+                    let _ = entropy::write_record(d, &record, &c.serial_no, suspect);
+                }
+            }
+            match &shown {
+                Some((text, at_time)) => {
+                    out.push_str(&format!("{}{}random   {}{}",
+                                          at(row, 0), CYAN,
+                                          entropy::group_hex(text), OFF));
+                    if h > row + 2 {
+                        // THE COUNTDOWN KEEPS RUNNING. The line stayed on
+                        // screen with no indication of whether the next one
+                        // was a minute away or eight, which is the one thing
+                        // somebody watching it wants to know.
+                        let note = format!(
+                            "{} bits from decay at {}   {}{}",
+                            entropy::ENTROPY_BITS as i64, at_time,
+                            entropy::pool_status(&pool, "next in "),
+                            if suspect {
+                                "  -- SPECTRUM NOT FLAT, treat as suspect"
+                            } else {
+                                ""
+                            }
+                        );
+                        out.push_str(&format!("{}{}{}{}", at(row + 1, 9),
+                                              if suspect { YELLOW } else { DIM },
+                                              note, OFF));
+                    }
+                }
+                None => out.push_str(&format!(
+                    "{}{}random   {}{}", at(row, 0), DIM,
+                    entropy::pool_status(&pool, "next in "), OFF
+                )),
+            }
         }
 
         if h >= 2 {
@@ -474,6 +527,103 @@ fn stopping() -> bool {
     STOP.load(Ordering::Relaxed)
 }
 
+
+/// Collect until the pool has earned the bits, then print one line.
+fn random(spans: &[f64], duration: Option<f64>, device: Option<&str>,
+          baud: Option<u32>, logs: Option<std::path::PathBuf>) -> i32 {
+    install_stop_handler();
+    let c = match counter::find(device, baud) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("{}: {}",
+                      if e.busy { "port busy" } else { "no counter" }, e.reason);
+            return 1;
+        }
+    };
+    let want = entropy::ENTROPY_BITS;
+    let mut pool = entropy::Entropy::new(want);
+    let mut ladder = Ladder::new();
+    println!("radbeeper: collecting {} bits from {}", want as i64, c.path);
+    let started = clock::now();
+    while !pool.ready() {
+        let counts = match c.next_sample(Duration::from_millis(2500)) {
+            Some(v) => v as u32,
+            None => break,
+        };
+        pool.add(counts);
+        ladder.add(counts);
+        if stopping() {
+            break;
+        }
+        if duration.map(|d| clock::now() - started >= d).unwrap_or(false) {
+            break;
+        }
+    }
+    if !pool.ready() {
+        eprintln!("radbeeper: only {:.0} of {} bits -- {}",
+                  pool.bits(), want as i64,
+                  if duration.is_some() { "stopped early" } else { "interrupted" });
+        return 1;
+    }
+    let spec = ladder.best();
+    let (top, _) = spec.loudest();
+    let suspect = top > 0.0 && top >= spec.chance_max() * 1.25;
+    let modelled = pool.model_bits();
+    let seconds = pool.counts.len();
+    let rate = pool.rate();
+    let (text, record) = pool.draw();
+    println!();
+    println!("{}", entropy::group_hex(&text));
+    println!();
+    println!("  {} bits, min-entropy {:.0} measured, from {} seconds at {:.2} \
+              counts/s", want as i64, record.bits, seconds, rate);
+    // The number the old Poisson model would have printed, beside the one the
+    // samples actually support. Over-dispersed arrivals make the gap large.
+    println!("  {:.0} bits is what a Poisson model would have claimed for the \
+              same {} seconds", modelled, seconds);
+    println!("  spectrum {}", if suspect {
+        "NOT FLAT -- something periodic; treat as suspect"
+    } else {
+        "flat -- the source looks like decay"
+    });
+    let dir = logs.unwrap_or_else(log::state_dir);
+    match entropy::write_record(&dir, &record, &c.serial_no, suspect) {
+        Ok(p) => println!("  recorded in {}", p.display()),
+        Err(e) => println!("  not recorded: {}", e),
+    }
+    let _ = spans;
+    0
+}
+
+/// Recompute every emission from the counts written beside it.
+///
+/// This is the whole of the audit trail's promise: a line that cannot be
+/// recomputed from its own counts was invented, and one that can was not. It
+/// proves nothing about the NEXT line, which is the point -- that one comes
+/// from decays that have not happened.
+fn check_random(path: &std::path::Path) -> i32 {
+    let pools = entropy::read_emissions(path);
+    if pools.is_empty() {
+        eprintln!("radbeeper: no emissions in {}", path.display());
+        return 1;
+    }
+    let mut bad = 0;
+    for p in &pools {
+        let started = clock::parse_stamp(&p.time).unwrap_or(0.0);
+        let ok = entropy::check_record(p.seq, started, &p.counts, &p.hex);
+        if !ok {
+            bad += 1;
+        }
+        println!("  seq {:<4} {:<20} {:>4}s  {:.3} bits/s  {}",
+                 p.seq, p.time, p.seconds,
+                 entropy::mcv_min_entropy(&p.counts),
+                 if ok { "recomputes" } else { "DOES NOT RECOMPUTE" });
+    }
+    println!("radbeeper: {} of {} emissions recompute from their own counts",
+             pools.len() - bad, pools.len());
+    if bad > 0 { 1 } else { 0 }
+}
+
 fn parse_spans(text: &str) -> Option<Vec<f64>> {
     let mut out = Vec::new();
     for part in text.split(',') {
@@ -493,6 +643,8 @@ fn usage() {
     println!("  radbeeper cpm              the counter's own CPM, once");
     println!("  radbeeper watch            the monitor");
     println!("  radbeeper service          log to disk, a row every 30 seconds");
+    println!("  radbeeper random           256 bits of hex, out of decay timing");
+    println!("  radbeeper random --check F recompute every line in an emission log");
     println!();
     println!("  -d, --device PATH          serial port (default: search /dev)");
     println!("  -b, --baud RATE            baud (default: try 115200 then 57600)");
@@ -504,7 +656,7 @@ fn usage() {
     println!("      --logs DIR             where service writes (default: the");
     println!("                             state directory)");
     println!();
-    println!("backfill, export, site, random, recompute and hotplug are in the");
+    println!("backfill, export, site, recompute and hotplug are in the");
     println!("Python program in the same repository. They are being ported; the");
     println!("log format is here already, and tests/test_differential.py is what");
     println!("says it is the same format and not a second dialect of it.");
@@ -520,6 +672,7 @@ fn main() {
     let mut duration: Option<f64> = None;
     let mut log_every = log::DEFAULT_LOG_EVERY;
     let mut logs: Option<std::path::PathBuf> = None;
+    let mut check: Option<std::path::PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -556,7 +709,8 @@ fn main() {
             "--log-every" => {
                 log_every = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(log_every)
             }
-            "backfill" | "export" | "site" | "random" | "hotplug" | "log" => {
+            "--check" => check = next(&mut i).map(std::path::PathBuf::from),
+            "backfill" | "export" | "site" | "hotplug" | "log" => {
                 eprintln!(
                     "radbeeper: `{}` is not in the Rust build -- it writes the log\n\
                      format, which the Python program owns. Use that one:\n\
@@ -578,6 +732,15 @@ fn main() {
         return;
     }
 
+    if command == "random" {
+        // --check needs no hardware, so it runs before anything looks for a
+        // counter: an audit of a file from another machine is the ordinary
+        // case, not an odd one.
+        if let Some(p) = check {
+            std::process::exit(check_random(&p));
+        }
+        std::process::exit(random(&spans, duration, device.as_deref(), baud, logs));
+    }
     if command == "service" {
         std::process::exit(service(
             &spans, log_every, duration, device.as_deref(), baud, logs,
@@ -624,7 +787,7 @@ fn main() {
                 std::process::exit(1);
             }
         },
-        "watch" => watch(&c, &spans, cpm_per_usvh, duration),
+        "watch" => watch(&c, &spans, cpm_per_usvh, duration, logs),
         other => {
             eprintln!("radbeeper: unknown command {}", other);
             std::process::exit(2);

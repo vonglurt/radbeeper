@@ -150,6 +150,92 @@ if __name__ == "__main__":
     unittest.main()
 
 
+@unittest.skipIf(ORACLE_PATH is None, "no Rust toolchain; nothing to diff")
+class TestTheSameBitsComeOut(unittest.TestCase):
+    """The entropy pool, which is the one place a difference would be silent.
+
+    A log row that disagrees between the two is at least visible in the file.
+    A digest that disagrees is 64 characters of hex that look exactly as
+    random either way, and the only thing that would ever notice is somebody
+    running `--check` a year later and being told their audit trail is a lie.
+    """
+
+    def rust(self, directives):
+        out = subprocess.run([ORACLE_PATH], input="\n".join(directives) + "\n",
+                             capture_output=True, text=True, check=True)
+        return out.stdout.splitlines()
+
+    def test_sha256_is_sha256(self):
+        import hashlib
+        msgs = ["", "abc", "radbeeper/entropy/1", "a" * 55, "a" * 56,
+                "a" * 63, "a" * 64, "a" * 65, "x" * 1000]
+        got = self.rust(["sha256\t" + m for m in msgs])
+        for m, g in zip(msgs, got):
+            self.assertEqual(g, hashlib.sha256(m.encode()).hexdigest(),
+                             "length %d" % len(m))
+
+    def test_counts_pack_to_the_same_nibbles(self):
+        cases = [[0], [0, 1, 2, 3], [15], [16], [99], list(range(0, 20)),
+                 [0] * 40 + [7, 15, 3]]
+        got = self.rust(["pack\t" + ",".join(str(c) for c in cs)
+                         for cs in cases])
+        for cs, g in zip(cases, got):
+            self.assertEqual(g, radbeeper.pack_counts(cs), "%r" % cs)
+
+    def test_the_measured_entropy_is_the_same_number(self):
+        cases = [
+            [0, 1, 2, 3] * 100,
+            ([0] * 300) + ([6] * 100),
+            [1] * 50,
+            [0, 1] * 7,
+            list(range(0, 16)) * 20,
+        ]
+        got = self.rust(["mcv\t" + ",".join(str(c) for c in cs)
+                         for cs in cases])
+        for cs, g in zip(cases, got):
+            self.assertAlmostEqual(float(g), radbeeper.mcv_min_entropy(cs),
+                                   places=10, msg="%d samples" % len(cs))
+
+    def test_the_model_it_replaced_is_also_the_same_number(self):
+        rates = [0.0, 0.1, 0.68, 0.797, 1.0, 2.0, 10.0, 100.0]
+        got = self.rust(["poisson\t%r" % r for r in rates])
+        for r, g in zip(rates, got):
+            self.assertAlmostEqual(float(g), radbeeper.poisson_min_entropy(r),
+                                   places=10, msg="rate %r" % r)
+
+    def test_the_rust_recomputes_every_line_this_counter_ever_emitted(self):
+        """The proof for the whole port of this module.
+
+        These are real emissions from the GMC-320Re on this desk, recorded by
+        the Python months of session-time before any of this existed. If the
+        Rust's SHA-256, its NUL framing, its integer formatting of the opened
+        second, or its nibble packing were off by one byte in any of them,
+        not one of these would match.
+        """
+        import time
+        path = os.path.join(ROOT, "logs", "random-F48824B8207F7E.tsv")
+        if not os.path.exists(path):
+            self.skipTest("no recorded emissions in the repository")
+        with open(path) as f:
+            rows = [l.rstrip("\n").split("\t") for l in f
+                    if not l.startswith("#")]
+        self.assertTrue(rows, "the emission log is empty")
+        directives, want = [], []
+        for r in rows:
+            started = int(time.mktime(time.strptime(r[1], "%Y-%m-%dT%H:%M:%S")))
+            directives.append("digest\t%s\t%s\t%s" % (r[0], started, r[7]))
+            want.append(r[6])
+        got = self.rust(directives)
+        self.assertEqual(got, want)
+        # And the Python still agrees with itself, so this is a three-way
+        # equality rather than two programs sharing one mistake.
+        for r in rows:
+            started = time.mktime(time.strptime(r[1], "%Y-%m-%dT%H:%M:%S"))
+            record = {"seq": int(r[0]), "started": started, "hex": r[6],
+                      "counts": r[7]}
+            self.assertTrue(radbeeper.check_entropy_record(record))
+
+
 @unittest.skipIf(ORACLE_PATH is None, "no Rust toolchain; nothing to run")
 class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
     """A file one implementation wrote, read by the other.

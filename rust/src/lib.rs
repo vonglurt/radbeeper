@@ -12,4 +12,6 @@
 // the Python would write, and the test is that they are the same characters.
 pub mod analysis;
 pub mod clock;
+pub mod entropy;
 pub mod log;
+pub mod sha256;

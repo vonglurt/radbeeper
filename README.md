@@ -553,6 +553,30 @@ other implementation tests both.
 `radbeeper service --logs DIR` is what makes that testable at all; without it
 the only way to exercise the logger is against the machine's real log.
 
+**The entropy pool was the one place a difference would have been silent.** A
+log row that disagrees between the two is at least visible in the file; a
+digest that disagrees is sixty-four characters of hex that look exactly as
+random either way, and the only thing that would ever notice is somebody
+running `--check` a year later and being told their audit trail is a lie. So
+the Rust recomputes **every line this counter has ever emitted** — real
+emissions recorded by the Python before any of the Rust existed — and gets the
+same digests. If its SHA-256, its NUL framing, its integer formatting of the
+opened second or its nibble packing were off by one byte, not one of them
+would match.
+
+```sh
+diff <(radbeeper random --check logs/random-*.tsv) \
+     <(rust/target/release/radbeeper random --check logs/random-*.tsv)
+```
+
+is empty, character for character. SHA-256 is written out by hand — sixty
+lines, no dependency — and checked against the FIPS 180-4 vectors, the
+million-`a` vector and the 55/56-byte cases that catch a padding path which
+has only ever seen one block.
+
+The Rust monitor also has the random line and its countdown now, which it
+never had at all.
+
 It earned its place on the first run. Python's `%g` — which formats the
 `seconds` column and every span in the header, and which Rust has no formatter
 for — picks scientific notation from the exponent the value has **after**
@@ -563,8 +587,8 @@ chronological.
 
 | | |
 |---|---|
-| **native now** | `probe`, `cpm`, `watch`, **`service`**; the log format — header, rows, dated paths, name-matched columns, the merge that never writes over a live row; local time, which Rust's standard library does not have at all |
-| **next** | the entropy pool (SHA-256 by hand: ~50 lines, no dependency, checked against the NIST vectors), then the flash history, then `export` |
+| **native now** | `probe`, `cpm`, `watch`, `service`, **`random`** and **`random --check`**; the log format — header, rows, dated paths, name-matched columns, the merge that never writes over a live row; the entropy pool, the SP 800-90B estimator and SHA-256; local time, which Rust's standard library does not have at all |
+| **next** | the flash history — `backfill` and `log pull`, with the two corrections to GQ's published format — then `export` |
 | **the rule** | one dependency, still `libc`. It has `strftime`, `strptime` and `mktime`, so the port does not need a date crate; the one primitive that must be written out is SHA-256 |
 
 Nothing about this is a reason to hurry the Python out: it runs on a machine
@@ -684,7 +708,7 @@ per sample. **Same output, byte for byte, in 2.3 s instead of 16.5.**
 ### Tests
 
 ```sh
-make check        # syntax, then 178 tests: no hardware, no network
+make check        # syntax, then 192 tests: no hardware, no network
 ```
 
 `tests/fake_gmc.py` serves a fake GMC-320 on a pseudo-terminal, so the serial path
