@@ -1,0 +1,227 @@
+# A tagged release: static binaries on the GitHub release, and the crate on
+# crates.io.
+#
+# HOW TO CUT ONE:
+#
+#     make release-check V=0.2.0     # is the tree ready
+#     make release V=0.2.0           # bumps, commits, tags, pushes
+#
+# and this runs. Nothing here needs a secret: crates.io is reached with
+# GitHub's OIDC token through the registry's own trusted-publishing action,
+# so there is no long-lived API key in this repository to leak or to rotate.
+# See RELEASING.md for the one-time crates.io setup.
+#
+# The order matters. Publishing to crates.io is PERMANENT -- a version can be
+# yanked but never replaced -- so it is the last thing that happens, after the
+# tag has been checked against the manifest and after every binary has built.
+name: release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # --------------------------------------------------------------- verify ---
+  # The tag is the version, or nothing else runs. A v0.2.0 tag on a tree that
+  # still says 0.1.0 would publish 0.1.0 again and fail halfway, so it is
+  # cheaper to refuse here.
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: v
+        name: The tag and the manifest agree
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          man=$(sed -n 's/^version *= *"\(.*\)"/\1/p' rust/Cargo.toml | head -1)
+          echo "tag=$tag  manifest=$man"
+          if [ "$tag" != "$man" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match rust/Cargo.toml version $man"
+            exit 1
+          fi
+          echo "version=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: It builds, it tests, and the .crate is buildable on its own
+        working-directory: rust
+        run: |
+          cargo build --release --locked
+          cargo test --locked
+          cargo package --locked
+        env:
+          RUSTFLAGS: -D warnings
+
+      - name: The Python side still parses and its suite passes
+        run: make check
+
+  # ------------------------------------------------------------- binaries ---
+  # Static musl, so one file lands on a Pi, on Alpine and on a glibc box with
+  # nothing to install alongside it. The ARM targets go through `cross`, which
+  # is a container with the right linker in it; x86_64 only needs musl-tools.
+  #
+  # Linux only, and that is not laziness: the port scan reads /dev/ttyUSB*,
+  # /dev/ttyACM* and /sys/bus/usb-serial, so a macOS build would compile and
+  # then find nothing. When the scan learns /dev/cu.*, this matrix grows.
+  binaries:
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            cross: false
+            note: 64-bit PC
+          - target: aarch64-unknown-linux-musl
+            cross: true
+            note: 64-bit ARM -- Pi 3/4/5 on a 64-bit OS
+          - target: armv7-unknown-linux-musleabihf
+            cross: true
+            note: 32-bit ARM -- Pi 2/3/4 on a 32-bit OS
+          - target: arm-unknown-linux-musleabihf
+            cross: true
+            note: ARMv6 -- Pi 1 and Pi Zero
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: rustup target add ${{ matrix.target }}
+
+      - name: musl linker
+        if: ${{ !matrix.cross }}
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: cross
+        if: ${{ matrix.cross }}
+        run: cargo install cross --locked --version 0.2.5
+
+      - name: Build
+        working-directory: rust
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+
+      - name: Tarball
+        run: |
+          v="${{ needs.verify.outputs.version }}"
+          name="radbeeper-$v-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "rust/target/${{ matrix.target }}/release/radbeeper" "dist/$name/"
+          cp rust/README.md "dist/$name/README.md"
+          cp LICENSE "dist/$name/LICENSE"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          ( cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256" )
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*.tar.gz*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------- release ---
+  release:
+    needs: [verify, binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: One checksum file for the lot
+        run: |
+          cd dist
+          rm -f ./*.sha256
+          sha256sum ./*.tar.gz | sed 's|\./||' > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Notes
+        run: |
+          v="${{ needs.verify.outputs.version }}"
+          cat > notes.md <<EOF
+          ## radbeeper $v
+
+          \`\`\`sh
+          cargo install radbeeper            # from crates.io, any platform with a toolchain
+          \`\`\`
+
+          Or take a static binary below -- no toolchain, no libc to match:
+
+          | file | for |
+          | --- | --- |
+          | \`radbeeper-$v-x86_64-unknown-linux-musl.tar.gz\` | 64-bit PC |
+          | \`radbeeper-$v-aarch64-unknown-linux-musl.tar.gz\` | Pi 3/4/5, 64-bit OS |
+          | \`radbeeper-$v-armv7-unknown-linux-musleabihf.tar.gz\` | Pi 2/3/4, 32-bit OS |
+          | \`radbeeper-$v-arm-unknown-linux-musleabihf.tar.gz\` | Pi 1, Pi Zero |
+
+          \`\`\`sh
+          tar xzf radbeeper-$v-<target>.tar.gz
+          install -m 0755 radbeeper-$v-<target>/radbeeper ~/.local/bin/radbeeper
+          radbeeper probe
+          \`\`\`
+
+          \`SHA256SUMS\` covers every tarball. Check it with
+          \`sha256sum --check --ignore-missing SHA256SUMS\`.
+
+          The binary is the **read side** -- \`probe\`, \`cpm\`, \`watch\`.
+          Everything that writes the log format stays in the one-file Python
+          program in this repository.
+          EOF
+          cat notes.md
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "radbeeper ${{ needs.verify.outputs.version }}" \
+            --notes-file notes.md \
+            dist/SHA256SUMS dist/*.tar.gz
+
+  # -------------------------------------------------------------- crates ---
+  # Last, because it cannot be undone. No token lives in this repository:
+  # crates.io trades GitHub's OIDC identity for a token that lasts one job.
+  #
+  # OFF UNTIL THE REPOSITORY VARIABLE SAYS OTHERWISE. Trusted publishing is
+  # configured on a crate that already exists, so the first publish is a
+  # manual one from a laptop (RELEASING.md, step 2). Until that has happened
+  # this job would fail every tag for a reason that is not a fault in the
+  # release -- so it is skipped, the binaries still ship, and the switch is:
+  #
+  #     gh variable set CRATES_IO_TRUSTED --body true
+  #
+  crates-io:
+    needs: [verify, binaries, release]
+    if: vars.CRATES_IO_TRUSTED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+
+      - name: cargo publish
+        working-directory: rust
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

@@ -22,4 +22,13 @@ Why both: the Python runs on a machine with no toolchain and no network, which
 is the whole reason it has no dependencies. The Rust starts in a millisecond
 and costs nothing to leave running. Neither replaces the other.
 
+**Linux, for now.** The port scan reads `/dev/ttyUSB*`, `/dev/ttyACM*` and
+`/sys/bus/usb-serial`. The crate compiles anywhere POSIX and `cargo install`
+will succeed on a Mac — it just will not find a counter until the scan learns
+`/dev/cu.*`.
+
+No toolchain on the target machine? Every tagged release carries static musl
+binaries for x86\_64, aarch64, armv7 and armv6 (Pi Zero), with a `SHA256SUMS`
+alongside: <https://github.com/vonglurt/radbeeper/releases>.
+
 MIT — Copyright (c) 2026 Paul Richeson

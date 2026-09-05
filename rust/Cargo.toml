@@ -2,15 +2,26 @@
 name = "radbeeper"
 version = "0.1.0"
 edition = "2021"
+authors = ["Paul Richeson <paulr@sdf.org>"]
 rust-version = "1.70"
 description = "A GQ GMC Geiger-Muller counter on the desk: find it, watch it, three time constants at once"
 readme = "README.md"
 license = "MIT"
+documentation = "https://docs.rs/radbeeper"
 repository = "https://github.com/vonglurt/radbeeper"
 homepage = "https://github.com/vonglurt/radbeeper"
 keywords = ["geiger", "radiation", "serial", "gmc", "tui"]
 categories = ["command-line-utilities", "science"]
-exclude = ["/target"]
+# An explicit list, so a stray file in the working tree can never end up in a
+# published .crate. What ships is the four sources, the manifest, the lock,
+# the readme and the licence -- and `make rust-package` prints exactly that.
+include = [
+    "src/**/*.rs",
+    "Cargo.toml",
+    "Cargo.lock",
+    "README.md",
+    "LICENSE",
+]
 
 [[bin]]
 name = "radbeeper"

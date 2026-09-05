@@ -1,0 +1,60 @@
+# The native build, checked on every push that touches it.
+#
+# Deliberately not `cargo fmt --check`: the sources here are hand-set to a
+# narrow column so the comments read as prose, and rustfmt would undo that.
+# What is enforced is what actually reaches a user -- it compiles with no
+# warnings, clippy finds nothing that is a bug, it builds against the
+# committed lock file, the .crate that would be published builds on its own,
+# and the rust-version in the manifest is a claim that is actually true.
+name: rust
+
+on:
+  push:
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust.yml'
+  pull_request:
+    paths:
+      - 'rust/**'
+      - '.github/workflows/rust.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+defaults:
+  run:
+    working-directory: rust
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build, with no warnings allowed
+        run: cargo build --release --locked
+        env:
+          RUSTFLAGS: -D warnings
+
+      - run: cargo test --locked
+
+      # correctness and suspicious only. The style groups have opinions about
+      # line breaks that this file has already answered for itself.
+      - name: Clippy, on the lints that mean a bug
+        run: cargo clippy --all-targets --locked -- -D clippy::correctness -D clippy::suspicious
+
+      - name: The published .crate builds from its own contents
+        run: cargo package --locked
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pin the toolchain to the rust-version the manifest promises
+        run: |
+          msrv=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)
+          echo "rust-version is $msrv"
+          rustup toolchain install "$msrv" --profile minimal
+          rustup default "$msrv"
+      - run: cargo build --release --locked

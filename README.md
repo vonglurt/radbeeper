@@ -352,6 +352,28 @@ which is also why the page cannot drift from the log format.
 cargo install radbeeper
 ```
 
+That is the whole install: crates.io builds it and drops the binary in
+`~/.cargo/bin/radbeeper`, which cargo already put on your PATH. Nothing is
+installed system-wide and nothing needs root.
+
+No toolchain on the machine? Take a static binary from the
+[releases](https://github.com/vonglurt/radbeeper/releases) — musl, so one file
+runs on Alpine, on Debian and on a Pi with no libc to match:
+
+```sh
+v=0.1.0; t=aarch64-unknown-linux-musl        # or x86_64-…, armv7-…, arm-… for a Zero
+curl -LO https://github.com/vonglurt/radbeeper/releases/download/v$v/radbeeper-$v-$t.tar.gz
+curl -LO https://github.com/vonglurt/radbeeper/releases/download/v$v/SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+tar xzf radbeeper-$v-$t.tar.gz
+install -m 0755 radbeeper-$v-$t/radbeeper ~/.local/bin/radbeeper
+```
+
+Every release is cut from a tag by `.github/workflows/release.yml` — the tag
+has to match the version in the manifest or nothing is published, and crates.io
+is reached over GitHub's OIDC identity rather than an API key stored here.
+[RELEASING.md](RELEASING.md) is the procedure.
+
 `rust/` is a Cargo crate carrying the **read side** natively: `probe`, `cpm`
 and the full monitor — the same three time constants, coloured counts chart,
 accumulating spectrum ladder and twelve-row digits. One dependency, `libc`,
@@ -361,6 +383,7 @@ the drawing are arithmetic and escape codes.
 ```sh
 make rust            # build it
 make rust-install    # cargo install --path rust
+make rust-package    # exactly what a publish would upload
 ```
 
 A full probe against the counter takes **82 ms** and the binary is 400 KB.
