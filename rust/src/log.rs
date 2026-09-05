@@ -437,3 +437,240 @@ mod tests {
         assert_eq!(slot_of(-1.0, 30.0), -1, "floor, not truncate");
     }
 }
+
+/// Where logs and the status file live: the system directory when it can be
+/// written to, the user's own when it cannot.
+///
+/// Probed rather than assumed, and in that order, because the service runs as
+/// root at boot and a person running `radbeeper service` by hand does not.
+pub fn state_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let candidates = [
+        PathBuf::from("/var/log/radbeeper"),
+        PathBuf::from(home).join(".local/share/radbeeper"),
+    ];
+    for d in candidates {
+        if d.as_os_str().is_empty() {
+            continue;
+        }
+        if fs::create_dir_all(&d).is_err() {
+            continue;
+        }
+        let probe = d.join(".writable");
+        if fs::File::create(&probe).is_ok() {
+            let _ = fs::remove_file(&probe);
+            return d;
+        }
+    }
+    PathBuf::from(".")
+}
+
+/// A line saying what the service is doing, for a service that looks stuck.
+pub fn write_status(text: &str) -> PathBuf {
+    let path = state_dir().join("status");
+    if let Ok(mut f) = fs::File::create(&path) {
+        let _ = writeln!(f, "{}  {}", clock::format(clock::now(), "%Y-%m-%d %H:%M:%S"), text);
+    }
+    path
+}
+
+/// What happened between two log lines, in constant space.
+///
+/// The peaks are why this exists. A row every thirty seconds carrying only
+/// the averages as they stood at the moment of writing would miss a source
+/// that came and went in between -- the single event most worth having
+/// afterwards. A running maximum per window costs one comparison a second and
+/// no memory that grows.
+pub struct Interval {
+    pub counts: u64,
+    pub seconds: f64,
+    pub peaks: Vec<Option<f64>>,
+}
+
+impl Interval {
+    pub fn new(spans: usize) -> Interval {
+        Interval { counts: 0, seconds: 0.0, peaks: vec![None; spans] }
+    }
+
+    pub fn reset(&mut self) {
+        self.counts = 0;
+        self.seconds = 0.0;
+        for p in self.peaks.iter_mut() {
+            *p = None;
+        }
+    }
+
+    /// One sample: the raw count, each window as it stands, and how long the
+    /// sample covers.
+    ///
+    /// `dt` is 1.0 from the heartbeat, which is a second by definition. It is
+    /// NOT 1.0 for samples out of the counter's flash, where a recorded
+    /// "second" measures 1.011 of ours -- and a column that says `seconds`
+    /// has to mean seconds, or the cps beside it is a percent wrong for no
+    /// visible reason.
+    pub fn add(&mut self, counts: u32, averages: &[Option<f64>], dt: f64) {
+        self.counts += counts as u64;
+        self.seconds += dt;
+        for (i, cpm) in averages.iter().enumerate() {
+            if let (Some(v), Some(slot)) = (cpm, self.peaks.get_mut(i)) {
+                if slot.is_none() || *v > slot.unwrap() {
+                    *slot = Some(*v);
+                }
+            }
+        }
+    }
+
+    /// Counts per ONE second, whatever the interval's length. The row spacing
+    /// is never the divisor: cps means per second here as everywhere else.
+    pub fn cps(&self) -> f64 {
+        if self.seconds == 0.0 {
+            0.0
+        } else {
+            self.counts as f64 / self.seconds
+        }
+    }
+}
+
+/// Appends rows to the dated log for their month.
+///
+/// Two things it watches for, both once per row and so once per thirty
+/// seconds, against the two syscalls the row itself costs:
+///
+/// THE MONTH TURNING OVER, which is the whole of rotation.
+///
+/// THE FILE BEING REPLACED UNDERNEATH IT. A backfill merges by writing a new
+/// file and renaming it over the old one, which leaves an appender holding a
+/// descriptor onto an orphaned inode: it goes on writing, to nothing anybody
+/// will ever read. Comparing the inode catches that and reopens.
+pub struct Writer {
+    spans: Vec<f64>,
+    dir: PathBuf,
+    serial: Option<String>,
+    every: f64,
+    path: Option<PathBuf>,
+    file: Option<fs::File>,
+    ino: Option<u64>,
+    last_slot: Option<i64>,
+}
+
+impl Writer {
+    pub fn new(spans: &[f64], dir: PathBuf, serial: Option<String>, every: f64)
+        -> Writer
+    {
+        Writer {
+            spans: spans.to_vec(),
+            dir,
+            serial,
+            every,
+            path: None,
+            file: None,
+            ino: None,
+            last_slot: None,
+        }
+    }
+
+    fn open(&mut self, path: &Path) -> std::io::Result<()> {
+        self.close();
+        let fresh = fs::metadata(path).map(|m| m.len() == 0).unwrap_or(true);
+        let mut f = fs::OpenOptions::new().create(true).append(true).open(path)?;
+        if fresh {
+            writeln!(f, "{}", header(&self.spans))?;
+            f.flush()?;
+        }
+        // The slot already on disk, so a restart cannot append a second row
+        // for a slot the previous run finished. That is exactly what happens
+        // when a service comes back mid-interval: its first row would be a
+        // short one covering a stretch the last run already wrote in full.
+        let names = columns(&header(&self.spans));
+        self.last_slot = read_table(path, &names)
+            .last()
+            .map(|(w, _)| slot_of(*w, self.every));
+        self.ino = ino_of(path);
+        self.path = Some(path.to_path_buf());
+        self.file = Some(f);
+        Ok(())
+    }
+
+    fn replaced(&self) -> bool {
+        match (&self.path, self.ino) {
+            (Some(p), Some(i)) => ino_of(p) != Some(i),
+            _ => true,
+        }
+    }
+
+    /// Append a row, unless its slot is already spoken for.
+    ///
+    /// One row per slot is the rule the whole format rests on, and it has to
+    /// hold for the live logger too -- not only for the merge a backfill does.
+    pub fn write(&mut self, when: f64, text: &str) -> std::io::Result<bool> {
+        let want = path(when, &self.dir, self.serial.as_deref());
+        if self.path.as_deref() != Some(want.as_path())
+            || self.file.is_none()
+            || self.replaced()
+        {
+            self.open(&want)?;
+        }
+        let slot = slot_of(when, self.every);
+        if self.last_slot.map(|last| slot <= last).unwrap_or(false) {
+            return Ok(false);
+        }
+        if let Some(f) = self.file.as_mut() {
+            writeln!(f, "{}", text)?;
+            f.flush()?;
+        }
+        self.last_slot = Some(slot);
+        Ok(true)
+    }
+
+    pub fn close(&mut self) {
+        self.file = None;
+    }
+}
+
+fn ino_of(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(path).ok().map(|m| m.ino())
+}
+
+/// [(serial, from_time, name)] for every recorded move, oldest first.
+pub fn read_sites(directory: &Path) -> Vec<(String, f64, String)> {
+    let text = match fs::read_to_string(directory.join("sites.tsv")) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let cells: Vec<&str> = line.split('\t').collect();
+        if cells.len() < 3 {
+            continue;
+        }
+        if let Some(when) = clock::parse_stamp(cells[1]) {
+            out.push((cells[0].to_string(), when, cells[2].to_string()));
+        }
+    }
+    out.sort_by(|a, b| (a.0.as_str(), a.1).partial_cmp(&(b.0.as_str(), b.1)).unwrap());
+    out
+}
+
+/// Where that counter was at that moment.
+///
+/// Readings older than the first thing written down belong to the first place
+/// we know about, not to nowhere: the counter was somewhere, and the earliest
+/// record is the best evidence of where.
+pub fn site_at(serial: &str, when: f64, sites: &[(String, f64, String)])
+    -> Option<String>
+{
+    let mine: Vec<&(String, f64, String)> =
+        sites.iter().filter(|r| r.0 == serial).collect();
+    let first = mine.first()?;
+    let mut current = *first;
+    for row in &mine {
+        if row.1 <= when {
+            current = row;
+        }
+    }
+    Some(current.2.clone())
+}

@@ -148,3 +148,99 @@ class TestSameBytes(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipIf(ORACLE_PATH is None, "no Rust toolchain; nothing to run")
+class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
+    """A file one implementation wrote, read by the other.
+
+    The oracle above proves the two agree on how to format a value. This
+    proves the whole round trip: the Rust service writes a real log against
+    real hardware or none, and the PYTHON's own reader parses it -- same
+    header, same columns, same meaning for an empty field. A format is only
+    one format if both ends of it agree, and only one of those ends is being
+    tested by comparing strings.
+    """
+
+    BINARY = os.path.join(ROOT, "rust", "target", "release", "radbeeper")
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(cls.BINARY):
+            try:
+                subprocess.run(["cargo", "build", "--release"],
+                               cwd=os.path.join(ROOT, "rust"), check=True,
+                               stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=300)
+            except (subprocess.SubprocessError, OSError):
+                raise unittest.SkipTest("could not build the binary")
+
+    def run_service(self, seconds=8, every=2):
+        import tempfile
+        d = tempfile.mkdtemp()
+        out = subprocess.run(
+            [self.BINARY, "service", "--logs", d, "--log-every", str(every),
+             "--duration", str(seconds)],
+            capture_output=True, text=True, timeout=seconds + 60)
+        files = [os.path.join(d, n) for n in os.listdir(d)
+                 if n.endswith(".tsv")]
+        return d, files, out
+
+    def test_the_python_reads_what_the_rust_wrote(self):
+        d, files, out = self.run_service()
+        if not files:
+            # No counter on this machine: the service says dormant and stops,
+            # which is the correct behaviour and not a test failure.
+            self.assertIn("dormant", out.stdout + out.stderr)
+            self.skipTest("no counter attached")
+        self.assertEqual(len(files), 1, "one file per counter per month")
+        path = files[0]
+
+        with open(path) as f:
+            head = f.readline().rstrip("\n")
+        self.assertEqual(head, radbeeper.log_header((3, 30, 300, 3000)),
+                         "the Rust wrote a different header")
+
+        names = radbeeper.log_columns(head)
+        rows = radbeeper.read_table(path, names)
+        self.assertTrue(rows, "no rows in %s" % path)
+        for when, cells in rows:
+            got = dict(zip(names, cells))
+            self.assertEqual(got["src"], radbeeper.SRC_LIVE)
+            self.assertEqual(len(cells), len(names))
+            # cps is per ONE second, whatever the row spacing.
+            self.assertAlmostEqual(float(got["cps"]),
+                                   int(got["counts"]) / float(got["seconds"]),
+                                   places=2)
+            # An empty window is empty, not zero -- and the ones that cannot
+            # have filled in eight seconds must be empty.
+            self.assertEqual(got["cpm_3000"], "",
+                             "a 3000s window cannot be full in 8 seconds")
+
+    def test_the_file_is_chronological_under_plain_sort(self):
+        d, files, out = self.run_service()
+        if not files:
+            self.skipTest("no counter attached")
+        with open(files[0]) as f:
+            lines = [l.rstrip("\n") for l in f if not l.startswith("#")]
+        self.assertEqual(lines, sorted(lines),
+                         "the one promise the format makes")
+
+    def test_a_second_run_does_not_write_a_row_for_a_finished_slot(self):
+        # One row per slot is the rule the whole format rests on, and a
+        # service coming back mid-interval is exactly how it gets broken.
+        d, files, out = self.run_service(seconds=6, every=2)
+        if not files:
+            self.skipTest("no counter attached")
+        with open(files[0]) as f:
+            before = f.read().splitlines()
+        subprocess.run(
+            [self.BINARY, "service", "--logs", d, "--log-every", "2",
+             "--duration", "4"],
+            capture_output=True, text=True, timeout=90)
+        with open(files[0]) as f:
+            after = f.read().splitlines()
+        slots = [radbeeper.slot_of(radbeeper.row_time(l + "\t"), 2.0)
+                 for l in after if not l.startswith("#")]
+        self.assertEqual(len(slots), len(set(slots)), "a slot was written twice")
+        self.assertGreaterEqual(len(after), len(before))

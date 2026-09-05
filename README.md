@@ -543,6 +543,16 @@ directives and compares the output byte for byte — not equivalent, identical.
 It skips rather than fails where there is no Rust toolchain, because the
 Python suite has to run on a machine with nothing installed.
 
+There is a second half to it, and it is the one that matters more: the Rust
+`service` is run against the counter and **the Python's own reader parses what
+it wrote** — same header, same columns, same meaning for an empty field, one
+row per slot across a restart, and the file still chronological under plain
+`sort`. Comparing strings tests one end of a format. Reading the file with the
+other implementation tests both.
+
+`radbeeper service --logs DIR` is what makes that testable at all; without it
+the only way to exercise the logger is against the machine's real log.
+
 It earned its place on the first run. Python's `%g` — which formats the
 `seconds` column and every span in the header, and which Rust has no formatter
 for — picks scientific notation from the exponent the value has **after**
@@ -553,8 +563,8 @@ chronological.
 
 | | |
 |---|---|
-| **native now** | `probe`, `cpm`, `watch`; the log format — header, rows, dated paths, name-matched columns, the merge that never writes over a live row; local time, which Rust's standard library does not have at all |
-| **next** | `service`, then the entropy pool (SHA-256 by hand: ~50 lines, no dependency, checked against the NIST vectors), then the flash history, then `export` |
+| **native now** | `probe`, `cpm`, `watch`, **`service`**; the log format — header, rows, dated paths, name-matched columns, the merge that never writes over a live row; local time, which Rust's standard library does not have at all |
+| **next** | the entropy pool (SHA-256 by hand: ~50 lines, no dependency, checked against the NIST vectors), then the flash history, then `export` |
 | **the rule** | one dependency, still `libc`. It has `strftime`, `strptime` and `mktime`, so the port does not need a date crate; the one primitive that must be written out is SHA-256 |
 
 Nothing about this is a reason to hurry the Python out: it runs on a machine

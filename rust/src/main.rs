@@ -10,15 +10,17 @@
 mod counter;
 mod serial;
 
-use radbeeper::analysis;
+use radbeeper::{analysis, clock, log};
 use analysis::{
     bar_rows, level, spectrum_columns, Ladder, Level, Windows,
 };
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BIG_ROWS: usize = 12;
+const SERVICE_WAIT: f64 = 10.0;
 
 // A twelve-row digit, six columns wide, with the three horizontal bars drawn
 // TWO rows thick -- a one-row bar between three-row uprights reads as a
@@ -305,6 +307,173 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64, duration: Optio
 }
 
 // ------------------------------------------------------------------ main ---
+
+/// Log to disk, a row every `every` seconds, until told to stop.
+///
+/// WAITING IS NOT RETRYING, and what separates them is the device. An absent
+/// counter does not become present because a daemon asked again, so that case
+/// writes down why and exits 0 -- a stopped service, not a crash loop. A port
+/// that is present but LOCKED is the opposite: the counter is right there,
+/// somebody is watching it in a monitor, and they will close it. One open()
+/// every ten seconds picks the log back up the moment they do.
+fn service(spans: &[f64], every: f64, duration: Option<f64>,
+           device: Option<&str>, baud: Option<u32>,
+           logs: Option<std::path::PathBuf>) -> i32 {
+    install_stop_handler();
+
+    let started = clock::now();
+    let mut waiting = false;
+    let c = loop {
+        match counter::find(device, baud) {
+            Ok(c) => break c,
+            Err(e) => {
+                if !e.busy {
+                    let path = log::write_status(&format!("dormant: {}", e.reason));
+                    println!("radbeeper: dormant -- {}", e.reason);
+                    for line in e.detail.lines() {
+                        println!("    {}", line);
+                    }
+                    println!("    status: {}", path.display());
+                    println!("    it will look again at the next boot, or when you \
+                              run: rc-service radbeeper start");
+                    return 0;
+                }
+                if !waiting {
+                    waiting = true;
+                    log::write_status(&format!("waiting: {}", e.reason));
+                    println!("radbeeper: waiting -- {}", e.reason);
+                    println!("    Logging starts by itself when the port is free.");
+                }
+                let mut slept = 0.0;
+                while slept < SERVICE_WAIT {
+                    if stopping() {
+                        return 0;
+                    }
+                    if duration.map(|d| clock::now() - started >= d).unwrap_or(false) {
+                        return 0;
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                    slept += 0.5;
+                }
+            }
+        }
+    };
+
+    // --logs is what makes this path testable at all. Without it the only
+    // way to exercise the logger is against the machine's real log.
+    let dir = logs.unwrap_or_else(log::state_dir);
+    let _ = std::fs::create_dir_all(&dir);
+    log::write_status(&format!("monitoring {} ({})", c.path, c.version));
+    let mut w = Windows::new(spans);
+    let mut iv = log::Interval::new(spans.len());
+    let mut out = log::Writer::new(spans, dir.clone(), Some(c.serial_no.clone()), every);
+
+    // The site is re-read whenever sites.tsv changes, so `radbeeper site`
+    // takes effect on the next row rather than at the next restart.
+    let mut sites = log::read_sites(&dir);
+    let mut sites_mtime = mtime_of(&dir.join("sites.tsv"));
+
+    let here = log::site_at(&c.serial_no, clock::now(), &sites);
+    println!("radbeeper: monitoring {} -- {}", c.path, c.version);
+    println!("radbeeper: counter {} at {}", c.serial_no,
+             here.unwrap_or_else(|| "an unrecorded place".to_string()));
+    println!("radbeeper: logging to {}, a row every {}s",
+             log::path(clock::now(), &dir, Some(&c.serial_no)).display(),
+             log::g(every));
+    println!("radbeeper: backfill is not in this build yet -- \
+              the Python does that one");
+
+    let mut due: Option<f64> = None;
+    loop {
+        let counts = match c.next_sample(Duration::from_millis(2500)) {
+            Some(v) => v as u32,
+            None => break,
+        };
+        let when = clock::now();
+        w.add(when, counts);
+        let averages: Vec<Option<f64>> =
+            spans.iter().map(|s| w.average(*s)).collect();
+        iv.add(counts, &averages, 1.0);
+        if due.is_none() {
+            due = Some(when + every);
+        }
+        // One write and one flush per interval instead of per second: at the
+        // default that is two syscalls a minute rather than a hundred and
+        // twenty, which is the whole difference on a Pi Zero logging to an SD
+        // card. Nothing is buffered up to pay for it.
+        if when >= due.unwrap() {
+            let now = clock::now();
+            let (m, s) = (mtime_of(&dir.join("sites.tsv")), &mut sites);
+            if m != sites_mtime {
+                sites_mtime = m;
+                *s = log::read_sites(&dir);
+            }
+            let site = log::site_at(&c.serial_no, now, &sites).unwrap_or_default();
+            let line = log::row(now, iv.cps(), iv.counts, iv.seconds,
+                                &averages, &iv.peaks, log::SRC_LIVE, &site);
+            if let Err(e) = out.write(now, &line) {
+                eprintln!("radbeeper: could not write the log -- {}", e);
+                break;
+            }
+            iv.reset();
+            due = Some(when + every);
+        }
+        if stopping() {
+            break;
+        }
+        // --duration is what makes this path testable at all: without it the
+        // only way to exercise the logger is to start a daemon and kill it,
+        // which is not something a test suite should do.
+        if duration.map(|d| w.elapsed() >= d).unwrap_or(false) {
+            break;
+        }
+    }
+
+    // Whatever the last interval collected is worth keeping: a service
+    // stopped four seconds after a spike should still have the spike on
+    // disk, and the seconds column says the row is short.
+    if iv.seconds > 0.0 {
+        let now = clock::now();
+        let averages: Vec<Option<f64>> =
+            spans.iter().map(|s| w.average(*s)).collect();
+        let site = log::site_at(&c.serial_no, now, &sites).unwrap_or_default();
+        let line = log::row(now, iv.cps(), iv.counts, iv.seconds,
+                            &averages, &iv.peaks, log::SRC_LIVE, &site);
+        let _ = out.write(now, &line);
+    }
+    out.close();
+    log::write_status("stopped");
+    0
+}
+
+fn mtime_of(path: &std::path::Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata(path).ok().map(|m| m.mtime() as u64)
+}
+
+static STOP: AtomicBool = AtomicBool::new(false);
+
+/// SIGTERM and SIGINT set a flag; the loop notices between samples.
+///
+/// A signal handler must not allocate, take a lock or call anything that
+/// might, so it does the one thing that is safe: stores to an atomic the loop
+/// already reads. Stopping between samples rather than mid-write is also what
+/// keeps a half-written row off the disk.
+fn install_stop_handler() {
+    extern "C" fn handler(_sig: libc::c_int) {
+        STOP.store(true, Ordering::Relaxed);
+    }
+    let f: extern "C" fn(libc::c_int) = handler;
+    unsafe {
+        libc::signal(libc::SIGTERM, f as usize as libc::sighandler_t);
+        libc::signal(libc::SIGINT, f as usize as libc::sighandler_t);
+    }
+}
+
+fn stopping() -> bool {
+    STOP.load(Ordering::Relaxed)
+}
+
 fn parse_spans(text: &str) -> Option<Vec<f64>> {
     let mut out = Vec::new();
     for part in text.split(',') {
@@ -323,15 +492,22 @@ fn usage() {
     println!("  radbeeper probe            find the counter and say what it is");
     println!("  radbeeper cpm              the counter's own CPM, once");
     println!("  radbeeper watch            the monitor");
+    println!("  radbeeper service          log to disk, a row every 30 seconds");
     println!();
     println!("  -d, --device PATH          serial port (default: search /dev)");
     println!("  -b, --baud RATE            baud (default: try 115200 then 57600)");
     println!("      --spans 3,30,300,3000  averaging windows, seconds");
     println!("      --cpm-per-usvh N       tube factor (default {})", counter::DEFAULT_CPM_PER_USVH);
     println!("      --duration SECONDS     stop after this long");
+    println!("      --log-every SECONDS    row spacing for service (default {})",
+             log::g(log::DEFAULT_LOG_EVERY));
+    println!("      --logs DIR             where service writes (default: the");
+    println!("                             state directory)");
     println!();
-    println!("service, backfill, export, site, random and hotplug are in the");
-    println!("Python program in the same repository, which owns the log format.");
+    println!("backfill, export, site, random, recompute and hotplug are in the");
+    println!("Python program in the same repository. They are being ported; the");
+    println!("log format is here already, and tests/test_differential.py is what");
+    println!("says it is the same format and not a second dialect of it.");
 }
 
 fn main() {
@@ -342,6 +518,8 @@ fn main() {
     let mut spans = vec![3.0, 30.0, 300.0, 3000.0];
     let mut cpm_per_usvh = counter::DEFAULT_CPM_PER_USVH;
     let mut duration: Option<f64> = None;
+    let mut log_every = log::DEFAULT_LOG_EVERY;
+    let mut logs: Option<std::path::PathBuf> = None;
 
     let mut i = 0;
     while i < args.len() {
@@ -374,7 +552,11 @@ fn main() {
                 cpm_per_usvh = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(cpm_per_usvh)
             }
             "--duration" => duration = next(&mut i).and_then(|v| v.parse().ok()),
-            "service" | "backfill" | "export" | "site" | "random" | "hotplug" | "log" => {
+            "--logs" => logs = next(&mut i).map(std::path::PathBuf::from),
+            "--log-every" => {
+                log_every = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(log_every)
+            }
+            "backfill" | "export" | "site" | "random" | "hotplug" | "log" => {
                 eprintln!(
                     "radbeeper: `{}` is not in the Rust build -- it writes the log\n\
                      format, which the Python program owns. Use that one:\n\
@@ -394,6 +576,12 @@ fn main() {
     if command.is_empty() {
         usage();
         return;
+    }
+
+    if command == "service" {
+        std::process::exit(service(
+            &spans, log_every, duration, device.as_deref(), baud, logs,
+        ));
     }
 
     let found = counter::find(device.as_deref(), baud);
