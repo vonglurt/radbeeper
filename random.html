@@ -63,7 +63,7 @@ code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
 .note{color:var(--dim);font-size:.85rem;max-width:68ch}
 </style></head><body><main>
 <h1>Where the random comes from</h1>
-<p class="sub">radbeeper 0.1.0 &middot; counter F48824B8207F7E &middot; 9 emissions &middot; generated 2026-09-04 20:35</p>
+<p class="sub">radbeeper 0.1.0 &middot; counter F48824B8207F7E &middot; 9 emissions &middot; generated 2026-09-05 11:10</p>
 <p class="lede">The moment a nucleus decays is not determined by anything, which makes a Geiger&ndash;M&uuml;ller counter the textbook hardware entropy source. What is <em>not</em> textbook is how much randomness survives the journey down a serial cable, and that is what this page is for. <a href="index.html">Back to the monitor</a>.</p>
 <h2>What the serial link gives you</h2>
 <p class="note">Everything below follows from one line of the protocol. <code>&lt;HEARTBEAT1&gt;&gt;</code> makes the counter send <b>two bytes once per second</b>, and those two bytes are a count: how many arrivals landed in that second. The device drives the clock, so there is no drift between its second and ours &mdash; but there is also nothing finer. <b>One integer per second is the entire raw material.</b></p>

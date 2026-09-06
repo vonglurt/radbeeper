@@ -27,9 +27,13 @@ SHOTS = os.path.join(ROOT, "docs", "screenshots")
 RECORD = os.path.join(HERE, "record.py")
 
 # The monitor needs a real run behind it: 128 s before the spectrum has its
-# first window, 240 s before the random pool has earned a line, 300 s before
-# the third average is full. 380 s clears all three with room to animate.
-MONITOR_SECONDS = 380
+# first window, 300 s before the 5-minute average is full, and -- since the
+# pool started measuring its min-entropy instead of modelling it -- about
+# 450 s before it has earned a line. That last one is why this is not 380 any
+# more: the shot at 340 s used to catch a random line and now would not, and a
+# screenshot that quietly stops showing a feature is worse than no screenshot.
+# 560 s clears all three with room to animate.
+MONITOR_SECONDS = 560
 MONITOR_COLS, MONITOR_ROWS = 160, 30
 
 ARROW = "\u21e5"          # U+21E5, what a tab is drawn as in the log shot
@@ -128,19 +132,23 @@ def main():
                 "--seconds", MONITOR_SECONDS, "--", "./radbeeper", "watch")
 
         if want("watch"):
-            # Late enough that every window but the 3000 s one is full, the
-            # spectrum has accumulated and the random line has a value.
-            still("watch", 340, size=17, rows=MONITOR_ROWS,
+            # Late enough that the 3 s, 30 s and 300 s windows are full, the
+            # spectrum has accumulated and the random pool has earned a line.
+            # The 3000 s and 30000 s windows are still counting down, and say
+            # so, which is half the point of the panel.
+            still("watch", 520, size=17, rows=MONITOR_ROWS,
                   source="watch-long")
         if want("watch-filling"):
-            # Early, and saying so: three of the four still counting down.
-            # Far enough in that two windows have a number and two are still
-            # counting down: the point of the shot is the pair side by side.
-            still("watch-filling", 200, size=17, rows=13, source="watch-long")
+            # Early, and saying so: three of the five still counting down.
+            # Far enough in that two windows have a number and three are
+            # still counting: the point of the shot is the pair side by side.
+            # 14 rows, not 13 -- the fifth window pushed everything down one.
+            still("watch-filling", 200, size=17, rows=14, source="watch-long")
         if want("watch-spectrum"):
             # Just the spectrum band and its axis, cut out of the same frame
-            # as the hero shot: five rows of power against period.
-            still("watch-spectrum", 340, size=15, rows=6, top=19,
+            # as the hero shot: five rows of power against period. Row 20,
+            # not 19, for the same reason watch-filling grew a row.
+            still("watch-spectrum", 520, size=15, rows=6, top=20,
                   source="watch-long")
         if want("watch-300-320"):
             run(sys.executable, RECORD, "gif", cast("watch-long"),
@@ -155,8 +163,12 @@ def main():
 
     # --------------------------------------------------------- --plain ---
     if want("watch-plain"):
+        # 112 columns, not 96: a fifth window is thirteen more characters of
+        # line and at 96 every row wrapped, folding `total` onto the next one.
+        # A screenshot of the output mangled by its own terminal is worse than
+        # no screenshot -- the width is part of what is being shown.
         session("watch-plain", ["radbeeper --plain --duration 14 watch"],
-                cols=96, rows=22, seconds=30)
+                cols=112, rows=22, seconds=30)
         still("watch-plain", 29, cursor=True)
 
     # --------------------------------------------------------- commands ---

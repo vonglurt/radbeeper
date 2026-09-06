@@ -252,12 +252,43 @@ impl Spectrum {
     ///
     /// Sigma is computed for one bin, but the eye picks the tallest of many,
     /// and the biggest of many draws is much larger than any single draw.
+    ///
+    /// THE MISSING TERM, AND WHAT IT COST. This used to return
+    /// `1 + ln(B)/N`, which is the right answer for ONE periodogram and the
+    /// wrong one for an average of N. A single bin of white noise is
+    /// exponential, and the largest of B of those does land near `ln(B)`
+    /// above the mean; but the average of N is Gamma(N)/N, whose upper tail
+    /// is not exponential at all. Solving `N(r - 1 - ln r) = ln B` for the
+    /// bin that B draws just reach, and expanding it, gives
+    ///
+    /// ```text
+    /// r ~ 1 + sqrt(2x) + 2x/3,   x = ln(B)/N
+    /// ```
+    ///
+    /// and the leading term is the SQUARE ROOT, which the old form dropped
+    /// entirely. It only agrees at N = 1, where sqrt(2x) and 2x/3 happen to
+    /// sum to roughly x for x near 5. Everywhere else it is far too low, and
+    /// it gets worse the longer somebody watches: the threshold falls like
+    /// 1/N while the real peak falls like 1/sqrt(N), so the two cross.
+    ///
+    /// Measured against a null built from this counter's own recorded counts,
+    /// resampled i.i.d. so the spectrum is flat by construction, the old form
+    /// called a healthy background suspect 33% of the time at half an hour,
+    /// 64% at an hour and 80% at two -- the longer the session, the more
+    /// reliably it cried wolf. The form above holds that under 1% at every
+    /// length, and it does not cost the detection the panel is there for: a
+    /// period-8s source at HALF the background rate reads 6.4x and is called
+    /// 95% of the time inside half an hour. What it does not find is a source
+    /// at a FIFTH of background, which reads 2.7x and stays under the bar at
+    /// every length -- half an hour at this counter's 44 CPM is thirteen
+    /// hundred arrivals, and that line is not in them at any threshold.
     pub fn chance_max(&self) -> f64 {
         let n = self.independent();
         if n < 1.0 || self.bins < 2 {
             return f64::INFINITY;
         }
-        1.0 + ((self.bins - 1) as f64).ln() / n
+        let x = ((self.bins - 1) as f64).ln() / n;
+        1.0 + (2.0 * x).sqrt() + 2.0 * x / 3.0
     }
 
     pub fn period(&self, index: usize) -> f64 {
@@ -549,6 +580,93 @@ mod tests {
             top,
             s.chance_max()
         );
+    }
+
+    /// A source that is flat BY CONSTRUCTION, at the lengths people watch for.
+    ///
+    /// THE REGRESSION THIS PINS. `chance_max()` used to be `1 + ln(B)/N`,
+    /// which sinks like 1/N while the real tallest bin only sinks like
+    /// 1/sqrt(N) -- so the longer the session, the more reliably a healthy
+    /// counter was reported as contaminated. It crossed over at about half an
+    /// hour and was calling background suspect four times in five by two.
+    ///
+    /// The samples here are drawn i.i.d. from an over-dispersed distribution
+    /// (variance about twice the mean, which is what this counter actually
+    /// does -- see the entropy module), so there IS no periodic component to
+    /// find and every flag raised is a false one. Independent draws, so the
+    /// spectrum is white whatever the marginal shape.
+    #[test]
+    fn a_flat_source_is_not_called_periodic_however_long_it_is_watched() {
+        let mut seed = 0x2545f491u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed
+        };
+        // A quiet mode most seconds and an occasional burst, which is the
+        // shape the real counts have. Variance over mean is 1.25 here against
+        // the real counter's 2.2, and that gap does not matter: i.i.d. draws
+        // give a white spectrum whatever their marginal, which is the only
+        // property this test needs.
+        let mut draw = || {
+            let u = (next() >> 8) as f64 / (1u32 << 24) as f64;
+            if u < 0.55 { 0 } else if u < 0.85 { 1 } else if u < 0.96 { 2 }
+            else if u < 0.99 { 3 } else { 5 }
+        };
+
+        for &(secs, want_runs) in &[(1800usize, 6u32), (3600, 13), (7200, 27)] {
+            let mut fired = 0;
+            let trials = 20;
+            for _ in 0..trials {
+                let mut s = Spectrum::new(512);
+                for _ in 0..secs {
+                    s.add(draw());
+                }
+                assert_eq!(s.runs, want_runs, "{} seconds", secs);
+                let (top, _) = s.loudest();
+                if top >= s.chance_max() * 1.25 {
+                    fired += 1;
+                }
+            }
+            assert!(
+                fired <= 1,
+                "{} seconds of a provably flat source read as periodic {} \
+                 times in {} (chance_max {:.2}x)",
+                secs, fired, trials, Spectrum::new(512).chance_max()
+            );
+        }
+    }
+
+    /// The arithmetic itself, at the two numbers the README quotes.
+    #[test]
+    fn the_tallest_bin_by_luck_keeps_its_square_root_term() {
+        // Two windows of 256, so 127 bins and N = 2 * 9/11 independent
+        // averages: x = ln(127)/N = 2.96, and 1 + sqrt(2x) + 2x/3 = 5.4x.
+        // The old form returned 1 + x = 3.96, which is BELOW the median peak
+        // of a flat source and is the whole of the bug.
+        let mut two = Spectrum::new(256);
+        for i in 0..384 {
+            two.add((i % 3) as u32);
+        }
+        assert_eq!(two.runs, 2);
+        assert!((two.chance_max() - 5.41).abs() < 0.02,
+                "two windows: {:.2}x", two.chance_max());
+
+        // Twenty-eight windows of 512: 255 bins, N = 22.9, and 1.86x rather
+        // than the 1.2x the exponential form claimed.
+        let mut many = Spectrum::new(512);
+        for i in 0..7424 {
+            many.add((i % 3) as u32);
+        }
+        assert_eq!(many.runs, 28);
+        assert!((many.chance_max() - 1.86).abs() < 0.02,
+                "twenty-eight windows: {:.2}x", many.chance_max());
+
+        // And it must still be a threshold a real line clears easily: the
+        // period-8s test above lands above 5x on two windows and stays there.
+        assert!(many.chance_max() < two.chance_max(),
+                "more averaging must lower the bar, not raise it");
     }
 
     #[test]

@@ -56,7 +56,7 @@ footer{color:var(--dim);font-size:.82rem;margin-top:3rem;border-top:1px solid va
 code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
 </style></head><body><main>
 <h1>Radiation monitor</h1>
-<p class="sub">A GQ GMC Geiger-Muller counter on the desk &middot; generated 2026-09-04 20:35 by radbeeper 0.1.0 &middot; tube factor 151.5 CPM per &micro;Sv/h</p>
+<p class="sub">A GQ GMC Geiger-Muller counter on the desk &middot; generated 2026-09-05 11:10 by radbeeper 0.1.0 &middot; tube factor 151.5 CPM per &micro;Sv/h</p>
 <p class="lede">A <strong>GQ GMC-320 Plus</strong> Geiger&ndash;M&uuml;ller counter, plugged into a machine running <strong>Alpine Linux</strong> &mdash; or <strong><a href="https://github.com/vonglurt/copal">Copal</a></strong>, its distillation, which carries this as a stage and installs the <code>linux-lts</code> kernel package the counter needs to be seen at all &mdash; as a USB serial device, here shared into a virtual machine over USB pass-through. RadBeeper reads the counter, logs it to tab-separated files, and <strong>this page is regenerated from those files by a GitHub Action</strong> on every push. The whole of it is forkable: copy your own logs into <code>logs/</code> and you get a page like this one. <a href="https://github.com/vonglurt/radbeeper">Source and instructions</a>. <a href="random.html">Where the random comes from</a>.</p>
 <h2>Counter F48824B8207F7E</h2>
 <div class="cards">
@@ -172,14 +172,15 @@ doas adduser $USER dialout    # then log in again</pre>
 <p>If it finds nothing it says which of four things went wrong, because they have four different fixes: no serial node at all (often a kernel with no <code>ch341</code> &mdash; Alpine's <code>linux-virt</code> has none, <code>linux-lts</code> does), permission on the node, something that is not a GMC, or a port another reader already holds.</p>
 <h3>Watch it</h3>
 <pre>radbeeper watch</pre>
-<figure><img src="docs/screenshots/watch.png" alt="the monitor: four time constants, the counts, the spectrum and a line of decay-derived random" loading="lazy"><figcaption>the monitor: four time constants, the counts, the spectrum and a line of decay-derived random</figcaption></figure>
+<figure><img src="docs/screenshots/watch.png" alt="the monitor: five time constants, the counts, the spectrum and a line of decay-derived random" loading="lazy"><figcaption>the monitor: five time constants, the counts, the spectrum and a line of decay-derived random</figcaption></figure>
 <figure><img src="docs/screenshots/watch-300-320.gif" alt="seconds 300 to 320 of a real session, at ten times speed" loading="lazy"><figcaption>seconds 300 to 320 of a real session, at ten times speed</figcaption></figure>
-<p>The counter's own reading is a rolling 60-second count &mdash; one number with one time constant. RadBeeper counts the blips itself and keeps four windows at once, each a factor of ten apart.</p>
+<p>The counter's own reading is a rolling 60-second count &mdash; one number with one time constant. RadBeeper counts the blips itself and keeps five windows at once, each a factor of ten apart.</p>
 <ul class="windows">
-<li><b>3 s</b><span>Watching a source come and go as you move it. Jumpy, and honestly so.</span></li>
-<li><b>30 s</b><span>Reading the room. Settled enough to compare two places.</span></li>
-<li><b>300 s</b><span>A number worth writing down.</span></li>
+<li><b>3 s</b><span>Three seconds is too short to be a measurement. On a 40 CPM background it swings between 0 and 80, because at this rate three seconds is two counts. Watch it to see a source come and go as you move it, and do not write it down.</span></li>
+<li><b>30 s</b><span>Half a minute, and the shortest window that is a count rather than a flicker. Settled enough to compare two places, quick enough to follow your hands &mdash; which is why it is the number in the big digits, and what <code>radbeeper cpm</code> reports.</span></li>
+<li><b>300 s</b><span>Five minutes. A number worth writing down.</span></li>
 <li><b>3000 s</b><span>Fifty minutes. What the background here actually is, once the day's traffic through the room has averaged out.</span></li>
+<li><b>30000 s</b><span>Eight hours twenty &mdash; a working day. It is not a faster answer to the same question, it is the only window that spans one; a shift's worth of background, against which a day that was different is visible as a difference.</span></li>
 </ul>
 <p><strong>A window shows nothing until it is full</strong>, and says how long it still needs. A three-second CPM built from one sample is twenty times noisier than it looks, and drawing it as though it were settled is how a 25 CPM background reads as 60 and somebody goes hunting for a leak.</p>
 <figure><img src="docs/screenshots/watch-filling.png" alt="the long window still filling, and saying so" loading="lazy"><figcaption>the long window still filling, and saying so</figcaption></figure>

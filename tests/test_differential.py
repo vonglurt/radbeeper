@@ -506,7 +506,8 @@ class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
 
         with open(path) as f:
             head = f.readline().rstrip("\n")
-        self.assertEqual(head, radbeeper.log_header((3, 30, 300, 3000)),
+        self.assertEqual(head,
+                         radbeeper.log_header((3, 30, 300, 3000, 30000)),
                          "the Rust wrote a different header")
 
         names = radbeeper.log_columns(head)
@@ -524,6 +525,8 @@ class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
             # have filled in eight seconds must be empty.
             self.assertEqual(got["cpm_3000"], "",
                              "a 3000s window cannot be full in 8 seconds")
+            self.assertEqual(got["cpm_30000"], "",
+                             "nor can a 30000s one")
 
     def test_the_file_is_chronological_under_plain_sort(self):
         d, files, out = self.run_service()
