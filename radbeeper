@@ -18,16 +18,58 @@
 #
 #  THE AVERAGES ARE OURS, NOT THE COUNTER'S. <GETCPM>> returns the device's own
 #  rolling 60-second count, which is one number with one time constant. What was
-#  asked for is three: 3 seconds to see a source come and go as you move it,
-#  30 seconds to read the room, 300 seconds to have a number worth writing down.
-#  Those cannot be derived from a single CPM reading, so radbeeper counts the
-#  blips itself -- one counts-per-second sample every second, from the counter's
-#  own heartbeat -- and computes each window from the samples it kept.
+#  asked for is five, each ten times the last: 3 seconds to see a source come
+#  and go under your hand, 30 seconds to read the room, 300 seconds -- five
+#  minutes -- to have a number worth writing down, 3000 seconds (fifty minutes)
+#  for what the background here actually is, and 30000 seconds, eight hours and
+#  twenty minutes, which is a working day. Those cannot be derived from a single
+#  CPM reading, so radbeeper counts the blips itself -- one counts-per-second
+#  sample every second, from the counter's own heartbeat -- and computes each
+#  window from the samples it kept. `radbeeper cpm` reports the 30-second one,
+#  not the device's 60-second one, so that every number this program prints has
+#  the same time constant behind it.
 #
 #  A window is reported only once it is full. A "3-second CPM" made of one
 #  sample is a number twenty times noisier than it looks, and showing it as
 #  though it were settled is how a 25 CPM background reads as 60 and someone
 #  goes looking for a leak.
+#
+# ---------------------------------------------------------------------------
+#  DEPRECATED. THE IMPLEMENTATION IS THE RUST BUILD IN rust/.
+# ---------------------------------------------------------------------------
+#
+#  This file is the original and is now the ARCHIVE. New behaviour goes into
+#  rust/src/, not here; what remains of this file is kept for three reasons and
+#  no others:
+#
+#    1. It is the ORACLE the port is checked against. tests/test_differential.py
+#       runs both on the same input and compares the bytes -- not "equivalent",
+#       identical. Deleting this file deletes the only thing that can prove the
+#       Rust writes the same log format, and the format is the promise.
+#    2. It still OWNS the parts that have no Rust counterpart yet. `export`
+#       (index.html and random.html), `recompute`, `hotplug`, the write side of
+#       `site`, `--plain` and `--source sim` are implemented here and nowhere
+#       else. Every one of them is marked NOT PORTED below.
+#    3. It runs where nothing is installed: python3 and the stdlib, no cargo,
+#       no network. That is still the fastest way onto a fresh Pi.
+#
+#  EVERY top-level function and class below carries a `# PORT:` line saying
+#  where its behaviour now lives -- the Rust file, the Rust name, and whether
+#  the name changed. Read it as a map, not as an apology:
+#
+#    # PORT: replaced by rust/src/analysis.rs :: Ladder (renamed) -- ...
+#    # PORT: NOT PORTED. `export` is the largest thing still owned by this file.
+#
+#  The renames are few and all in one direction, towards shorter names inside a
+#  module that already says the subject: SpectrumLadder -> analysis::Ladder,
+#  LogWriter -> log::Writer, log_header -> log::header, log_path -> log::path,
+#  write_entropy -> entropy::write_record, check_entropy_record ->
+#  entropy::check_record, spans_arg -> parse_spans. Everything else kept its
+#  name. Classes became structs with the same methods; `Counter.samples()`, a
+#  generator, became `Counter::next_sample(timeout)`, which is pulled rather
+#  than yielded, and is the one shape change worth knowing about.
+#
+#  README.md, "What is native now", is the current line between the two.
 import argparse
 import cmath
 import collections
@@ -174,6 +216,7 @@ TERMINALS = (("foot", "-e"), ("alacritty", "-e"), ("urxvt", "-e"),
 # Where the boot service leaves things. Under /var/log when it can write there
 # and under the home directory when it cannot, because a service that refuses
 # to run unprivileged is a service nobody runs.
+# PORT: replaced by rust/src/log.rs :: state_dir() -- same name, same $XDG_STATE_HOME rules
 def state_dir():
     for d in ("/var/log/radbeeper", os.path.expanduser("~/.local/share/radbeeper")):
         try:
@@ -189,10 +232,12 @@ def state_dir():
 
 
 # ------------------------------------------------------------------ serial ---
+# PORT: replaced by rust/src/serial.rs :: OpenError::Busy -- an enum variant, not an exception
 class Busy(Exception):
     """The port is open in another process, and is being left alone."""
 
 
+# PORT: replaced by rust/src/serial.rs :: Serial -- open/write_all/read_exact_or_timeout/flush_input; termios either way
 class Serial:
     """A raw serial port, in termios rather than in pyserial.
 
@@ -294,6 +339,7 @@ class Serial:
 
 
 # ------------------------------------------------------------------ device ---
+# PORT: replaced by rust/src/counter.rs :: Counter -- cpm/voltage/datetime/model/flash_size/read_history/heartbeat map one to one; samples() becomes next_sample(timeout), pulled rather than yielded
 class Counter:
     """A GQ GMC counter, found and identified."""
 
@@ -406,6 +452,7 @@ class Counter:
         return out
 
 
+# PORT: NOT PORTED. --source sim has no Rust counterpart: the Rust build is the read side of real hardware. Test the display without a counter here.
 class SimCounter:
     """A counter that is not there: a Poisson source at a background rate.
 
@@ -481,6 +528,7 @@ class SimCounter:
 SERIAL_GLOBS = ("/dev/ttyUSB", "/dev/ttyACM")
 
 
+# PORT: replaced by rust/src/counter.rs :: candidate_ports() -- same name, same /dev glob
 def candidate_ports():
     out = []
     for prefix in SERIAL_GLOBS:
@@ -495,6 +543,7 @@ def candidate_ports():
     return out
 
 
+# PORT: replaced by rust/src/counter.rs :: usb_serial_driver_present() -- same name
 def usb_serial_driver_present():
     """Whether the running kernel could bind a USB serial adapter at all."""
     release = os.uname().release
@@ -517,6 +566,7 @@ def usb_serial_driver_present():
     return False
 
 
+# PORT: replaced by rust/src/counter.rs :: identify() -- same name, same <GETVER>> handshake across BAUD_RATES
 def identify(path, baud=None, timeout=1.0):
     """Open a port and ask what it is. None if it is not a GMC."""
     rates = (baud,) if baud else BAUD_RATES
@@ -549,6 +599,7 @@ def identify(path, baud=None, timeout=1.0):
     return None
 
 
+# PORT: replaced by rust/src/counter.rs :: NotFound -- a struct carrying the same four reasons
 class NotFound(Exception):
     """No counter, with a reason a person can act on."""
 
@@ -561,6 +612,7 @@ class NotFound(Exception):
         self.busy = busy
 
 
+# PORT: replaced by rust/src/counter.rs :: find(device, baud) -- same search, minus the sim source
 def find_counter(device=None, baud=None, source="auto", sim_cpm=25.0, seed=None):
     if source == "sim":
         return SimCounter(sim_cpm, seed)
@@ -633,6 +685,7 @@ def find_counter(device=None, baud=None, source="auto", sim_cpm=25.0, seed=None)
 # divides that scatter by root N, so a real line climbs out of the grass while
 # the grass settles down. Ten minutes of watching is five windows; an hour is
 # twenty-eight, and by then a peak twice the mean is worth believing.
+# PORT: replaced by rust/src/analysis.rs :: fft() -- same iterative radix-2, over a local complex pair
 def fft(values):
     """Iterative radix-2 Cooley-Tukey. Stdlib cmath, for the same reason there
     is no pyserial: 25 lines against a dependency this program cannot assume.
@@ -667,6 +720,7 @@ def fft(values):
     return a
 
 
+# PORT: replaced by rust/src/analysis.rs :: Spectrum -- add/wait/relative/sigma/chance_max/period/loudest all keep their names
 class Spectrum:
     """A running average of periodograms over a fixed window.
 
@@ -745,21 +799,49 @@ class Spectrum:
 
         THE TRAP THIS EXISTS TO AVOID. Sigma is computed from one bin, but the
         eye picks the tallest of a hundred and twenty-seven of them, and the
-        biggest of many draws is much larger than any single draw. Averaged N
-        times, a white bin exceeds r by about exp(-N(r-1)); across B bins the
-        largest lands near 1 + ln(B)/N. With two windows and 127 bins that is
-        nearly 4x -- so a bin at 4.9x, which reads as a confident five sigma,
-        is very close to what an entirely healthy counter produces every time
-        somebody looks. With twenty-eight windows the same arithmetic gives
-        1.2x, and 4.9x is then overwhelming.
+        biggest of many draws is much larger than any single draw. With two
+        windows and 127 bins the tallest white bin lands near 5.4x -- so a bin
+        at 4.9x, which reads as a confident five sigma, is BELOW what an
+        entirely healthy counter produces every time somebody looks. With
+        twenty-eight windows the same arithmetic gives 1.86x, and 4.9x is then
+        overwhelming.
 
-        Reporting the first as a detection is the same mistake as drawing a
-        three-second average as though it were settled, one panel up.
+        THE MISSING TERM, AND WHAT IT COST. This used to return
+        1 + ln(B)/N, which is the right answer for ONE periodogram and the
+        wrong one for an average of N. A single bin of white noise is
+        exponential, and the largest of B of those does land near ln(B) above
+        the mean; but the average of N is Gamma(N)/N, whose upper tail is not
+        exponential at all. Solving N(r - 1 - ln r) = ln B for the bin that B
+        draws just reach, and expanding it, gives
+
+            r ~ 1 + sqrt(2x) + 2x/3,   x = ln(B)/N
+
+        and the leading term is the SQUARE ROOT, which the old form dropped
+        entirely. It only agrees at N = 1, where sqrt(2x) and 2x/3 happen to
+        sum to roughly x for x near 5. Everywhere else it is far too low, and
+        it gets worse the longer somebody watches: the threshold falls like
+        1/N while the real peak falls like 1/sqrt(N), so the two cross.
+
+        Measured against a null built from this counter's own recorded counts,
+        resampled i.i.d. so the spectrum is flat by construction, the old form
+        called a healthy background suspect 33% of the time at half an hour,
+        64% at an hour and 80% at two -- the longer the session, the more
+        reliably it cried wolf. The form below holds that under 1% at every
+        length, and it does not cost the detection the panel is there for: a
+        period-8s source at HALF the background rate reads 6.4x and is called
+        95% of the time inside half an hour. What it does not find is a source
+        at a FIFTH of background, which reads 2.7x and stays under the bar at
+        every length -- half an hour at this counter's 44 CPM is thirteen
+        hundred arrivals, and that line is not in them at any threshold.
+
+        Reporting a chance peak as a detection is the same mistake as drawing
+        a three-second average as though it were settled, one panel up.
         """
         n = self.independent()
         if n < 1 or self.bins < 2:
             return float("inf")
-        return 1.0 + math.log(self.bins - 1) / n
+        x = math.log(self.bins - 1) / n
+        return 1.0 + math.sqrt(2.0 * x) + 2.0 * x / 3.0
 
     def wait(self):
         """Samples still needed before the first window closes."""
@@ -800,6 +882,7 @@ class Spectrum:
         return self.window / (k * rate)
 
 
+# PORT: replaced by rust/src/analysis.rs :: Ladder (renamed) -- new/add/best, the same 128/256/512 rungs
 class SpectrumLadder:
     """Several windows at once, so resolution grows with observation time.
 
@@ -841,6 +924,7 @@ class SpectrumLadder:
         return min(self.rungs, key=lambda r: r.wait())
 
 
+# PORT: replaced by rust/src/analysis.rs :: spectrum_columns() -- same name, same loudest-bin fold
 def spectrum_columns(rel, width):
     """Fold the bins onto the columns the screen actually has.
 
@@ -906,6 +990,7 @@ ENTROPY_BITS = 256          # 64 hex characters
 ENTROPY_LABEL = b"radbeeper/entropy/1"
 
 
+# PORT: replaced by rust/src/entropy.rs :: poisson_min_entropy() -- same name; kept only as the number to print beside the measured one
 def poisson_min_entropy(rate):
     """Bits per sample for Poisson arrivals at `rate` per sample.
 
@@ -926,6 +1011,7 @@ def poisson_min_entropy(rate):
     return -math.log(best, 2)
 
 
+# PORT: replaced by rust/src/entropy.rs :: mcv_min_entropy() -- same name, same SP 800-90B 6.3.1 bound
 def mcv_min_entropy(counts, confidence=2.576):
     """Measured min-entropy per sample, bits. NIST SP 800-90B section 6.3.1.
 
@@ -959,6 +1045,7 @@ def mcv_min_entropy(counts, confidence=2.576):
     return -math.log(upper, 2)
 
 
+# PORT: replaced by rust/src/entropy.rs :: Entropy -- add/rate/bits/ready/draw keep their names; pool_bits_modelled() becomes the model_bits() method
 class Entropy:
     """Random bits from decay timing, with the accounting to justify them."""
 
@@ -1045,6 +1132,7 @@ class Entropy:
         return out, record
 
 
+# PORT: replaced by rust/src/entropy.rs :: pack_counts() -- same name, same hex-digit-per-second packing
 def pack_counts(counts):
     """Per-second counts as hex nibbles, 15 meaning "15 or more".
 
@@ -1056,15 +1144,18 @@ def pack_counts(counts):
     return "".join("%x" % min(15, max(0, int(c))) for c in counts)
 
 
+# PORT: replaced by rust/src/entropy.rs :: unpack_counts() -- same name
 def unpack_counts(text):
     return [int(ch, 16) for ch in text]
 
 
+# PORT: replaced by rust/src/entropy.rs :: Entropy::model_bits() -- a method there, a free function here
 def pool_bits_modelled(record):
     """What Poisson at the observed rate would have claimed for this pool."""
     return poisson_min_entropy(record["rate"]) * record["seconds"]
 
 
+# PORT: replaced by rust/src/entropy.rs :: check_record() (renamed) -- same digest over the same label, seq, start and counts
 def check_entropy_record(record):
     """Recompute a line from the counts recorded beside it."""
     e = Entropy()
@@ -1074,6 +1165,7 @@ def check_entropy_record(record):
     return e.digest(record["seq"]) == record["hex"]
 
 
+# PORT: replaced by rust/src/entropy.rs :: pool_status() -- same name, same countdown wording
 def pool_status(pool, prefix="next in "):
     """Where the pool has got to, in the words each state deserves.
 
@@ -1089,6 +1181,7 @@ def pool_status(pool, prefix="next in "):
     return "measuring the source (%ds)" % len(pool.counts)
 
 
+# PORT: replaced by rust/src/entropy.rs :: group_hex() -- same name; the 8/space grouping is fixed there
 def group_hex(text, size=8, sep=" "):
     """Hex in blocks, because 64 undifferentiated characters cannot be read,
     compared against a screen, or dictated down a phone."""
@@ -1096,6 +1189,7 @@ def group_hex(text, size=8, sep=" "):
 
 
 # ---------------------------------------------------------------- averages ---
+# PORT: replaced by rust/src/analysis.rs :: Windows -- new/add/elapsed/average keep their names and the same running sums
 class Windows:
     """Counts per second in, three running CPM averages out.
 
@@ -1112,7 +1206,7 @@ class Windows:
     doing was measured, not guessed.
     """
 
-    def __init__(self, spans=(3, 30, 300, 3000)):
+    def __init__(self, spans=(3, 30, 300, 3000, 30000)):
         self.spans = tuple(spans)
         self.longest = max(self.spans)
         self.samples = []
@@ -1171,6 +1265,7 @@ class Windows:
         return cpm / cpm_per_usvh
 
 
+# PORT: replaced by rust/src/log.rs :: Interval -- new/reset/add/cps, the per-row accumulator between log writes
 class Interval:
     """What happened between two log lines, in constant space.
 
@@ -1227,11 +1322,13 @@ class Interval:
 
 
 # ---------------------------------------------------------------- commands ---
+# PORT: replaced by rust/src/main.rs, which calls counter::find() directly -- there is no separate wrapper there
 def open_counter(args):
     return find_counter(args.device, args.baud, args.source, args.sim_cpm,
                         args.seed)
 
 
+# PORT: replaced by rust/src/main.rs :: the "probe" arm of main() -- same fields in the same order
 def cmd_probe(args):
     try:
         c = open_counter(args)
@@ -1262,31 +1359,62 @@ def cmd_probe(args):
     return 0
 
 
+CPM_WINDOW = 30
+
+
+# PORT: replaced by rust/src/main.rs :: cpm_cmd() -- same 30-second window, same stderr note and stdout answer
 def cmd_cpm(args):
+    """RadBeeper's own 30-second average, counted here rather than asked for.
+
+    <GETCPM>> WAS THE OBVIOUS THING AND IT ANSWERS A DIFFERENT QUESTION. The
+    device keeps an internal rolling SIXTY-second count, and that is a
+    different time constant from anything else this program prints: `watch`
+    puts the 30 s window in the big digits, and `cpm` answering with a 60 s
+    number meant the two disagreed by more than the noise, with neither of
+    them wrong. One number, one time constant, and it is the one the rest of
+    the program already uses.
+
+    THE COST IS THIRTY SECONDS AND IT IS NOT HIDDEN. A window shows nothing
+    until it is full -- the same promise the monitor makes, for the same
+    reason -- so this counts for the whole span before printing anything, and
+    says so on stderr while it waits. stdout carries the answer alone, so it
+    still pipes.
+    """
     try:
         c = open_counter(args)
     except NotFound as e:
         print("no counter: %s" % e.reason, file=sys.stderr)
         return 1
-    n = c.cpm()
-    c.close()
+    w = Windows((CPM_WINDOW,))
+    print("counting for %ds..." % CPM_WINDOW, file=sys.stderr)
+    try:
+        for when, counts in c.samples():
+            w.add(when, counts)
+            if w.average(CPM_WINDOW) is not None:
+                break
+    finally:
+        c.close()
+    n = w.average(CPM_WINDOW)
     if n is None:
-        print("the counter did not answer", file=sys.stderr)
+        print("the counter stopped talking after %ds" % int(w.elapsed()),
+              file=sys.stderr)
         return 1
-    print("%d CPM   %.3f uSv/h" % (n, n / args.cpm_per_usvh))
+    print("%.1f CPM   %.3f uSv/h" % (n, n / args.cpm_per_usvh))
     return 0
 
 
+# PORT: NOT PORTED. --plain is Python-only; the Rust build draws the full monitor or nothing.
 def format_line(w, args):
-    """One line of the three averages, for a log or a pipe."""
+    """One line of every average, for a log or a pipe."""
     bits = []
     for span in w.spans:
         v = w.average(span)
-        bits.append("%3ds %s" % (span, "  --  " if v is None else "%6.1f" % v))
+        bits.append("%5ds %s" % (span, "  --  " if v is None else "%6.1f" % v))
     return "%s  |  %s  |  total %d in %ds" % (
         time.strftime("%H:%M:%S"), "  ".join(bits), w.total, int(w.elapsed()))
 
 
+# PORT: NOT PORTED. See format_line above.
 def run_plain(counter, w, args, out=sys.stdout):
     for when, counts in counter.samples():
         w.add(when, counts)
@@ -1308,6 +1436,7 @@ LEVEL_RAISED = 100.0
 LEVEL_HIGH = 300.0
 
 
+# PORT: replaced by rust/src/analysis.rs :: level() -- same name, same LEVEL_RAISED/LEVEL_HIGH thresholds
 def level(cpm):
     if cpm is None:
         return "unknown"
@@ -1318,6 +1447,7 @@ def level(cpm):
     return "calm"
 
 
+# PORT: SUPERSEDED. The Rust monitor draws analysis.rs :: bar_rows() instead; analysis.rs :: SPARK still carries the glyph table.
 def sparkline(samples, width):
     tail = samples[-width:]
     if not tail:
@@ -1392,6 +1522,7 @@ BIG_DIGITS = {
 BIG_ROWS = 12
 
 
+# PORT: replaced by rust/src/main.rs :: big_number() -- same name, same block-glyph digits
 def big_number(text, on="\u2588", off=" "):
     """`text` as six rows of block glyphs. Unknown characters are skipped."""
     rows = [""] * BIG_ROWS
@@ -1405,6 +1536,7 @@ def big_number(text, on="\u2588", off=" "):
     return rows
 
 
+# PORT: replaced by rust/src/analysis.rs :: bar_rows() -- same name, same eight levels a row
 def bar_rows(samples, width, height=4):
     """The counts as a column chart `height` terminal rows tall.
 
@@ -1429,6 +1561,7 @@ def bar_rows(samples, width, height=4):
     return rows
 
 
+# PORT: replaced by rust/src/main.rs :: watch() -- the same panels, drawn with escape codes rather than curses
 def run_curses(counter, w, args):
     import curses
 
@@ -1477,7 +1610,7 @@ def run_curses(counter, w, args):
             for span in w.spans:
                 cpm = w.average(span)
                 usvh = w.usvh(span, args.cpm_per_usvh)
-                label = "%4ds" % span
+                label = "%5ds" % span
                 if cpm is None:
                     left = int(span - w.elapsed()) + 1
                     stdscr.addnstr(row, 0, "%s   filling, %ds to go"
@@ -1485,9 +1618,9 @@ def run_curses(counter, w, args):
                                    curses.A_DIM)
                 else:
                     stdscr.addnstr(row, 0, label, width - 1, curses.A_DIM)
-                    stdscr.addnstr(row, 6, "%8.1f CPM" % cpm, width - 7,
+                    stdscr.addnstr(row, 7, "%8.1f CPM" % cpm, width - 8,
                                    band(cpm))
-                    stdscr.addnstr(row, 22, "%8.3f uSv/h" % usvh, width - 23,
+                    stdscr.addnstr(row, 23, "%8.3f uSv/h" % usvh, width - 24,
                                    curses.A_NORMAL)
                 row += 1
             row += 1
@@ -1497,7 +1630,7 @@ def run_curses(counter, w, args):
             stdscr.addnstr(row, 0, "run  %d counts in %ds"
                            % (w.total, int(w.elapsed())), width - 1)
 
-            # THE NUMBER, BIG, to the right of the three small ones. The 30s
+            # THE NUMBER, BIG, to the right of the small ones. The 30s
             # window is the one to put in six-row digits: 3s is too jumpy to
             # read as a headline and 300s is too slow to react to anything
             # somebody is doing with their hands.
@@ -1657,6 +1790,7 @@ def run_curses(counter, w, args):
     curses.wrapper(draw)
 
 
+# PORT: replaced by rust/src/main.rs :: watch(), reached from the "watch" arm of main()
 def cmd_watch(args):
     try:
         counter = open_counter(args)
@@ -1722,6 +1856,7 @@ def cmd_watch(args):
 # So it is three bytes and the two that follow it are samples. 0x55AA itself
 # turned up as a "count" of 21,930 under the old reading, which is the marker
 # eating itself and was the thread worth pulling.
+# PORT: replaced by rust/src/history.rs :: raw() returning RawIter -- same name, same three record shapes
 def _history_raw(blob):
     """Yield (offset, kind, value) for each record: mark, count or note.
 
@@ -1769,6 +1904,7 @@ def _history_raw(blob):
         i += 1
 
 
+# PORT: replaced by rust/src/history.rs :: marks() -- same name, same wrapped-ring search
 def history_marks(blob):
     """[[offset, unix time, samples before the next mark]] -- one per timestamp.
 
@@ -1791,6 +1927,7 @@ def history_marks(blob):
     return marks
 
 
+# PORT: replaced by rust/src/history.rs :: sample_intervals() -- same name, same measured spacing
 def sample_intervals(marks):
     """Seconds per sample for each stretch between two timestamps.
 
@@ -1828,6 +1965,7 @@ def sample_intervals(marks):
             else x for x in raw]
 
 
+# PORT: replaced by rust/src/history.rs :: records() -- same name
 def history_records(blob):
     """Yield (offset, when, dt, count, note) for every record in an image.
 
@@ -1857,6 +1995,7 @@ def history_records(blob):
             yield off, base, dt, None, val
 
 
+# PORT: replaced by rust/src/history.rs :: samples() -- same name, same clock offset
 def history_samples(blob, offset=0.0):
     """Yield (unix time, count, seconds this sample covers).
 
@@ -1867,6 +2006,7 @@ def history_samples(blob, offset=0.0):
             yield when + offset, count, dt
 
 
+# PORT: replaced by rust/src/main.rs :: measure_clock_offset() -- same name
 def measure_clock_offset(counter):
     """Seconds to add to the counter's timestamps to land on this clock.
 
@@ -1893,6 +2033,7 @@ def measure_clock_offset(counter):
     return (before + after) / 2.0 - theirs
 
 
+# PORT: replaced by rust/src/main.rs :: first_mark_time() -- same name
 def first_mark_time(counter, address, probe):
     """The time of the first timestamp in a probe read at `address`."""
     chunk = counter.read_history(address, probe) or b""
@@ -1902,6 +2043,7 @@ def first_mark_time(counter, address, probe):
     return None
 
 
+# PORT: replaced by rust/src/main.rs :: find_history_end() -- same name, same probe
 def find_history_end(counter, size, probe=2048):
     """(newest byte address, whether the flash has wrapped).
 
@@ -1968,6 +2110,7 @@ def find_history_end(counter, size, probe=2048):
     return lo + probe, True
 
 
+# PORT: replaced by rust/src/main.rs :: log_cmd() -- `log info` and `log pull`
 def cmd_log(args):
     try:
         c = open_counter(args)
@@ -2037,6 +2180,7 @@ def cmd_log(args):
 # from the file. Nothing is interpolated across it, because a row that says
 # 0.000 CPS for a half hour nobody measured is worse than no row at all -- it
 # is the same mistake as drawing an unfilled window as zero, one file down.
+# PORT: replaced by rust/src/log.rs :: header() -- same columns, same %g formatting via log.rs :: g()
 def log_header(spans):
     head = ["time", "cps", "counts", "seconds"]
     head += ["cpm_%g" % s for s in spans]
@@ -2052,6 +2196,7 @@ def log_header(spans):
     return "#" + "\t".join(head)
 
 
+# PORT: replaced by rust/src/log.rs :: row() -- same tabs, same field order
 def log_row(when, cps, counts, seconds, averages, peaks, src, site=""):
     """One tab-separated line: when, how fast, the worst it got, and whence.
 
@@ -2068,6 +2213,7 @@ def log_row(when, cps, counts, seconds, averages, peaks, src, site=""):
     return "\t".join(cells)
 
 
+# PORT: replaced by rust/src/log.rs :: read_sites() -- same name
 def read_sites(directory=None):
     """[(serial, from_time, name)], oldest first."""
     path = os.path.join(directory or state_dir(), SITES_NAME)
@@ -2091,6 +2237,7 @@ def read_sites(directory=None):
     return out
 
 
+# PORT: replaced by rust/src/log.rs :: site_at() -- same name, same as-of lookup
 def site_at(serial, when, sites):
     """Where that counter was at that moment.
 
@@ -2109,6 +2256,7 @@ def site_at(serial, when, sites):
     return current
 
 
+# PORT: NOT PORTED. The write side of `site` is still here.
 def record_site(serial, name, when=None, directory=None):
     """Append a move. Append-only, because it is a history and not a setting."""
     d = directory or state_dir()
@@ -2128,6 +2276,7 @@ def record_site(serial, name, when=None, directory=None):
     return path
 
 
+# PORT: NOT PORTED. See record_site above.
 def ensure_site(serial, directory=None):
     """The sites on file. Nothing is invented for a counter nobody has placed.
 
@@ -2137,6 +2286,7 @@ def ensure_site(serial, directory=None):
     return read_sites(directory)
 
 
+# PORT: replaced by rust/src/log.rs :: path() -- same cpm-<serial>-<YYYY-MM>.tsv name
 def log_path(when, directory=None, serial=None):
     """The dated log a row belongs in: one file per counter per month.
 
@@ -2164,6 +2314,7 @@ def log_path(when, directory=None, serial=None):
                            time.strftime("%Y-%m", time.localtime(when))))
 
 
+# PORT: replaced by rust/src/log.rs :: align_row() -- same name, same match-by-name
 def align_row(cells, from_names, to_names):
     """One row re-columned from the header it was written under.
 
@@ -2179,6 +2330,7 @@ def align_row(cells, from_names, to_names):
     return [have.get(name, "") for name in to_names]
 
 
+# PORT: replaced by rust/src/log.rs :: columns() -- same name
 def log_columns(header_line):
     """The column names a header line declares, '#' stripped from the first."""
     if not header_line.startswith("#"):
@@ -2186,6 +2338,7 @@ def log_columns(header_line):
     return header_line[1:].rstrip("\n").split("\t")
 
 
+# PORT: replaced by rust/src/log.rs :: read_table() -- same name
 def read_table(path, to_names):
     """(when, cells) for a log written under any header, aligned to `to_names`.
 
@@ -2218,11 +2371,13 @@ def read_table(path, to_names):
     return out
 
 
+# PORT: replaced by rust/src/log.rs :: slot_of() -- same name
 def slot_of(when, every):
     """The slot a time falls in. This is a row's identity -- see above."""
     return int(when // every)
 
 
+# PORT: replaced by rust/src/log.rs :: row_time() -- same name
 def row_time(line):
     """The unix time a written row carries, or None if it is not a row."""
     if not line or line.startswith("#"):
@@ -2234,6 +2389,7 @@ def row_time(line):
         return None
 
 
+# PORT: replaced by rust/src/log.rs :: merge() reads the file itself; there is no separate reader there
 def read_log(path):
     """[(unix time, line)] for an existing log. Missing is empty, not an error."""
     out = []
@@ -2249,6 +2405,7 @@ def read_log(path):
     return out
 
 
+# PORT: replaced by rust/src/log.rs :: merge() -- same slot identity, same rewrite-in-place
 def merge_log(path, header, rows, every):
     """Fold rows into the log, one per slot, never over one already there.
 
@@ -2289,6 +2446,7 @@ def merge_log(path, header, rows, every):
     return added, clashed
 
 
+# PORT: replaced by rust/src/log.rs :: Writer (renamed) -- new/write/close, the same month rotation and inode check
 class LogWriter:
     """Appends rows to the dated log for their month.
 
@@ -2365,6 +2523,7 @@ class LogWriter:
         self.file = None
 
 
+# PORT: NOT PORTED. A one-time migration for logs this program wrote before the naming changed.
 def migrate_legacy_log(args, directory=None, serial=None):
     """Fold an old undated cpm.tsv into the dated files, once.
 
@@ -2405,6 +2564,7 @@ def migrate_legacy_log(args, directory=None, serial=None):
 # averaging: the same one, fed from a different source. A backfilled row and a
 # live row of the same stretch would agree, which is the only way to be sure
 # the reconstruction means what the live rows mean.
+# PORT: replaced by rust/src/history.rs :: rows_from_samples() -- same name, same gap handling
 def rows_from_samples(samples, spans, every, max_gap, src=SRC_FLASH,
                       site_for=None):
     """Replay timed samples into log rows, one per slot, gaps ending averages."""
@@ -2443,6 +2603,7 @@ def rows_from_samples(samples, spans, every, max_gap, src=SRC_FLASH,
     return rows
 
 
+# PORT: replaced by rust/src/history.rs :: backfill() -- same name, returning the same Report
 def backfill(blob, args, offset=0.0, path=None, serial=None):
     """Fold whatever the image can account for into the log. Returns a report."""
     every = args.log_every
@@ -2486,6 +2647,7 @@ def backfill(blob, args, offset=0.0, path=None, serial=None):
             "holes": holes, "files": sorted(files)}
 
 
+# PORT: replaced by rust/src/main.rs :: read_history_tail() -- same name
 def read_history_tail(counter, want, quiet=False):
     """The newest `want` bytes of the flash, in the order they were recorded.
 
@@ -2524,6 +2686,7 @@ def read_history_tail(counter, want, quiet=False):
     return grab(size - over, over) + head
 
 
+# PORT: replaced by rust/src/main.rs :: backfill_cmd() prints the same report inline
 def say_backfill(report, offset):
     if not report["samples"]:
         print("radbeeper: no placeable samples in the history read")
@@ -2543,6 +2706,7 @@ def say_backfill(report, offset):
         print("           -> %s" % one)
 
 
+# PORT: replaced by rust/src/main.rs :: backfill_cmd() -- same name
 def cmd_backfill(args):
     if not args.log:
         try:
@@ -2585,6 +2749,7 @@ def cmd_backfill(args):
     return 0
 
 
+# PORT: replaced by rust/src/entropy.rs :: write_record() (renamed) -- same TSV, same suspect column
 def write_entropy(record, serial, suspect):
     """Append an emission and the counts that made it, so it can be checked.
 
@@ -2607,6 +2772,7 @@ def write_entropy(record, serial, suspect):
     return path
 
 
+# PORT: replaced by rust/src/main.rs :: check_random(), over entropy.rs :: read_emissions() and check_record()
 def check_random_log(path):
     """Recompute every emission from the counts written beside it.
 
@@ -2642,6 +2808,7 @@ def check_random_log(path):
     return 1 if bad else 0
 
 
+# PORT: replaced by rust/src/main.rs :: random() -- same pool, same spectrum health check
 def cmd_random(args):
     """Collect until the pool has earned the bits, then print one line."""
     if getattr(args, "check", None):
@@ -2727,6 +2894,7 @@ def cmd_random(args):
 #   * Any window whose rows are not contiguous. A gap means the counter was
 #     not recording, and a mean across it would average two different
 #     afternoons and call it one number.
+# PORT: NOT PORTED. `recompute` is still Python.
 def recompute_rows(rows, spans, max_gap):
     """Fill empty window cells from the counts already in the rows.
 
@@ -2773,6 +2941,7 @@ def recompute_rows(rows, spans, max_gap):
     return filled, width
 
 
+# PORT: NOT PORTED. See recompute_rows above.
 def cmd_recompute(args):
     """Fill long-window columns in existing logs from the counts in them."""
     directory = args.logs or state_dir()
@@ -2812,6 +2981,7 @@ def cmd_recompute(args):
     return 0
 
 
+# PORT: NOT PORTED. The Rust reads sites (log.rs :: read_sites/site_at) but does not write them.
 def cmd_site(args):
     """Where a counter is, and everywhere it has been."""
     serial = args.serial
@@ -2866,6 +3036,7 @@ HOMEPAGE = "https://github.com/vonglurt/radbeeper"
 TAGLINE = "A GQ GMC Geiger-Muller counter on the desk"
 
 
+# PORT: replaced by rust/src/log.rs :: files() -- same name, same sort
 def log_files(directory=None):
     """[(serial, path)] for every dated log in a directory, oldest name first."""
     d = directory or state_dir()
@@ -2887,6 +3058,7 @@ def log_files(directory=None):
     return out
 
 
+# PORT: replaced by rust/src/log.rs :: read_table() covers this
 def read_rows(path):
     """Yield (when, cells) for a dated log, header and blanks skipped."""
     try:
@@ -2900,6 +3072,7 @@ def read_rows(path):
         return
 
 
+# PORT: NOT PORTED. The whole `export` side is still Python.
 def summarise(directory=None, cpm_per_usvh=DEFAULT_CPM_PER_USVH):
     """Per counter: the totals, the daily rollup, and the last rows seen.
 
@@ -2965,6 +3138,7 @@ def summarise(directory=None, cpm_per_usvh=DEFAULT_CPM_PER_USVH):
     return counters
 
 
+# PORT: NOT PORTED. Part of `export`.
 def nice_ceiling(value):
     """A round number at or above value, for an axis somebody can read."""
     if value <= 0:
@@ -2977,6 +3151,7 @@ def nice_ceiling(value):
     return 10 * power
 
 
+# PORT: NOT PORTED. Part of `export`.
 def hour_series(counter):
     """[(unix time, mean CPM, peak CPM or None)] per hour, in order."""
     out = []
@@ -2989,6 +3164,7 @@ def hour_series(counter):
     return out
 
 
+# PORT: NOT PORTED. Part of `export`.
 def svg_plot(series, width=1120, height=1200, pad_l=52, pad_b=26, pad_t=12,
              pad_r=10):
     """An inline SVG line chart. No plotting library, for the same reason
@@ -3087,11 +3263,13 @@ def svg_plot(series, width=1120, height=1200, pad_l=52, pad_b=26, pad_t=12,
     return "".join(out)
 
 
+# PORT: NOT PORTED. Part of `export`.
 def esc(text):
     return (str(text).replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
+# PORT: NOT PORTED. Part of `export`.
 def page_head(title, extra=()):
     """The <head> and the one stylesheet both generated pages use.
 
@@ -3189,6 +3367,7 @@ def page_head(title, extra=()):
     return out
 
 
+# PORT: NOT PORTED. Part of `export`: index.html is generated here.
 def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
                 title="Radiation monitor", shots=None, random_link=None):
     """One self-contained page: no scripts, no fetches, no web fonts."""
@@ -3364,22 +3543,32 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
 
     a("<h3>Watch it</h3>")
     a("<pre>radbeeper watch</pre>")
-    shot("watch", "the monitor: four time constants, the counts, the "
+    shot("watch", "the monitor: five time constants, the counts, the "
                   "spectrum and a line of decay-derived random")
     shot("watch-300-320", "seconds 300 to 320 of a real session, at ten times "
                           "speed")
     a("<p>The counter's own reading is a rolling 60-second count &mdash; one "
       "number with one time constant. RadBeeper counts the blips itself and "
-      "keeps four windows at once, each a factor of ten apart.</p>")
+      "keeps five windows at once, each a factor of ten apart.</p>")
     a('<ul class="windows">')
-    a("<li><b>3 s</b><span>Watching a source come and go as you move it. "
-      "Jumpy, and honestly so.</span></li>")
-    a("<li><b>30 s</b><span>Reading the room. Settled enough to compare two "
-      "places.</span></li>")
-    a("<li><b>300 s</b><span>A number worth writing down.</span></li>")
+    a("<li><b>3 s</b><span>Three seconds is too short to be a measurement. "
+      "On a 40 CPM background it swings between 0 and 80, because at this "
+      "rate three seconds is two counts. Watch it to see a source come and "
+      "go as you move it, and do not write it down.</span></li>")
+    a("<li><b>30 s</b><span>Half a minute, and the shortest window that is a "
+      "count rather than a flicker. Settled enough to compare two places, "
+      "quick enough to follow your hands &mdash; which is why it is the "
+      "number in the big digits, and what <code>radbeeper cpm</code> "
+      "reports.</span></li>")
+    a("<li><b>300 s</b><span>Five minutes. A number worth writing "
+      "down.</span></li>")
     a("<li><b>3000 s</b><span>Fifty minutes. What the background here "
       "actually is, once the day's traffic through the room has averaged "
       "out.</span></li>")
+    a("<li><b>30000 s</b><span>Eight hours twenty &mdash; a working day. It "
+      "is not a faster answer to the same question, it is the only window "
+      "that spans one; a shift's worth of background, against which a day "
+      "that was different is visible as a difference.</span></li>")
     a("</ul>")
     a("<p><strong>A window shows nothing until it is full</strong>, and says "
       "how long it still needs. A three-second CPM built from one sample is "
@@ -3470,6 +3659,7 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
 RANDOM_GLOB = "random-"
 
 
+# PORT: NOT PORTED. Part of `export`.
 def random_files(directory=None):
     """[(serial, path)] for every emission log in a directory."""
     d = directory or state_dir()
@@ -3486,6 +3676,7 @@ def random_files(directory=None):
     return out
 
 
+# PORT: replaced by rust/src/entropy.rs :: read_emissions() reads the same file for `random --check`; the page-building use of it is still here
 def read_random(path):
     """Emissions, oldest first, each with the counts that produced it."""
     rows = []
@@ -3512,6 +3703,7 @@ def read_random(path):
     return rows
 
 
+# PORT: NOT PORTED. Part of `export`.
 def entropy_budget(samples):
     """Everything the page says about a set of per-second counts.
 
@@ -3539,10 +3731,12 @@ def entropy_budget(samples):
     }
 
 
+# PORT: NOT PORTED. Part of `export`.
 def poisson_pmf(lam, k):
     return math.exp(-lam) * lam ** k / math.factorial(k)
 
 
+# PORT: NOT PORTED. Part of `export`.
 def svg_hist(freq, lam, width=1120, height=340, pad_l=54, pad_b=34, pad_t=14,
              pad_r=12):
     """Observed counts against the Poisson the model assumed, side by side.
@@ -3601,6 +3795,7 @@ def svg_hist(freq, lam, width=1120, height=340, pad_l=54, pad_b=34, pad_t=14,
     return "".join(out)
 
 
+# PORT: NOT PORTED. Part of `export`.
 def svg_bits(samples, want=ENTROPY_BITS, width=1120, height=320, pad_l=54,
              pad_b=34, pad_t=14, pad_r=12):
     """Bits accumulating against seconds: measured, and what was claimed.
@@ -3675,6 +3870,7 @@ RANDOM_CSS = (
 )
 
 
+# PORT: NOT PORTED. Part of `export`: random.html is generated here.
 def render_random_html(serial, pools, title="Where the random comes from",
                        index="index.html"):
     """The audit page: what the source is, what it is worth, and every line.
@@ -3887,6 +4083,7 @@ def render_random_html(serial, pools, title="Where the random comes from",
     return "\n".join(out)
 
 
+# PORT: NOT PORTED. `export` is the largest thing still owned by this file.
 def cmd_export(args):
     directory = args.logs or state_dir()
     counters = summarise(directory, args.cpm_per_usvh)
@@ -3949,6 +4146,7 @@ def cmd_export(args):
 # that respawns forever on a Pi Zero is a service that costs more than it
 # measures. The retry is the next boot -- or `rc-service radbeeper start` the
 # moment the thing is plugged in.
+# PORT: replaced by rust/src/log.rs :: write_status() -- same name, same status file
 def write_status(text):
     path = os.path.join(state_dir(), "status")
     try:
@@ -3959,6 +4157,7 @@ def write_status(text):
     return path
 
 
+# PORT: replaced by rust/src/main.rs :: service() -- same cadence, same dormant/waiting exits
 def cmd_service(args):
     stop = {"now": False}
 
@@ -4114,6 +4313,7 @@ def cmd_service(args):
     return 0
 
 
+# PORT: NOT PORTED. Part of `hotplug`.
 def find_terminal():
     """The first terminal emulator on PATH, as (path, name, exec flag)."""
     for term, flag in TERMINALS:
@@ -4124,6 +4324,7 @@ def find_terminal():
     return None
 
 
+# PORT: NOT PORTED. Part of `hotplug`.
 def cmd_window(args):
     """Open the monitor in a terminal, but only if there is something to watch.
 
@@ -4178,6 +4379,7 @@ def cmd_window(args):
 # other serial cable on the machine besides. A device NODE appearing is the
 # event worth acting on; whether it is a GMC is settled once, by the window
 # that opens, which exits silently when it is not.
+# PORT: NOT PORTED. Part of `hotplug`.
 def spawn_window(args):
     """Fork a child that becomes the monitor's terminal. Returns its pid."""
     pid = os.fork()
@@ -4193,6 +4395,7 @@ def spawn_window(args):
     return pid
 
 
+# PORT: NOT PORTED. `hotplug` is still Python.
 def cmd_hotplug(args):
     """Open the monitor when a counter appears -- now, or in an hour's time."""
     seen = set(candidate_ports())
@@ -4235,6 +4438,7 @@ def cmd_hotplug(args):
 
 
 # -------------------------------------------------------------------- main ---
+# PORT: replaced by rust/src/main.rs :: parse_spans() (renamed) -- same comma-separated seconds
 def spans_arg(text):
     try:
         spans = tuple(int(x) for x in text.split(","))
@@ -4245,6 +4449,7 @@ def spans_arg(text):
     return spans
 
 
+# PORT: replaced by rust/src/main.rs :: the hand-written flag loop in main(), with usage() for the help text
 def build_parser():
     p = argparse.ArgumentParser(
         prog="radbeeper",
@@ -4266,8 +4471,9 @@ def build_parser():
                    help="background rate for --source sim (default 25 CPM)")
     p.add_argument("--seed", type=int, help="seed for --source sim, so a run "
                                             "can be repeated exactly")
-    p.add_argument("--spans", type=spans_arg, default=(3, 30, 300, 3000),
-                   help="averaging windows in seconds (default 3,30,300,3000)."
+    p.add_argument("--spans", type=spans_arg,
+                   default=(3, 30, 300, 3000, 30000),
+                   help="averaging windows in seconds (default 3,30,300,3000,30000)."
                         " Longer costs nothing per sample -- the windows keep"
                         " running sums, so 30000 is 8 microseconds a sample"
                         " like the rest and about 2.8 MB of samples held")
@@ -4378,6 +4584,7 @@ def build_parser():
     return p
 
 
+# PORT: replaced by rust/src/main.rs :: main() -- same commands, same exit codes
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)

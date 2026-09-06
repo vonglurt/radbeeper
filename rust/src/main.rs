@@ -134,6 +134,52 @@ fn at(row: usize, col: usize) -> String {
 }
 
 // ----------------------------------------------------------------- watch ---
+/// The window `cpm` reports, and the one the monitor puts in big digits.
+const CPM_WINDOW: f64 = 30.0;
+
+/// RadBeeper's own 30-second average, counted here rather than asked for.
+///
+/// `<GETCPM>>` WAS THE OBVIOUS THING AND IT ANSWERS A DIFFERENT QUESTION. The
+/// device keeps an internal rolling SIXTY-second count, and that is a
+/// different time constant from anything else this program prints: `watch`
+/// puts the 30 s window in the big digits, and `cpm` answering with a 60 s
+/// number meant the two disagreed by more than the noise, with neither of
+/// them wrong. One number, one time constant, and it is the one the rest of
+/// the program already uses.
+///
+/// THE COST IS THIRTY SECONDS AND IT IS NOT HIDDEN. A window shows nothing
+/// until it is full -- the same promise the monitor makes, for the same
+/// reason -- so this counts for the whole span before printing anything, and
+/// says so on stderr while it waits. stdout carries the answer alone, so it
+/// still pipes.
+fn cpm_cmd(c: &counter::Counter, cpm_per_usvh: f64) -> i32 {
+    let mut w = Windows::new(&[CPM_WINDOW]);
+    eprintln!("counting for {}s...", CPM_WINDOW as i64);
+    c.heartbeat(true);
+    let start = Instant::now();
+    while w.average(CPM_WINDOW).is_none() {
+        let counts = match c.next_sample(Duration::from_millis(2500)) {
+            Some(v) => v as u32,
+            None => break,
+        };
+        w.add(start.elapsed().as_secs_f64(), counts);
+    }
+    c.heartbeat(false);
+    match w.average(CPM_WINDOW) {
+        Some(n) => {
+            println!("{:.1} CPM   {:.3} uSv/h", n, n / cpm_per_usvh);
+            0
+        }
+        None => {
+            // int(), not round(): the Python prints int(w.elapsed()) and
+            // the two messages have to be the same string.
+            eprintln!("the counter stopped talking after {}s",
+                      w.elapsed() as i64);
+            1
+        }
+    }
+}
+
 fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
          duration: Option<f64>, logs: Option<std::path::PathBuf>) {
     let screen = Screen::enter();
@@ -179,16 +225,16 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
                 None => {
                     let left = (span - w.elapsed()).max(0.0).round() as i64;
                     out.push_str(&format!(
-                        "{}{}{:>4}s   filling, {}s to go{}",
+                        "{}{}{:>5}s   filling, {}s to go{}",
                         at(row, 0), DIM, span as i64, left, OFF
                     ));
                 }
                 Some(cpm) => {
                     out.push_str(&format!(
-                        "{}{}{:>4}s{}{}{}{:>8.1} CPM{}{}{:>8.3} uSv/h",
+                        "{}{}{:>5}s{}{}{}{:>8.1} CPM{}{}{:>8.3} uSv/h",
                         at(row, 0), DIM, span as i64, OFF,
-                        at(row, 6), colour_for(level(cpm)), cpm, OFF,
-                        at(row, 22), cpm / cpm_per_usvh
+                        at(row, 7), colour_for(level(cpm)), cpm, OFF,
+                        at(row, 23), cpm / cpm_per_usvh
                     ));
                 }
             }
@@ -200,7 +246,12 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
             at(row, 0), BOLD, OFF, counts,
             at(row + 1, 0), DIM, OFF, w.total, w.elapsed().round() as i64
         ));
-        row += 2;
+        // THREE, NOT TWO. `row` is still on the "now" line here -- "run" was
+        // drawn at row + 1 without moving it -- so clearing the pair and
+        // leaving the blank row after it costs three. Two put this monitor's
+        // chart one row above the Python's for the whole of the port, which
+        // nothing caught because both were only ever read on their own.
+        row += 3;
 
         // The number, big, to the right of everything above.
         let headline = w.average(30.0).or_else(|| w.average(*spans.last().unwrap()));
@@ -917,7 +968,7 @@ fn usage() {
     println!();
     println!("  -d, --device PATH          serial port (default: search /dev)");
     println!("  -b, --baud RATE            baud (default: try 115200 then 57600)");
-    println!("      --spans 3,30,300,3000  averaging windows, seconds");
+    println!("      --spans 3,30,300,3000,30000  averaging windows, seconds");
     println!("      --cpm-per-usvh N       tube factor (default {})", counter::DEFAULT_CPM_PER_USVH);
     println!("      --duration SECONDS     stop after this long");
     println!("      --log-every SECONDS    row spacing for service (default {})",
@@ -940,7 +991,7 @@ fn main() {
     let mut command = String::new();
     let mut device: Option<String> = None;
     let mut baud: Option<u32> = None;
-    let mut spans = vec![3.0, 30.0, 300.0, 3000.0];
+    let mut spans = vec![3.0, 30.0, 300.0, 3000.0, 30000.0];
     let mut cpm_per_usvh = counter::DEFAULT_CPM_PER_USVH;
     let mut duration: Option<f64> = None;
     let mut log_every = log::DEFAULT_LOG_EVERY;
@@ -1078,13 +1129,7 @@ fn main() {
                 );
             }
         }
-        "cpm" => match c.cpm() {
-            Some(n) => println!("{} CPM   {:.3} uSv/h", n, n as f64 / cpm_per_usvh),
-            None => {
-                eprintln!("the counter did not answer");
-                std::process::exit(1);
-            }
-        },
+        "cpm" => std::process::exit(cpm_cmd(&c, cpm_per_usvh)),
         "watch" => watch(&c, &spans, cpm_per_usvh, duration, logs),
         other => {
             eprintln!("radbeeper: unknown command {}", other);

@@ -384,16 +384,22 @@ class TestService(unittest.TestCase):
         head = lines[0]
 
         self.assertEqual(head, "#time\tcps\tcounts\tseconds"
-                               "\tcpm_3\tcpm_30\tcpm_300\tcpm_3000"
+                               "\tcpm_3\tcpm_30\tcpm_300\tcpm_3000\tcpm_30000"
                                "\tpeak_3\tpeak_30\tpeak_300\tpeak_3000"
+                               "\tpeak_30000"
                                "\tsrc\tsite")
         # Every row is the full width, trailing empties included, or a column
         # count is not a reliable way to read the file.
         for r in rows:
-            self.assertEqual(len(r.split("\t")), 14)
+            self.assertEqual(len(r.split("\t")), 16)
         # And every one of them says it was measured here, not reconstructed.
+        # BY NAME, not by index 12: adding a window inserts two columns in the
+        # middle of the row and slides `src` along, which is the same trap
+        # align_row exists for.
+        names = radbeeper.log_columns(head)
         for r in rows:
-            self.assertEqual(r.split("\t")[12], radbeeper.SRC_LIVE)
+            self.assertEqual(dict(zip(names, r.split("\t")))["src"],
+                             radbeeper.SRC_LIVE)
         # A row every 2s over ~9s is a handful, NOT one per second. This is
         # the whole point of the change and the cheapest thing to regress.
         self.assertLessEqual(len(rows), 6)
@@ -1386,13 +1392,19 @@ class TestFalseAlarms(unittest.TestCase):
         self.assertLess(flagged, loud)
 
     def test_the_bar_falls_as_the_averages_pile_up(self):
+        # IT FALLS LIKE 1/sqrt(N), NOT LIKE 1/N, and the difference is the
+        # bug this pins. The old form returned 1 + ln(B)/N, which sinks so
+        # fast that by forty windows it sat BELOW the median peak of a source
+        # with nothing periodic in it at all -- so the longer somebody
+        # watched, the more reliably background was reported as contaminated.
         spec = radbeeper.Spectrum(window=128)
         spec.runs = 2
         early = spec.chance_max()
         spec.runs = 40
         late = spec.chance_max()
-        self.assertGreater(early, 3.0)    # 4x is ordinary luck at two windows
-        self.assertLess(late, 1.3)        # and extraordinary at forty
+        self.assertGreater(early, 4.5)    # 5x is ordinary luck at two windows
+        self.assertLess(late, 2.0)        # and unusual, not absurd, at forty
+        self.assertGreater(late, 1.4)     # but never as low as 1 + ln(B)/N
         self.assertLess(late, early)
 
     def test_a_real_line_still_gets_through(self):

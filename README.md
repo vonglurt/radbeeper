@@ -21,13 +21,14 @@ session against the counter these logs came from, one frame a second:
 
 ![the monitor, seconds 300-320 at 10x](docs/screenshots/watch-300-320.gif)
 
-The 3-second window swings between 0 and 80 CPM while the 300-second one moves
-between 40.6 and 42.2 — which is the whole argument for keeping four of them.
-The 300-second window **arrives two seconds in**, at 302 s, having had nothing
-to say until then; the 3000-second one is still counting down and will be for
-another forty-five minutes. The bars recolour as individual seconds land, the
-spectrum stays flat, and the random line sits where it was until the pool earns
-the next one.
+The 3-second window swings between 0 and 120 CPM while the 5-minute one moves
+between 40.0 and 41.2 — which is the whole argument for keeping five of them.
+The 5-minute window **arrives two seconds in**, at 302 s, having had nothing to
+say until then; the 50-minute one is still counting down and will be for
+another forty-five minutes, and the working-day window will be for another
+eight hours. The bars recolour as individual seconds land, the spectrum stays
+flat, and there is no random line yet — the pool is still measuring the source,
+and its countdown ticks from 187 s to 165 s across these twenty seconds.
 
 ## Fast track
 
@@ -121,10 +122,12 @@ make install          # copies to ~/.local/bin/radbeeper
 
 `make install` takes `PREFIX=`. On Alpine you need `python3` and nothing more.
 
-There is a native build of the read side too — `cargo install radbeeper`, or a
-static binary off the releases page for a machine with no toolchain. It does
-`probe`, `cpm` and `watch`; everything that writes the log format stays in the
-Python. [§10](#10-the-native-build) is that story.
+There is a native build too — `cargo install radbeeper`, or a static binary off
+the releases page for a machine with no toolchain — and **it is now the
+implementation**. `probe`, `cpm`, `watch`, `service`, `random`, `backfill` and
+`log` are native; `export`, `recompute`, `hotplug`, `--plain` and `--source sim`
+are still the Python and are the reason it is still here.
+[§10](#10-the-native-build) is that story.
 
 **Add yourself to `dialout`**, or the serial node will not open:
 
@@ -160,20 +163,43 @@ three horizontal bars are drawn two rows thick — a one-row bar between three-r
 uprights reads as a scratch at this scale. It needs no font: the digits are made
 from the same block glyph the charts are.
 
-### Four averages, because one is not enough
+### Five averages, because one is not enough
 
 The counter's own reading is a rolling 60-second count: one number, one time
 constant, one question answered. RadBeeper counts the blips itself and keeps
-four windows at once, each a factor of ten apart.
+five windows at once, each a factor of ten apart. **The row labels are
+seconds** — that is what the program is actually averaging over — so here is
+what each of them is in units anybody thinks in:
 
-| Window | What it is for |
-|---|---|
-| **3 s** | Watching a source come and go as you move it. Jumpy, and honestly so |
-| **30 s** | Reading the room. Settled enough to compare two places |
-| **300 s** | A number worth writing down |
-| **3000 s** | Fifty minutes. What the background here actually is, once the day's traffic through the room has averaged out |
+| Window | In plain time | What it is for |
+|---|---|---|
+| **3 s** | three seconds | **Too short to be a measurement.** On a 40 CPM background it swings between 0 and 80, because at this rate three seconds *is two counts*. Watch it to see a source come and go under your hand; do not write it down |
+| **30 s** | half a minute | **The shortest window that is a count rather than a flicker.** Settled enough to compare two places, quick enough to follow your hands. This is the number in the big digits, and the one `radbeeper cpm` reports |
+| **300 s** | **five minutes** | A number worth writing down |
+| **3000 s** | **fifty minutes** | What the background here actually is, once the day's traffic through the room has averaged out |
+| **30000 s** | **8 h 20 m — a working day** | Not a slower answer to the same question: the only window that spans a shift. A day that was different is visible against it as a difference |
 
-`--spans` takes the list, so `--spans 1,10,60` is a different set of four
+Each is ten times the one above, and ten times is roughly what it takes for the
+next one to be telling you something the last one wasn't. Going further would
+be free — the windows keep running sums, so a span costs the same eight
+microseconds a sample whatever its length — but 300000 s is three and a half
+days, and nothing on a desk stays still that long.
+
+**`radbeeper cpm` no longer asks the counter for its own number.** `<GETCPM>>`
+returns the device's internal 60-second count, and that is a different time
+constant from everything else here: the big digits are the 30 s window, so the
+two disagreed by more than the noise with neither of them wrong. `cpm` now
+counts the blips itself and prints its own 30 s average, on the same terms as
+every other window — nothing until it is full, a note on stderr while it waits,
+and the answer alone on stdout so it still pipes.
+
+```sh
+$ radbeeper cpm
+counting for 30s...
+40.0 CPM   0.264 uSv/h
+```
+
+`--spans` takes the list, so `--spans 1,10,60` is a different set of three
 questions. Every window is a column in the log, whatever you choose. The
 [animation at the top](#radbeeper) is twenty seconds of exactly this: the
 3-second window swinging 0 to 80 while the 300-second one holds 41.
@@ -220,16 +246,67 @@ window's data instead of one.
 **Sigma alone is not a reason to believe anything**, and this is the trap the
 panel is most likely to fall into. Sigma is computed for one bin, but the eye
 picks the *tallest of 127*, and the largest of many draws is far bigger than any
-single draw. Averaged *N* times the largest white bin lands near 1 + ln(B)/*N* —
-which at two windows is nearly 4×. So a bin at 4.9×, reading as a confident five
-sigma, is very close to what a perfectly healthy counter produces every time you
-look. At twenty-eight windows the same arithmetic gives 1.2×, and 4.9× is then
+single draw. One bin of an *N*-window average is Gamma(*N*)/*N*; asking how high
+*B* draws of it reach means solving *N*(r − 1 − ln r) = ln *B*, and expanding
+that gives
+
+> **chance max ≈ 1 + √(2·ln B / N) + ⅔·ln B / N**
+
+At two windows that is **5.4×**. So a bin at 4.9×, reading as a confident five
+sigma, is *below* what a perfectly healthy counter produces every time you look.
+At twenty-eight windows the same arithmetic gives 1.86×, and 4.9× is then
 overwhelming. The headline compares against *that*:
 
 ```
 spectrum   flat -- arrivals look random, as decay should (28 windows)
-spectrum   peak at 8s, 9.4x the mean (chance gives 1.2x), 7.2 sigma
+spectrum   peak at 8s, 9.4x the mean (chance gives 1.86x), 7.2 sigma
 ```
+
+**The leading term is the square root, and leaving it out cost a year of false
+alarms.** This used to compute the bar as 1 + ln(B)/*N*, which is the correct
+answer for *one* periodogram — a single bin of white noise is exponential, and
+the largest of *B* of those does land near ln(*B*) above the mean — and the
+wrong one for an average of *N*, whose tail is not exponential at all. The two
+agree only at *N* = 1. Everywhere else the old form was too low, and it got
+worse the longer you watched: **the bar sinks like 1/*N* while the real peak
+only sinks like 1/√*N***, so the two cross over.
+
+Measured against a null built from this counter's own recorded counts,
+resampled i.i.d. so the spectrum is flat *by construction* and every flag is
+a false one:
+
+| Watching for | Old bar | Real median peak | Called suspect |
+|---|---|---|---|
+| 30 minutes | 2.13× | 2.51× | **33%** |
+| 1 hour | 1.52× | 1.97× | **64%** |
+| 2 hours | 1.25× | 1.64× | **80%** |
+
+The longer the session, the more reliably it cried wolf — and a health check
+that fires four times in five on healthy hardware is not a health check, it is
+a decoration. **"Called suspect" is the rule the panel actually applies**, which
+wants a peak at 1.25× the bar rather than merely above it; that margin is the
+only reason the first row is a third and not a half, given that the median peak
+has already overtaken the old bar. With the square-root term restored the same
+null stays under 1% at every length.
+
+**Raising the bar did not cost the detection it is there for.** The same null
+with a period-8 s source added on top — Poisson arrivals at a fraction of the
+background rate, which for this counter is 0.73 counts a second, about 44 CPM:
+
+| Source at | Peak after 30 min | Called at 30 min | at 1 h | at 2 h |
+|---|---|---|---|---|
+| 0.2 × background | 2.7× | 2% | 2% | 11% |
+| 0.3 × background | 3.0× | 19% | 50% | 92% |
+| 0.4 × background | 4.5× | 65% | **98%** | **100%** |
+| 0.5 × background | 6.4× | **95%** | **100%** | **100%** |
+
+**The detection floor is a real number, and it sits between a third and a half
+of background.** Half the counts arriving on a schedule is unmissable inside
+half an hour. A fifth of them is invisible at every length, and no threshold
+would fix that: half an hour at 44 CPM is thirteen hundred arrivals, and the
+line is not in them to be found. `radbeeper` and the Rust build were both wrong
+in the same way and are both fixed; `chance_max()`'s two quoted values, 5.4×
+and 1.86×, have a test pinning them in each.
 
 **Resolution grows with time, because it has to.** Frequency resolution is 1/*T*
 for an observation of length *T* — you cannot resolve a 512-second period in 128
@@ -489,6 +566,26 @@ drift from the log format.
 
 ## 10. The native build
 
+**This is where new work goes now.** The one-file Python is the original, and
+it is now the archive: it is kept as the differential oracle, as the owner of
+the parts that have no Rust counterpart yet, and because it runs on a fresh Pi
+with python3 and nothing else. Every top-level function and class in it carries
+a `# PORT:` line saying which Rust file and which Rust name replaced it, or
+saying plainly that nothing has:
+
+```
+# PORT: replaced by rust/src/analysis.rs :: Ladder (renamed) -- new/add/best, …
+# PORT: NOT PORTED. `export` is the largest thing still owned by this file.
+```
+
+The renames all run one way, towards shorter names inside a module that already
+names the subject — `SpectrumLadder` → `analysis::Ladder`, `LogWriter` →
+`log::Writer`, `log_header` → `log::header`, `write_entropy` →
+`entropy::write_record`, `spans_arg` → `parse_spans`. Everything else kept its
+name; classes became structs with the same methods. The one shape change worth
+knowing is `Counter.samples()`, a generator, becoming
+`Counter::next_sample(timeout)`, which is pulled rather than yielded.
+
 ```sh
 cargo install radbeeper
 ```
@@ -516,7 +613,7 @@ is reached over GitHub's OIDC identity rather than an API key stored here.
 [RELEASING.md](RELEASING.md) is the procedure.
 
 `rust/` is a Cargo crate carrying the **read side** natively: `probe`, `cpm`
-and the full monitor — the same four time constants, coloured counts chart,
+and the full monitor — the same five time constants, coloured counts chart,
 accumulating spectrum ladder and twelve-row digits. One dependency, `libc`,
 because a serial port is termios and termios is libc; the FFT, the digits and
 the drawing are arithmetic and escape codes.
@@ -597,7 +694,7 @@ chronological.
 
 | | |
 |---|---|
-| **native now** | `probe`, `cpm`, `watch`, `service`, `random`, `random --check`, **`backfill`** and **`log info`/`log pull`**; the log format; the entropy pool, the SP 800-90B estimator and SHA-256; the history decoder with both corrections to GQ's published format, the wrapped-ring search and the measured sample intervals; local time, which Rust's standard library does not have at all |
+| **native now** | `probe`, `cpm` (its own 30 s window, not the device's 60 s one), `watch`, `service`, `random`, `random --check`, **`backfill`** and **`log info`/`log pull`**; the log format; the entropy pool, the SP 800-90B estimator and SHA-256; the history decoder with both corrections to GQ's published format, the wrapped-ring search and the measured sample intervals; local time, which Rust's standard library does not have at all |
 | **next** | `export` — the two pages. Biggest and most mechanical, and the only one with no correctness risk beyond "the HTML differs" |
 | **the rule** | one dependency, still `libc`. It has `strftime`, `strptime` and `mktime`, so the port does not need a date crate; the one primitive that must be written out is SHA-256 |
 
@@ -654,7 +751,7 @@ the monitor.
 |---|---|
 | `probe` | find the counter and say what it is |
 | `watch` | the monitor; `--plain` for line output |
-| `cpm` | the counter's own CPM once, for a script |
+| `cpm` | one 30-second average, for a script. Takes 30 s, and says so |
 | `service` | monitor and log; dormant when there is nothing to read |
 | `hotplug` | sit in the session, open the monitor on plug-in |
 | `backfill` | fill the log's gaps from the counter's flash |
