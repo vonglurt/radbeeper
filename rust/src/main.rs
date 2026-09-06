@@ -246,7 +246,12 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
             at(row, 0), BOLD, OFF, counts,
             at(row + 1, 0), DIM, OFF, w.total, w.elapsed().round() as i64
         ));
-        row += 2;
+        // THREE, NOT TWO. `row` is still on the "now" line here -- "run" was
+        // drawn at row + 1 without moving it -- so clearing the pair and
+        // leaving the blank row after it costs three. Two put this monitor's
+        // chart one row above the Python's for the whole of the port, which
+        // nothing caught because both were only ever read on their own.
+        row += 3;
 
         // The number, big, to the right of everything above.
         let headline = w.average(30.0).or_else(|| w.average(*spans.last().unwrap()));

@@ -604,3 +604,79 @@ class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
                  for l in after if not l.startswith("#")]
         self.assertEqual(len(slots), len(set(slots)), "a slot was written twice")
         self.assertGreaterEqual(len(after), len(before))
+
+
+class TestTheTwoMonitorsDrawTheSameScreen(unittest.TestCase):
+    """The panels line up row for row, or one of them has drifted.
+
+    THE BUG THIS EXISTS FOR. The Rust monitor drew the counts chart, the
+    random line and the spectrum footer each one row higher than the Python
+    did, for the whole of the port. `row += 2` after the now/run pair where
+    the Python's arithmetic lands on `row += 3` -- one statement, invisible in
+    review, invisible in both suites, and invisible on screen unless somebody
+    puts the two terminals side by side, which nobody does.
+
+    Values cannot be compared here: both monitors are reading a live stream a
+    beat apart, so the 3-second window legitimately differs between two runs
+    of the same fixture. WHERE each label lands cannot differ, and that is
+    what is asserted.
+    """
+
+    BINARY = os.path.join(ROOT, "rust", "target", "release", "radbeeper")
+    RECORD = os.path.join(ROOT, "tools", "record.py")
+    ANCHORS = ("now", "run", "random", "spectrum")
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(cls.BINARY):
+            raise unittest.SkipTest("no release binary to compare against")
+        if not os.path.exists(cls.RECORD):
+            raise unittest.SkipTest("no recorder")
+
+    def screen(self, argv, seconds=12):
+        """One monitor, through a pty, as the text on screen at the end."""
+        import tempfile
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fake_gmc import FakeGMC
+        cast = os.path.join(tempfile.mkdtemp(), "m.cast")
+        dev = FakeGMC(cpm=1800.0, seed=5)
+        dev.start()
+        try:
+            subprocess.run(
+                [sys.executable, self.RECORD, "capture", cast,
+                 "--cols", "160", "--rows", "30", "--seconds", str(seconds),
+                 "--"] + argv + ["-d", dev.path, "watch"],
+                cwd=ROOT, capture_output=True, timeout=seconds + 60)
+        finally:
+            dev.stop()
+        out = subprocess.run(
+            [sys.executable, self.RECORD, "text", cast,
+             "--at", str(seconds - 2)],
+            cwd=ROOT, capture_output=True, text=True, timeout=60)
+        return out.stdout.splitlines()
+
+    def rows_of(self, lines):
+        """Which row each anchor label and each window landed on."""
+        where = {}
+        for i, line in enumerate(lines):
+            head = line.strip().split(" ")[0] if line.strip() else ""
+            if head in self.ANCHORS and head not in where:
+                where[head] = i
+            if head.endswith("s") and head[:-1].isdigit():
+                where.setdefault("span " + head, i)
+        return where
+
+    def test_every_row_of_the_panel_is_in_the_same_place(self):
+        mine = self.rows_of(self.screen([sys.executable,
+                                         os.path.join(ROOT, "radbeeper")]))
+        theirs = self.rows_of(self.screen([self.BINARY]))
+        if not mine or not theirs:
+            self.skipTest("neither monitor drew anything")
+        # Both have to have drawn the whole panel, or the comparison passes
+        # by drawing nothing and proves the opposite of what it claims.
+        for label in self.ANCHORS:
+            self.assertIn(label, mine, "the Python drew no %r row" % label)
+            self.assertIn(label, theirs, "the Rust drew no %r row" % label)
+        self.assertEqual(mine, theirs,
+                         "the two monitors put the same rows in different "
+                         "places:\n  python %r\n  rust   %r" % (mine, theirs))
