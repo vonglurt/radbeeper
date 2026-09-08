@@ -2686,7 +2686,60 @@ def read_history_tail(counter, want, quiet=False):
     return grab(size - over, over) + head
 
 
-# PORT: replaced by rust/src/main.rs :: backfill_cmd() prints the same report inline
+# What a completed import leaves behind: one row per run, next to the rows it
+# wrote. A .log by name because that is what it is for, and tab-separated by
+# shape because everything else this program writes is -- forty imports should
+# answer "when did the gaps start" and "which run added nothing" through sort
+# and awk, not through reading.
+IMPORTS_NAME = "imports.log"
+IMPORTS_HEADER = ("#time\tsamples\trows\tadded\tclashed\tgaps\toffset_s"
+                  "\tfirst\tlast\tfiles")
+
+
+# PORT: replaced by rust/src/log.rs :: note_import() -- same name, same row
+def note_import(report, offset, now):
+    """Write down that an import happened, beside the rows it wrote.
+
+    THE REPORT ABOVE IS ONLY EVER SAID. It goes to a terminal that gets
+    closed, or into the service log where a person has to be root to read it,
+    and the question it answers -- when was the counter last emptied, and did
+    anything come across -- is asked days later. The log itself cannot answer
+    it: a backfill that added nothing because it had all been logged live is
+    indistinguishable, in the rows, from a backfill that never ran at all.
+
+    Beside the rows rather than in a fixed place, because the directory the
+    import wrote to is the directory the person looking is already in, and
+    because it is then a temporary directory under test rather than the real
+    one. Nothing is written for an import with no placeable samples: there is
+    no file for the row to sit beside, and the terminal has already said so.
+    """
+    if not report["samples"] or not report["files"]:
+        return None
+    path = os.path.join(os.path.dirname(report["files"][0]) or ".",
+                        IMPORTS_NAME)
+    stamp = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))
+    row = "\t".join((stamp(now),
+                     str(report["samples"]), str(report["rows"]),
+                     str(report["added"]), str(report["clashed"]),
+                     str(report["holes"]), "%.0f" % offset,
+                     stamp(report["first"]), stamp(report["last"]),
+                     " ".join(os.path.basename(p) for p in report["files"])))
+    try:
+        fresh = not os.path.exists(path) or os.path.getsize(path) == 0
+        with open(path, "a") as f:
+            if fresh:
+                f.write(IMPORTS_HEADER + "\n")
+            f.write(row + "\n")
+    except OSError as e:
+        # An import that worked does not fail because its receipt could not be
+        # written -- and it does not go unmentioned either.
+        print("radbeeper: could not note the import in %s -- %s" % (path, e),
+              file=sys.stderr)
+        return None
+    return path
+
+
+# PORT: replaced by rust/src/main.rs :: say_backfill() -- same report, same receipt
 def say_backfill(report, offset):
     if not report["samples"]:
         print("radbeeper: no placeable samples in the history read")
@@ -2704,6 +2757,10 @@ def say_backfill(report, offset):
               % report["holes"])
     for one in report["files"]:
         print("           -> %s" % one)
+    # The terminal and the file say the same thing at the same moment: a
+    # caller cannot get one of these without the other, which is the only way
+    # three call sites stay in step.
+    note_import(report, offset, time.time())
 
 
 # PORT: replaced by rust/src/main.rs :: backfill_cmd() -- same name

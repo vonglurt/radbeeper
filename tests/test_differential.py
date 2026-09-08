@@ -569,6 +569,69 @@ class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
         self.assertGreater(len(want.splitlines()), 100, "too few rows to test")
         self.assertEqual(got, want)
 
+    def both_backfill(self):
+        """`backfill --image` in each program, each in its own directory.
+
+        Same basename in both, so that the only thing that can differ in what
+        they say is the directory in front of it -- which is then taken out
+        again below. Returns (python stdout, rust stdout, python dir, rust dir).
+        """
+        import tempfile
+        image = os.path.join(ROOT, "tests", "fixtures", "flash-gmc320re.bin")
+        if not os.path.exists(image):
+            self.skipTest("no flash fixture in the repository")
+        out = []
+        dirs = []
+        for cmd in ([sys.executable, os.path.join(ROOT, "radbeeper")],
+                    [self.BINARY]):
+            d = tempfile.mkdtemp()
+            r = subprocess.run(
+                cmd + ["backfill", "--image", image, "--serial",
+                       "F48824B8207F7E", "-o", os.path.join(d, "x.tsv")],
+                capture_output=True, text=True, timeout=120)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            out.append(r.stdout.replace(d, "DIR"))
+            dirs.append(d)
+        return out[0], out[1], dirs[0], dirs[1]
+
+    def test_both_say_the_same_thing_about_the_same_import(self):
+        """The sentences, not only the rows.
+
+        THE BUG THIS EXISTS FOR. The Rust said the same numbers in its own
+        arrangement -- samples and rows on one line, the span on the next,
+        "clock offset -55s, 3 holes" for the third -- for the whole of the
+        port, because every backfill test until this one compared the .tsv
+        that came out and never the report printed over it. A person reading
+        two machines' imports into one mail thread would have got two formats.
+        """
+        py, rs, _dpy, _drs = self.both_backfill()
+        self.assertIn("samples", py, "no report at all")
+        self.assertEqual(rs, py)
+
+    def test_both_leave_the_same_receipt_in_imports_log(self):
+        """One row per import, and the row is the same row.
+
+        The time column is when the import ran, so the two differ by however
+        long the Python took; everything after it is the import itself and
+        must match to the character.
+        """
+        _py, _rs, dpy, drs = self.both_backfill()
+        rows = []
+        for d in (dpy, drs):
+            path = os.path.join(d, "imports.log")
+            self.assertTrue(os.path.exists(path), "no imports.log in %s" % d)
+            with open(path) as f:
+                lines = f.read().splitlines()
+            self.assertEqual(len(lines), 2, "a header and one import")
+            self.assertEqual(lines[0], radbeeper.IMPORTS_HEADER)
+            when, rest = lines[1].split("\t", 1)
+            # It is a timestamp, not the empty string a broken clock call
+            # would leave -- the column is not being compared, so it has to be
+            # checked here or not at all.
+            self.assertRegex(when, r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$")
+            rows.append(rest)
+        self.assertEqual(rows[1], rows[0])
+
     def test_a_backfill_will_not_guess_which_counter_an_image_came_from(self):
         # A dumped image carries no serial, and rows that cannot say which
         # counter they came from are half a measurement. Both refuse.

@@ -859,21 +859,41 @@ fn backfill_cmd(spans: &[f64], every: f64, max_gap: f64, bytes: usize,
     let serial_opt = if serial.is_empty() { None } else { Some(serial.as_str()) };
     let r = history::backfill(&blob, spans, every, max_gap, offset, &dir,
                               serial_opt, &sites, one_file.map(std::path::Path::new));
+    say_backfill(&r, offset);
+    0
+}
+
+/// The report a person reads now, and the row they read weeks later.
+///
+/// EVERY LINE HERE IS THE PYTHON'S LINE. This was three lines of its own
+/// arrangement -- samples and rows on the first line, the span on the second,
+/// "clock offset -55s, 3 holes" for the third -- which nothing caught,
+/// because the differential tests compare the .tsv the backfill writes and
+/// not the sentences it says about it. The receipt goes out from here rather
+/// than from the caller so that the terminal and the file cannot disagree.
+fn say_backfill(r: &history::Report, offset: f64) {
     if r.samples == 0 {
         println!("radbeeper: no placeable samples in the history read");
-        return 0;
+        return;
     }
-    println!("radbeeper: {} samples, {} rows, {} added, {} already logged",
-             r.samples, r.rows, r.added, r.clashed);
     if let (Some(a), Some(b)) = (r.first, r.last) {
-        println!("           {} .. {}", clock::stamp(a), clock::stamp(b));
+        println!("radbeeper: {} samples, {} .. {}", r.samples,
+                 clock::format(a, "%Y-%m-%d %H:%M"),
+                 clock::format(b, "%Y-%m-%d %H:%M"));
     }
-    println!("           clock offset {:+.0}s, {} hole{}", offset, r.holes,
-             if r.holes == 1 { "" } else { "s" });
+    if offset != 0.0 {
+        println!("           counter clock corrected by {:+.0} s", offset);
+    }
+    println!("           {} rows: {} added, {} already logged live",
+             r.rows, r.added, r.clashed);
+    if r.holes > 0 {
+        println!("           {} gaps left as gaps -- the counter was not recording",
+                 r.holes);
+    }
     for f in &r.files {
-        println!("           {}", f.display());
+        println!("           -> {}", f.display());
     }
-    0
+    log::note_import(r, offset, clock::now());
 }
 
 fn log_cmd(action: &str, bytes: Option<usize>, out_stem: Option<&str>,

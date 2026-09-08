@@ -378,7 +378,9 @@ zero** — it is a window that was not full yet:
 State lives in `/var/log/radbeeper` when that is writable and
 `~/.local/share/radbeeper` when it is not. Files rotate by month and by counter
 (`cpm-<serial>-YYYY-MM.tsv`), which needs no cron entry and nothing that renames
-a file while a service is appending to it.
+a file while a service is appending to it. Beside them sit `status` (what the
+service is doing, one line), `random-<serial>.tsv` (the entropy audit trail) and
+`imports.log` (one row per backfill — see [§7](#7-backfill-from-the-counters-own-memory)).
 
 ### As a boot service
 
@@ -518,6 +520,18 @@ radbeeper --clock-offset 2180 backfill      # if you have since set its clock
   unwritten byte in it: the newest sample sits just *before* the write pointer.
   Reading the physical tail would hand back the oldest hours while claiming they
   were the newest.
+- **Every import leaves a receipt.** The report an import prints is said once,
+  to a terminal that gets closed or to the service log that wants root. One row
+  per run also goes into `imports.log`, beside the rows it wrote:
+
+  ```
+  #time              samples rows added clashed gaps offset_s first             last              files
+  2026-09-08T13:59:12  46167 1550  1550       0    3      -55 2026-09-07T22:28  2026-09-08T13:59  cpm-F48824B8207F7E-2026-09.tsv
+  ```
+
+  Which answers, weeks later, the one question the rows cannot: a backfill that
+  added nothing because it had all been logged live looks exactly like a
+  backfill that never ran.
 
 ## 8. Say where it is
 

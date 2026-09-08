@@ -474,6 +474,69 @@ pub fn write_status(text: &str) -> PathBuf {
     path
 }
 
+/// What a completed import leaves behind: one row per run, next to the rows
+/// it wrote. A .log by name because that is what it is for, and
+/// tab-separated by shape because everything else this program writes is --
+/// forty imports should answer "when did the gaps start" and "which run added
+/// nothing" through sort and awk, not through reading.
+pub const IMPORTS_NAME: &str = "imports.log";
+pub const IMPORTS_HEADER: &str =
+    "#time\tsamples\trows\tadded\tclashed\tgaps\toffset_s\tfirst\tlast\tfiles";
+
+/// Write down that an import happened, beside the rows it wrote.
+///
+/// THE REPORT IS ONLY EVER SAID. It goes to a terminal that gets closed, or
+/// into the service log where a person has to be root to read it, and the
+/// question it answers -- when was the counter last emptied, and did anything
+/// come across -- is asked days later. The log itself cannot answer it: a
+/// backfill that added nothing because it had all been logged live is
+/// indistinguishable, in the rows, from a backfill that never ran at all.
+///
+/// Beside the rows rather than in a fixed place, because the directory the
+/// import wrote to is the directory the person looking is already in, and
+/// because it is then a temporary directory under test rather than the real
+/// one. Nothing is written for an import with no placeable samples.
+pub fn note_import(r: &crate::history::Report, offset: f64, now: f64)
+    -> Option<PathBuf>
+{
+    if r.samples == 0 || r.files.is_empty() {
+        return None;
+    }
+    let (first, last) = match (r.first, r.last) {
+        (Some(a), Some(b)) => (clock::stamp(a), clock::stamp(b)),
+        _ => return None,
+    };
+    let dir = match r.files[0].parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    };
+    let path = dir.join(IMPORTS_NAME);
+    let names: Vec<String> = r.files.iter()
+        .map(|p| p.file_name().unwrap_or_default().to_string_lossy().into_owned())
+        .collect();
+    let row = format!("{}\t{}\t{}\t{}\t{}\t{}\t{:.0}\t{}\t{}\t{}",
+                      clock::stamp(now), r.samples, r.rows, r.added, r.clashed,
+                      r.holes, offset, first, last, names.join(" "));
+    let write = || -> std::io::Result<()> {
+        let fresh = fs::metadata(&path).map(|m| m.len() == 0).unwrap_or(true);
+        let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
+        if fresh {
+            writeln!(f, "{}", IMPORTS_HEADER)?;
+        }
+        writeln!(f, "{}", row)
+    };
+    match write() {
+        Ok(()) => Some(path),
+        Err(e) => {
+            // An import that worked does not fail because its receipt could
+            // not be written -- and it does not go unmentioned either.
+            eprintln!("radbeeper: could not note the import in {} -- {}",
+                      path.display(), e);
+            None
+        }
+    }
+}
+
 /// What happened between two log lines, in constant space.
 ///
 /// The peaks are why this exists. A row every thirty seconds carrying only

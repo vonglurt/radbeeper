@@ -2,10 +2,12 @@
 # Copyright (c) 2026 Paul Richeson
 """Tests for radbeeper. Stdlib unittest, no hardware, no network."""
 import importlib.util
+import io
 import math
 import os
 import random
 import struct
+import sys
 import time
 import unittest
 
@@ -633,6 +635,62 @@ class TestSlotsAndMerging(unittest.TestCase):
         self.assertEqual(clashed, 4)
         self.assertEqual(open(self.path).read(), before)
         self.assertFalse(os.path.exists(self.path + ".new"))
+
+
+class TestImportsLog(unittest.TestCase):
+    """The receipt a backfill leaves, which is the only record it ran."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.mkdtemp()
+        self.report = {"samples": 46167, "rows": 1550, "added": 1550,
+                       "clashed": 0, "holes": 3,
+                       "first": 1757280480.0, "last": 1757336340.0,
+                       "files": [os.path.join(self.tmp, "cpm-A1-2026-09.tsv")]}
+
+    def rows(self):
+        with open(os.path.join(self.tmp, "imports.log")) as f:
+            return f.read().splitlines()
+
+    def test_the_row_carries_the_numbers_that_were_printed(self):
+        path = radbeeper.note_import(self.report, -55.0, 1757336400.0)
+        self.assertEqual(path, os.path.join(self.tmp, "imports.log"))
+        head, row = self.rows()
+        self.assertEqual(head, radbeeper.IMPORTS_HEADER)
+        cells = row.split("\t")
+        self.assertEqual(len(cells), len(head.split("\t")))
+        self.assertEqual(cells[1:7], ["46167", "1550", "1550", "0", "3", "-55"])
+        # Basenames, because the directory is the file's own directory.
+        self.assertEqual(cells[-1], "cpm-A1-2026-09.tsv")
+
+    def test_a_second_import_appends_under_the_one_header(self):
+        radbeeper.note_import(self.report, -55.0, 1757336400.0)
+        radbeeper.note_import(self.report, 0.0, 1757340000.0)
+        lines = self.rows()
+        self.assertEqual(len(lines), 3)
+        self.assertEqual([l.startswith("#") for l in lines],
+                         [True, False, False])
+        # Chronological under plain sort, the same promise the logs make.
+        self.assertEqual(lines[1:], sorted(lines[1:]))
+
+    def test_an_import_that_placed_nothing_leaves_no_row(self):
+        # There is no file for it to sit beside, and the terminal has said so.
+        empty = dict(self.report, samples=0, files=[])
+        self.assertIsNone(radbeeper.note_import(empty, 0.0, 1757336400.0))
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, "imports.log")))
+
+    def test_a_directory_that_cannot_be_written_does_not_fail_the_import(self):
+        # The rows are already merged by the time this runs. Losing the
+        # receipt is a nuisance; raising here would look like a lost import.
+        bad = dict(self.report,
+                   files=[os.path.join(self.tmp, "no-such-dir", "x.tsv")])
+        err = io.StringIO()
+        real, sys.stderr = sys.stderr, err
+        try:
+            self.assertIsNone(radbeeper.note_import(bad, 0.0, 1757336400.0))
+        finally:
+            sys.stderr = real
+        self.assertIn("could not note the import", err.getvalue())
 
 
 class TestTheRing(unittest.TestCase):
