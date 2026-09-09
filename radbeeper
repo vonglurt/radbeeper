@@ -3691,6 +3691,118 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
       "it &mdash; served by GitHub Pages with no build step. There is nothing "
       "to install in the workflow: the generator is the same one file, which "
       "is also why the page cannot drift from the log format.</p>")
+    a("</section>")
+
+    # DEPLOYING IS NOT THE SAME AS RUNNING, and the section above is running.
+    # A deployment is a machine that goes on logging when nobody is typing --
+    # which brings in a service, a boot, a hotplug and a port that only one
+    # reader can hold. None of that comes up when you run `watch` by hand.
+    a('<section class="how">')
+    a("<h2>Deploy it</h2>")
+    a("<p>Everything above is a person at a keyboard. A <em>deployment</em> is "
+      "a machine that keeps the log without one &mdash; which brings in a boot, "
+      "a hotplug, and a serial port only one reader can hold at a time. This "
+      "is that machine.</p>")
+
+    a("<h3>What is actually deployed</h3>")
+    a("<p>One stdlib Python file, copied into place. There is no package to "
+      "build and no daemon framework underneath it.</p>")
+    a("<pre>git clone " + HOMEPAGE + ".git\n"
+      "cd radbeeper &amp;&amp; make install     # copies one file, needs no root\n\n"
+      "doas adduser $USER dialout    # then log in again</pre>")
+    a("<p><strong>Deploy the Python, not the Rust binary.</strong> The crate "
+      "and the static builds are the <em>read</em> side &mdash; "
+      "<code>probe</code>, <code>cpm</code> and <code>watch</code>. Everything "
+      "that writes a log or builds this page is in the Python file, so the "
+      "machine that keeps the record runs that one. A native binary alongside "
+      "it, for a person to watch with, is fine.</p>")
+
+    a("<h3>The machine that keeps the log</h3>")
+    a("<p>Run it in the foreground once before trusting it to a boot. It "
+      "writes a row every 30 seconds and tells you where.</p>")
+    a("<pre>radbeeper service</pre>")
+    a("<p>Rows go to <code>/var/log/radbeeper/</code> when it can write there "
+      "and <code>~/.local/share/radbeeper/</code> when it cannot, because "
+      "<strong>a service that refuses to run unprivileged is a service nobody "
+      "runs</strong>. One file per counter per month, "
+      "<code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code> &mdash; rotation by "
+      "construction, with nothing renaming a file while a service appends to "
+      "it.</p>")
+
+    a("<h3>Starting it at boot</h3>")
+    a("<p><strong>There is no init script in this repository, and "
+      "<code>make install</code> does not write one.</strong> Saying so is the "
+      "point: a deployment guide that implies a service appears by itself is "
+      "the reason somebody's counter is quietly not logging. Two honest "
+      "routes:</p>")
+    a("<ul>")
+    a('<li><b><a href="https://github.com/vonglurt/copal">Copal</a> carries '
+      "RadBeeper as stage 10</b> and writes "
+      "<code>/etc/init.d/radbeeper</code>, then "
+      "<code>rc-update add radbeeper default</code>. On a Copal card the "
+      "deployment is the card.</li>")
+    a("<li><b>Anywhere else, write the unit yourself.</b> It is four facts: "
+      "run <code>radbeeper service</code>, run it in the background, start "
+      "after the USB and module layers are up, and let it log to a directory "
+      "it can write.</li>")
+    a("</ul>")
+
+    a("<h3>Dormant is not broken</h3>")
+    a("<p>A machine with no counter plugged in has this service "
+      "<strong>stopped, on purpose</strong>. Copal's script probes before it "
+      "starts, and when it finds nothing it records why and declines rather "
+      "than respawning &mdash; a service that retries forever on a Pi Zero "
+      "costs more than it measures. The retry is the next boot.</p>")
+    a("<pre>cat /var/log/radbeeper/status    # why it is not running\n"
+      "doas rc-service radbeeper start  # after plugging one in</pre>")
+    a("<p>So <code>stopped</code> in a service listing is not a fault to chase "
+      "until the status file says it is one.</p>")
+
+    a("<h3>When somebody plugs one in</h3>")
+    a("<p>Two things should happen and they want different privileges, so "
+      "they are deliberately two mechanisms:</p>")
+    a("<ul>")
+    a("<li><b>The log</b> &mdash; a udev rule, as root, starts the service. "
+      "The counting begins whether or not anybody is logged in.</li>")
+    a("<li><b>The window</b> &mdash; <code>radbeeper hotplug</code> on the "
+      "desktop autostart line, inside the session, where the display and the "
+      "person both are.</li>")
+    a("</ul>")
+    a("<p>The udev rule deliberately does not try to open a window: it fires "
+      "as root with no display and no way to tell which session, if any, a "
+      "window would belong to.</p>")
+
+    a("<h3>One reader at a time</h3>")
+    a("<p>A serial port holds one reader, so a deployed logger and an "
+      "interactive monitor cannot both have it. The logger yields:</p>")
+    a("<pre>doas rc-service radbeeper stop\nradbeeper watch</pre>")
+    a("<p>On a headless box or a serial console, <code>--plain</code> drops "
+      "the box drawing and the colour and prints the same numbers.</p>")
+    a("<pre>radbeeper --plain watch</pre>")
+    shot("watch-plain", "the monitor with --plain: the same windows, over a "
+                        "console that cannot draw")
+
+    a("<h3>Checking the deployment took</h3>")
+    a("<p>Three questions, in the order worth asking them: is the counter "
+      "found, is the service happy, and are rows actually landing.</p>")
+    a("<pre>radbeeper probe\n"
+      "cat /var/log/radbeeper/status\n"
+      "radbeeper log info</pre>")
+    shot("commands", "log info over a deployed log, naming the site, and "
+                     "building the page")
+    a("<p><code>log info</code> is the one that answers the question a "
+      "deployment actually raises &mdash; not <em>is it running</em> but "
+      "<em>has it been writing</em>, and since when.</p>")
+
+    a("<h3>Publishing from the machine that logs</h3>")
+    a("<p>The generator is the same one file, so the box holding the logs can "
+      "build the page itself and serve it, with nothing else installed.</p>")
+    a("<pre>radbeeper export --logs /var/log/radbeeper -o index.html</pre>")
+    a("<p>Or copy the <code>cpm-*.tsv</code> into a fork's <code>logs/</code> "
+      "and let the workflow rebuild it, as above. Either way the page cannot "
+      "drift from the log format, because the thing that reads the format and "
+      "the thing that draws the page are the same program.</p>")
+
     a('<p>MIT License &mdash; Copyright (c) 2026 Paul Richeson &middot; '
       '<a href="' + HOMEPAGE + '">' + HOMEPAGE.split("//")[1] + "</a></p>")
     a("</section>")
