@@ -182,6 +182,24 @@ def main():
         ], cols=88, rows=22, seconds=90)
         still("commands", 89, cursor=True)
 
+    # ---------------------------------------------------------- service ---
+    if want("service"):
+        # What a deployment actually starts, and the shot the deploy guide
+        # wants: what it found, where it is writing, and how often.
+        #
+        # 104 columns because the "logging to" line carries an absolute path,
+        # and a line the terminal folded is a picture of the terminal rather
+        # than of the program.
+        #
+        # 110 seconds because a real start reads the tail of the counter's
+        # flash first -- about forty of them -- and a service shot that cut
+        # before that finished would be a picture of the only part that is
+        # never slow. NOT `--no-backfill`: nobody types that, and a screenshot
+        # of a command nobody types is the thing this file exists to avoid.
+        session("service", ["radbeeper service"], cols=104, rows=20,
+                seconds=110)
+        still("service", 108, cursor=True)
+
     # ------------------------------------------------------------- logs ---
     if want("log-output"):
         session("log-output", [

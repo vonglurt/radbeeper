@@ -3721,6 +3721,17 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
     a("<p>Run it in the foreground once before trusting it to a boot. It "
       "writes a row every 30 seconds and tells you where.</p>")
     a("<pre>radbeeper service</pre>")
+    shot("service", "a real start: the counter's own flash read back, the "
+                    "gaps that could be filled filled, and the four that "
+                    "could not left alone")
+    a("<p><strong>A start is slow on purpose.</strong> Before it appends "
+      "anything it reads the tail of the counter's flash, because the service "
+      "starts when a machine boots or a counter is plugged in &mdash; which is "
+      "exactly when the counter has been recording somewhere this log was "
+      "not. That costs about forty seconds and the status file says so, so a "
+      "service that looks stuck can be asked what it is doing. Rows it "
+      "already has are not written twice, and an hour the counter was off "
+      "stays a gap.</p>")
     a("<p>Rows go to <code>/var/log/radbeeper/</code> when it can write there "
       "and <code>~/.local/share/radbeeper/</code> when it cannot, because "
       "<strong>a service that refuses to run unprivileged is a service nobody "
@@ -4270,7 +4281,7 @@ def cmd_export(args):
     shots = {}
     for name in ("probe", "watch", "watch-filling", "watch-spectrum",
                  "watch-plain", "log-output", "log-tabs", "commands",
-                 "watch-300-320"):
+                 "service", "watch-300-320"):
         ext = ".gif" if name.endswith("320") else ".png"
         rel = os.path.join("docs", "screenshots", name + ext)
         if os.path.exists(os.path.join(out_dir, rel)):
