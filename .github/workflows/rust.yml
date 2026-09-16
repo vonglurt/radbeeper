@@ -55,7 +55,7 @@ jobs:
       # the output compared character for character. It caught a %g that
       # rounded differently in the sixth significant figure on its first run.
       - name: The Rust and the Python write the same bytes
-        run: python3 -m unittest discover -v -s tests -k TestSameBytes
+        run: python3 -m unittest discover -v -s tests
 
   msrv:
     runs-on: ubuntu-latest
