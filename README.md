@@ -8,8 +8,9 @@ MIT · `0.1.0` · `cargo install radbeeper` · one dependency, and it is `libc`
 The program is a **Rust crate at the root of this repository** — `Cargo.toml`,
 `Cargo.lock`, `src/`. The one-file `python3` original is still here beside it:
 it is the oracle the port is checked against byte for byte, and it still owns
-`export`, `site`, `recompute`, `hotplug`, `window`, `--plain` and
-`--source sim`, which have no Rust counterpart yet. [§10](#10-the-native-build)
+`export`, `site`, `recompute`, `window`, `--plain` and `--source sim`, which
+have no Rust counterpart yet. (`hotplug` did until it was ported — it is the
+verb the desktop autostart runs.) [§10](#10-the-native-build)
 is the whole arrangement.
 
 **You need a GQ GMC-320 Plus plugged into a USB port.** The counter is a
@@ -19,14 +20,15 @@ RadBeeper finds it, shows what it is counting, pulls the history it recorded
 while nobody was watching, and builds a web page out of the result. Fork this
 repository, drop your own logs into `logs/`, and a GitHub Action regenerates
 that page on every push. [§1](#1-what-you-need) is the full list of what has to
-be true; `--source sim` draws the whole monitor with no hardware at all.
+be true; the Python program's `--source sim` draws the whole monitor with no
+hardware at all.
 
-![the monitor](docs/screenshots/watch.png)
+![the monitor](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch.png)
 
 **Twenty seconds of it, at ten times speed.** Seconds 300 to 320 of a real
 session against the counter these logs came from, one frame a second:
 
-![the monitor, seconds 300-320 at 10x](docs/screenshots/watch-300-320.gif)
+![the monitor, seconds 300-320 at 10x](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-300-320.gif)
 
 The 3-second window swings between 0 and 120 CPM while the 5-minute one moves
 between 40.0 and 41.2 — which is the whole argument for keeping five of them.
@@ -63,6 +65,11 @@ went wrong, and they have four different fixes — [§1](#1-what-you-need) is th
 list of what has to be true. **No counter yet?**
 `radbeeper --source sim --sim-cpm 400 watch` draws the entire monitor against a
 synthetic Poisson background, which is a real one: decay is a Poisson process.
+That verb is the Python program's — a `cargo install radbeeper` does not carry
+it. What the Rust build has instead is `tests/fake_gmc.py`, which puts a
+counter on a pseudo-terminal and exercises the serial path as well as the
+display: `python3 tests/fake_gmc.py --cpm 400`, then `radbeeper -d /dev/pts/N
+watch`.
 
 <details>
 <summary>Everything else it does</summary>
@@ -131,9 +138,9 @@ make install          # copies to ~/.local/bin/radbeeper
 
 There is a native build too — `cargo install radbeeper`, or a static binary off
 the releases page for a machine with no toolchain — and **it is now the
-implementation**. `probe`, `cpm`, `watch`, `service`, `random`, `backfill` and
-`log` are native; `export`, `recompute`, `hotplug`, `--plain` and `--source sim`
-are still the Python and are the reason it is still here.
+implementation**. `probe`, `cpm`, `watch`, `service`, `random`, `backfill`, `log` and `hotplug`
+are native; `export`, `site`, `recompute`, `--plain` and `--source sim` are
+still the Python and are the reason it is still here.
 [§10](#10-the-native-build) is that story.
 
 **Add yourself to `dialout`**, or the serial node will not open:
@@ -148,7 +155,7 @@ doas adduser $USER dialout    # then log out and back in
 radbeeper probe
 ```
 
-![radbeeper probe](docs/screenshots/probe.png)
+![radbeeper probe](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/probe.png)
 
 If it finds nothing, the message says which of four things went wrong, because
 they have four different fixes — see [Troubleshooting](#troubleshooting).
@@ -213,7 +220,7 @@ questions. Every window is a column in the log, whatever you choose. The
 
 **A window shows nothing until it is full**, and says how long it still needs:
 
-![radbeeper watch, still filling](docs/screenshots/watch-filling.png)
+![radbeeper watch, still filling](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-filling.png)
 
 A three-second CPM built from one sample is twenty times noisier than it looks,
 and drawing it as though it were settled is how a 25 CPM background reads as 60
@@ -230,7 +237,7 @@ converting in their head.
 
 ### The spectrum, where flat is the good answer
 
-![the accumulating spectrum](docs/screenshots/watch-spectrum.png)
+![the accumulating spectrum](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-spectrum.png)
 
 Radioactive decay is a Poisson process, and **the power spectrum of a Poisson
 process is flat** — white noise, every frequency carrying the same expected
@@ -340,7 +347,7 @@ what you get automatically when stdout is not a terminal:
 radbeeper --plain --duration 14 watch
 ```
 
-![radbeeper --plain watch](docs/screenshots/watch-plain.png)
+![radbeeper --plain watch](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-plain.png)
 
 ### No counter on the desk?
 
@@ -361,7 +368,7 @@ radbeeper service         # what the boot service runs, in the foreground
 
 One row every 30 seconds into a dated file per counter:
 
-![the log on disk](docs/screenshots/log-output.png)
+![the log on disk](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/log-output.png)
 
 | Column | |
 |---|---|
@@ -380,7 +387,7 @@ rows — which is the one event actually worth having a log for.
 Tabs are invisible and that matters here, because an **empty field is not a
 zero** — it is a window that was not full yet:
 
-![the log with its tabs shown](docs/screenshots/log-tabs.png)
+![the log with its tabs shown](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/log-tabs.png)
 
 State lives in `/var/log/radbeeper` when that is writable and
 `~/.local/share/radbeeper` when it is not. Files rotate by month and by counter
@@ -533,7 +540,7 @@ radbeeper site                        # where is it, and where has it been
 radbeeper site --name "The garage"    # it moved, from now
 ```
 
-![site, log info and export](docs/screenshots/commands.png)
+![site, log info and export](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/commands.png)
 
 A reading without a place is half a measurement, and these get carried about — so
 the place is a property of a **serial number over time**, appended to `sites.tsv`

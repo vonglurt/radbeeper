@@ -44,7 +44,11 @@ test:
 check:
 	RUSTFLAGS="-D warnings" $(CARGO) build --release --locked --all-targets
 	$(CARGO) test --locked
-	$(PYTHON) -m unittest discover -q -s tests -k TestSameBytes
+	# THE WHOLE SUITE, NOT ONE CLASS. This carried `-k TestSameBytes` from
+	# the commit that added that class, and was never widened as the others
+	# arrived -- so `make check` ran 6 tests of 209 and said OK. The target's
+	# own help has always said "the tests".
+	$(PYTHON) -m unittest discover -q -s tests
 	$(CARGO) clippy --all-targets --locked \
 	  -- -D clippy::correctness -D clippy::suspicious 2>/dev/null \
 	  || echo "  (clippy not installed -- CI will run it)"
