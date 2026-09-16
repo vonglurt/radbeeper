@@ -488,7 +488,7 @@ class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
         d = tempfile.mkdtemp()
         out = subprocess.run(
             [self.BINARY, "service", "--logs", d, "--log-every", str(every),
-             "--duration", str(seconds)],
+             "--duration", str(seconds), "--no-backfill"],
             capture_output=True, text=True, timeout=seconds + 60)
         files = [os.path.join(d, n) for n in os.listdir(d)
                  if n.endswith(".tsv")]
@@ -596,7 +596,7 @@ class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
             before = f.read().splitlines()
         subprocess.run(
             [self.BINARY, "service", "--logs", d, "--log-every", "2",
-             "--duration", "4"],
+             "--duration", "4", "--no-backfill"],
             capture_output=True, text=True, timeout=90)
         with open(files[0]) as f:
             after = f.read().splitlines()
@@ -680,3 +680,94 @@ class TestTheTwoMonitorsDrawTheSameScreen(unittest.TestCase):
         self.assertEqual(mine, theirs,
                          "the two monitors put the same rows in different "
                          "places:\n  python %r\n  rust   %r" % (mine, theirs))
+
+
+class TestTheRustProbeAfterAKilledSession(unittest.TestCase):
+    """A counter still streaming heartbeats is still answered in step.
+
+    `watch` turns the stream off when it exits cleanly. Killed, it does not,
+    and the counter goes on sending two bytes a second. The probe that ran
+    next asked for the clock between two of them and printed 20128-00-26 --
+    a year of 128 is the heartbeat's status bit, read as the answer.
+    """
+
+    BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(cls.BINARY):
+            raise unittest.SkipTest("no release binary to run")
+
+    def test_probe_reads_the_clock_through_a_running_stream(self):
+        import time
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fake_gmc import FakeGMC
+        dev = FakeGMC(cpm=600.0, seed=7)
+        dev.heartbeat = True
+        dev.interleave = True
+        dev.start()
+        try:
+            time.sleep(0.2)
+            out = subprocess.run([self.BINARY, "-d", dev.path, "probe"],
+                                 capture_output=True, text=True, timeout=30)
+        finally:
+            dev.stop()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        clock = [l for l in out.stdout.splitlines()
+                 if l.startswith("its clock")]
+        self.assertEqual(len(clock), 1, out.stdout)
+        self.assertIn(time.strftime(" %Y-%m-"), clock[0])
+        self.assertIn("reading    600 CPM", out.stdout)
+
+
+class TestTheRustServiceBackfillsAtStart(unittest.TestCase):
+    """The boot service reads the counter's flash before it logs anything.
+
+    The Python service always did; the Rust one printed "backfill is not in
+    this build yet" and started logging, so a machine switched to the native
+    build lost every hour the counter recorded while the machine was off.
+    """
+
+    BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(cls.BINARY):
+            raise unittest.SkipTest("no release binary to run")
+
+    def run_service(self, *extra):
+        import tempfile
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fake_gmc import FakeGMC, build_history
+        d = tempfile.mkdtemp()
+        dev = FakeGMC(cpm=600.0, seed=9, tick=0.05,
+                      history=build_history(seconds=600, cpm=200.0,
+                                            size=64 * 1024))
+        dev.start()
+        try:
+            out = subprocess.run(
+                [self.BINARY, "-d", dev.path, "service", "--logs", d,
+                 "--duration", "1"] + list(extra),
+                capture_output=True, text=True, timeout=120)
+        finally:
+            dev.stop()
+        rows = []
+        for n in os.listdir(d):
+            if n.endswith(".tsv") and n.startswith("cpm-"):
+                with open(os.path.join(d, n)) as f:
+                    rows += [l for l in f.read().splitlines()
+                             if l and not l.startswith("#")]
+        return out, rows
+
+    def test_the_flash_becomes_rows_before_the_live_log_starts(self):
+        out, rows = self.run_service()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("radbeeper: backfill --", out.stdout)
+        self.assertTrue([r for r in rows if r.split("\t")[-2] == "flash"],
+                        "no flash rows written:\n" + out.stdout)
+
+    def test_no_backfill_skips_it(self):
+        out, rows = self.run_service("--no-backfill")
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertNotIn("backfill", out.stdout)
+        self.assertFalse([r for r in rows if r.split("\t")[-2] == "flash"])

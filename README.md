@@ -26,19 +26,30 @@ pass-through produces no `/dev/ttyUSB0`.
 
 ![the monitor](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch.png)
 
-**Twenty seconds of it, at ten times speed.** Seconds 300 to 320 of a real
-session against the counter these logs came from, one frame a second:
+**Nine minutes of it, at forty times speed.** A whole session of the native
+build against the counter these logs came from, a frame every four seconds:
+
+![the monitor, a whole 560-second session at 40x](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-fast.gif)
+
+The windows arrive in order — 3 s, then 30 s, then five minutes at 302 s —
+while the two long ones count down the whole way. The spectrum starts
+accumulating at once and has its first window at 128 s, and the random line
+turns up only after the pool has measured enough of the source to put 256 bits
+behind it.
+
+**Twenty seconds of it, at ten times speed.** Seconds 300 to 320 of the same
+session, one frame a second:
 
 ![the monitor, seconds 300-320 at 10x](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-300-320.gif)
 
-The 3-second window swings between 0 and 120 CPM while the 5-minute one moves
-between 40.0 and 41.2 — which is the whole argument for keeping five of them.
+The 3-second window swings between 0 and 60 CPM while the 5-minute one moves
+between 44.6 and 45.8 — which is the whole argument for keeping five of them.
 The 5-minute window **arrives two seconds in**, at 302 s, having had nothing to
 say until then; the 50-minute one is still counting down and will be for
 another forty-five minutes, and the working-day window will be for another
 eight hours. The bars recolour as individual seconds land, the spectrum stays
 flat, and there is no random line yet — the pool is still measuring the source,
-and its countdown ticks from 187 s to 165 s across these twenty seconds.
+and its countdown ticks from 93 s to 77 s across these twenty seconds.
 
 ## Fast track
 
@@ -51,6 +62,9 @@ radbeeper watch      # the monitor — q to quit
 
 That is the whole of it. The `dialout` line in the install above is not
 optional: the serial node is `root:dialout` and RadBeeper does not want root.
+**Only one program can hold the port**, so if the boot service is logging,
+`probe` says `port busy` and names it — `doas rc-service radbeeper stop` hands
+the counter over, and `start` gives it back.
 If `probe` finds nothing it says which of four things went wrong, and they have
 four different fixes — [§1](#1-what-you-need) is the list of what has to be
 true. **No counter yet?**
@@ -138,8 +152,9 @@ cargo install radbeeper                  # or a static binary from the releases
 ```
 
 A static binary off the releases page needs no toolchain at all, which is the
-point on a Pi. From a clone, `make install` builds it and copies it to
-`~/.local/bin`, and takes `PREFIX=`.
+point on a Pi. From a clone, `make install` is `cargo install --path .`: it
+builds the release binary and puts it in `~/.cargo/bin`, which has to be ahead
+of anything older on your `PATH` — `which -a radbeeper` shows the order.
 
 The one-file `python3` program is still in the repository beside it and still
 installs the same way — `make py-install` — because it owns the verbs the port
@@ -221,7 +236,7 @@ counting for 30s...
 `--spans` takes the list, so `--spans 1,10,60` is a different set of three
 questions. Every window is a column in the log, whatever you choose. The
 [animation at the top](#radbeeper) is twenty seconds of exactly this: the
-3-second window swinging 0 to 80 while the 300-second one holds 41.
+3-second window swinging 0 to 60 while the 300-second one holds 45.
 
 **A window shows nothing until it is full**, and says how long it still needs:
 
@@ -276,8 +291,9 @@ radbeeper --plain --duration 14 watch
 
 ### No counter on the desk?
 
-Every command runs against a built-in source, and it is a real one — decay is a
-Poisson process, so the simulator draws Poisson samples. Variance equals the
+The Python program runs against a built-in source, and it is a real one — decay
+is a Poisson process, so the simulator draws Poisson samples. (`--source sim`
+is not ported: the native build reads a counter or a `tests/fake_gmc.py`.) Variance equals the
 mean, which is exactly the property that makes the 3-second average jump and the
 300-second one sit still.
 
@@ -331,6 +347,23 @@ the first place. **Dormant is the normal state**: with no counter plugged in the
 rc-service radbeeper start        # or just plug the counter in
 cat /var/log/radbeeper/status     # what it is doing, and why
 ```
+
+**The service runs `/usr/local/bin/radbeeper`, not the one `make install` put
+in `~/.cargo/bin`.** Upgrading your own copy leaves the boot service on
+whatever was there before, so give it the new build too:
+
+```sh
+make build
+doas rc-service radbeeper stop
+doas install -m 0755 target/release/radbeeper /usr/local/bin/radbeeper
+doas rc-service radbeeper start   # reads the flash first, then logs
+```
+
+On start it backfills from the counter's flash before appending anything —
+`--no-backfill` skips that. If the new build logs a different set of windows
+from the old one, it writes a second header line into the month's file
+rather than writing five columns under a four-column header; both readers take
+the last header above a row as that row's.
 
 `radbeeper hotplug` is the other half: it sits in your desktop session and opens
 the monitor when a counter appears — at login if one is already there, and on

@@ -25,6 +25,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 SHOTS = os.path.join(ROOT, "docs", "screenshots")
 RECORD = os.path.join(HERE, "record.py")
+# The native build, for the verbs it owns. `probe` and `watch` are shown as
+# the Rust program draws them, because that is what `make install` puts on
+# PATH; `--plain`, `site` and `export` are not ported, so those shots still
+# run the one-file Python beside it.
+NATIVE = os.path.join(ROOT, "target", "release", "radbeeper")
+PYTHON_PROGRAM = os.path.join(ROOT, "radbeeper")
 
 # The monitor needs a real run behind it: 128 s before the spectrum has its
 # first window, 300 s before the 5-minute average is full, and -- since the
@@ -52,7 +58,7 @@ def png(name):
     return os.path.join(SHOTS, name + ".png")
 
 
-def session(name, script, cols=90, rows=30, seconds=0):
+def session(name, script, cols=90, rows=30, seconds=0, native=False):
     """Record a shell transcript: each command echoed, then run.
 
     A real shell prompt would drag in whatever PS1 the machine happens to
@@ -63,11 +69,16 @@ def session(name, script, cols=90, rows=30, seconds=0):
     # the shot shows the command somebody actually types after `make
     # install`, and still runs this working tree rather than whatever is
     # already installed on the machine.
-    binv = os.path.join(CASTS, "bin")
+    # One bin/ per implementation, and the link is checked, not just found:
+    # a single bin/ made on a run before the port kept pointing at the Python.
+    binv = os.path.join(CASTS, "bin-native" if native else "bin-python")
     os.makedirs(binv, exist_ok=True)
     link = os.path.join(binv, "radbeeper")
+    target = NATIVE if native else PYTHON_PROGRAM
+    if os.path.islink(link) and os.readlink(link) != target:
+        os.unlink(link)
     if not os.path.islink(link):
-        os.symlink(os.path.join(ROOT, "radbeeper"), link)
+        os.symlink(target, link)
     sh = ["#!/bin/sh", "cd " + ROOT, "PATH=%s:$PATH" % binv, "export PATH"]
     for line in script:
         if not line:
@@ -117,19 +128,20 @@ def main():
     os.makedirs(CASTS, exist_ok=True)
     os.makedirs(SHOTS, exist_ok=True)
     only = set(x for x in a.only.split(",") if x)
+    run("cargo", "build", "--release", "--locked")
 
     def want(name):
         return not only or name in only
 
     # ---------------------------------------------------------- monitor ---
     if any(want(n) for n in ("watch", "watch-filling", "watch-spectrum",
-                             "watch-300-320")):
+                             "watch-300-320", "watch-fast")):
         if not (a.keep and os.path.exists(cast("watch-long"))):
             print("recording %d s of the monitor -- this takes that long"
                   % MONITOR_SECONDS)
             run(sys.executable, RECORD, "capture", cast("watch-long"),
                 "--cols", MONITOR_COLS, "--rows", MONITOR_ROWS,
-                "--seconds", MONITOR_SECONDS, "--", "./radbeeper", "watch")
+                "--seconds", MONITOR_SECONDS, "--", NATIVE, "watch")
 
         if want("watch"):
             # Late enough that the 3 s, 30 s and 300 s windows are full, the
@@ -155,10 +167,20 @@ def main():
                 "-o", os.path.join(SHOTS, "watch-300-320.gif"),
                 "--from", 300, "--to", 320, "--step", 1, "--speed", 10,
                 "--rows", MONITOR_ROWS, "--size", 13)
+        if want("watch-fast"):
+            # The whole session, forty times over: a frame every four seconds
+            # of it, a tenth of a second each, so nine minutes plays in
+            # fourteen. What 300-320 cannot show -- the windows arriving one
+            # after another, the spectrum building, the random line appearing.
+            run(sys.executable, RECORD, "gif", cast("watch-long"),
+                "-o", os.path.join(SHOTS, "watch-fast.gif"),
+                "--from", 4, "--to", MONITOR_SECONDS, "--step", 4,
+                "--speed", 40, "--rows", MONITOR_ROWS, "--size", 11)
 
     # ------------------------------------------------------------ probe ---
     if want("probe"):
-        session("probe", ["radbeeper probe"], cols=80, rows=20, seconds=25)
+        session("probe", ["radbeeper probe"], cols=80, rows=20, seconds=25,
+                native=True)
         still("probe", 24, cursor=True)
 
     # --------------------------------------------------------- --plain ---

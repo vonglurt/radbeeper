@@ -186,6 +186,8 @@ fn cpm_cmd(c: &counter::Counter, cpm_per_usvh: f64) -> i32 {
 
 fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
          duration: Option<f64>, logs: Option<std::path::PathBuf>) {
+    // So a `kill` stops the stream and puts the terminal back, as q does.
+    install_stop_handler();
     let screen = Screen::enter();
     let mut w = Windows::new(spans);
     let mut ladder = Ladder::new();
@@ -203,6 +205,9 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
             Some(v) => v as u32,
             None => break,
         };
+        if stopping() {
+            break;
+        }
         let when = start.elapsed().as_secs_f64();
         w.add(when, counts);
         ladder.add(counts);
@@ -426,7 +431,8 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
 /// every ten seconds picks the log back up the moment they do.
 fn service(spans: &[f64], every: f64, duration: Option<f64>,
            device: Option<&str>, baud: Option<u32>,
-           logs: Option<std::path::PathBuf>) -> i32 {
+           logs: Option<std::path::PathBuf>,
+           backfill: Option<(usize, f64)>) -> i32 {
     install_stop_handler();
 
     let started = clock::now();
@@ -471,6 +477,27 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     // way to exercise the logger is against the machine's real log.
     let dir = logs.unwrap_or_else(log::state_dir);
     let _ = std::fs::create_dir_all(&dir);
+
+    // BEFORE ANYTHING IS APPENDED, as the Python does: backfilled rows belong
+    // in the past and the merge rewrites the file. The service starts when a
+    // counter is plugged in or the machine comes up, which is exactly when
+    // the counter has been recording somewhere this log was not. The status
+    // file says so, because reading the flash takes a while.
+    if let Some((bytes, max_gap)) = backfill {
+        log::write_status("backfilling from the counter's history");
+        let offset = measure_clock_offset(&c).unwrap_or(0.0);
+        let blob = read_history_tail(&c, bytes, false);
+        if blob.is_empty() {
+            println!("radbeeper: backfill skipped -- the counter returned no history");
+        } else {
+            let sites = log::read_sites(&dir);
+            let r = history::backfill(&blob, spans, every, max_gap, offset, &dir,
+                                      Some(c.serial_no.as_str()), &sites, None);
+            println!("radbeeper: backfill -- {} samples, {} rows, {} added, {} already logged",
+                     r.samples, r.rows, r.added, r.clashed);
+        }
+    }
+
     log::write_status(&format!("monitoring {} ({})", c.path, c.version));
     let mut w = Windows::new(spans);
     let mut iv = log::Interval::new(spans.len());
@@ -488,8 +515,6 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     println!("radbeeper: logging to {}, a row every {}s",
              log::path(clock::now(), &dir, Some(&c.serial_no)).display(),
              log::g(every));
-    println!("radbeeper: backfill is not in this build yet -- \
-              the Python does that one");
 
     // THE COUNTER HAS TO BE ASKED TO TALK. Without this the first read times
     // out, the loop breaks on the spot and the service exits 0 having written
@@ -1008,6 +1033,7 @@ fn main() {
     let mut image: Option<std::path::PathBuf> = None;
     let mut bytes: Option<usize> = None;
     let mut max_gap = 300.0f64;
+    let mut no_backfill = false;
     let mut output: Option<String> = None;
     // hotplug's three. Four seconds is a read of /dev fifteen times a minute,
     // which costs nothing; settle is the grace a node gets between appearing
@@ -1057,7 +1083,8 @@ fn main() {
             "--check" => check = next(&mut i).map(std::path::PathBuf::from),
             "--image" => image = next(&mut i).map(std::path::PathBuf::from),
             "--serial" => serial = next(&mut i),
-            "--bytes" => bytes = next(&mut i).and_then(|v| v.parse().ok()),
+            "--bytes" | "--backfill-bytes" => bytes = next(&mut i).and_then(|v| v.parse().ok()),
+            "--no-backfill" => no_backfill = true,
             "--max-gap" => {
                 max_gap = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(max_gap)
             }
@@ -1112,8 +1139,9 @@ fn main() {
         std::process::exit(hotplug(device.as_deref(), baud, poll, settle, tries, duration));
     }
     if command == "service" {
+        let backfill = (!no_backfill).then(|| (bytes.unwrap_or(64 * 1024), max_gap));
         std::process::exit(service(
-            &spans, log_every, duration, device.as_deref(), baud, logs,
+            &spans, log_every, duration, device.as_deref(), baud, logs, backfill,
         ));
     }
 

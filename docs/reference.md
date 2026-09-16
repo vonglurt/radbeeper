@@ -90,8 +90,8 @@ Two consequences worth having. **A screenshot cannot claim something the
 program does not do** — the log-format shot found that busybox `sed` ignores
 `\x` escapes, because the recording showed the escape instead of the arrow.
 And **the monitor shots are one session**: the hero, the filling shot, the
-spectrum strip and the twenty-second animation are four moments of the same
-380-second run against the counter, so the numbers in them agree with each
+spectrum strip and both animations are moments of the same 560-second run
+of the native build against the counter, so the numbers in them agree with each
 other because they are the same numbers.
 
 `tools/record.py inventory <cast>` prints the escape sequences a recording

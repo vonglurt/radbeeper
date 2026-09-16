@@ -573,7 +573,13 @@ impl Writer {
         self.close();
         let fresh = fs::metadata(path).map(|m| m.len() == 0).unwrap_or(true);
         let mut f = fs::OpenOptions::new().create(true).append(true).open(path)?;
-        if fresh {
+        // A NEW HEADER WHEN THE WINDOWS CHANGED. A month's file outlives the
+        // program that started it: a 3,30,300,3000 logger replaced mid-month
+        // by a five-window one appended five-window rows under the four-window
+        // header, and every peak column after the switch was read as the one
+        // beside it. Both readers take the last header above a row as that
+        // row's, so a second header is the whole of the migration.
+        if fresh || last_header(path).as_deref() != Some(header(&self.spans).as_str()) {
             writeln!(f, "{}", header(&self.spans))?;
             f.flush()?;
         }
@@ -627,6 +633,12 @@ impl Writer {
     }
 }
 
+/// The last header line in a log, which is the one its next row is read under.
+fn last_header(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    text.lines().rev().find(|l| l.starts_with('#')).map(str::to_string)
+}
+
 fn ino_of(path: &Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
     fs::metadata(path).ok().map(|m| m.ino())
@@ -673,4 +685,34 @@ pub fn site_at(serial: &str, when: f64, sites: &[(String, f64, String)])
         }
     }
     Some(current.2.clone())
+}
+
+#[cfg(test)]
+mod writer_tests {
+    use super::*;
+
+    #[test]
+    fn a_change_of_windows_mid_file_writes_a_new_header() {
+        let dir = std::env::temp_dir().join(format!("rb-hdr-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let when = 1_789_000_000.0;
+        let four = [3.0, 30.0, 300.0, 3000.0];
+        let five = [3.0, 30.0, 300.0, 3000.0, 30000.0];
+        let p = path(when, &dir, Some("A1"));
+        let mut w = Writer::new(&four, dir.clone(), Some("A1".into()), 30.0);
+        w.write(when, &format!("{}\tfour", clock::stamp(when))).unwrap();
+        w.close();
+        let mut w = Writer::new(&four, dir.clone(), Some("A1".into()), 30.0);
+        w.write(when + 30.0, &format!("{}\tfour", clock::stamp(when + 30.0))).unwrap();
+        w.close();
+        let mut w = Writer::new(&five, dir.clone(), Some("A1".into()), 30.0);
+        w.write(when + 60.0, &format!("{}\tfive", clock::stamp(when + 60.0))).unwrap();
+        w.close();
+        let text = fs::read_to_string(&p).unwrap();
+        let heads: Vec<&str> = text.lines().filter(|l| l.starts_with('#')).collect();
+        assert_eq!(heads, vec![header(&four).as_str(), header(&five).as_str()],
+                   "a restart with the same windows must not repeat the header");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

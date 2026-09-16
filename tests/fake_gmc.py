@@ -93,6 +93,9 @@ class FakeGMC(threading.Thread):
         self.history = history if history is not None else build_history()
         self.tick = tick
         self.heartbeat = False
+        # A beat queued just ahead of every reply while the stream is on: the
+        # worst case of a race the real device loses often enough to matter.
+        self.interleave = False
         self.running = True
         self.commands = []
 
@@ -155,6 +158,8 @@ class FakeGMC(threading.Thread):
     def _handle(self, cmd):
         self.commands.append(cmd)
         body = cmd[1:-2]
+        if self.heartbeat and self.interleave:
+            self._send(struct.pack(">H", self._draw() | 0x8000))
         if body == b"GETVER":
             self._send(VERSION)
         elif body == b"GETSERIAL":

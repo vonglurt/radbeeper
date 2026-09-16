@@ -2448,6 +2448,17 @@ def merge_log(path, header, rows, every):
     return added, clashed
 
 
+# PORT: replaced by src/log.rs :: last_header() -- same name
+def last_header(path):
+    """The last header line in a log, the one its next row is read under."""
+    last = None
+    with open(path) as f:
+        for line in f:
+            if line.startswith("#"):
+                last = line.rstrip("\n")
+    return last
+
+
 # PORT: replaced by src/log.rs :: Writer (renamed) -- new/write/close, the same month rotation and inode check
 class LogWriter:
     """Appends rows to the dated log for their month.
@@ -2477,8 +2488,11 @@ class LogWriter:
     def _open(self, path):
         self.close()
         fresh = not os.path.exists(path) or os.path.getsize(path) == 0
+        # A new header when the windows changed since the file was started:
+        # both readers take the last header above a row as that row's.
+        stale = not fresh and last_header(path) != log_header(self.spans)
         self.file = open(path, "a")
-        if fresh:
+        if fresh or stale:
             self.file.write(log_header(self.spans) + "\n")
         self.path = path
         # The slot already on disk, so a restart cannot append a second row

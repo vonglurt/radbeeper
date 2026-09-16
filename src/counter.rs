@@ -186,6 +186,17 @@ fn identify(path: &str, baud: Option<u32>) -> Result<Option<Counter>, OpenError>
             Err(OpenError::Busy) => return Err(OpenError::Busy),
             Err(_) => continue,
         };
+        // A SESSION THAT WAS KILLED LEFT THE STREAM ON. `heartbeat(false)`
+        // only runs on a clean exit; a SIGKILL, a pulled cable or a crash
+        // leaves the counter sending two bytes a second into a port nobody
+        // is reading, and flush-then-ask cannot beat that -- a sample lands
+        // between the flush and the answer and every reply after it is two
+        // bytes out of step. `probe` printed the counter's clock as
+        // 20128-00-26 that way, straight after a recording killed `watch`.
+        // So say stop first, whatever state it was left in.
+        port.flush_input();
+        let _ = port.write_all(b"<HEARTBEAT0>>");
+        std::thread::sleep(Duration::from_millis(200));
         port.flush_input();
         if port.write_all(b"<GETVER>>").is_err() {
             continue;

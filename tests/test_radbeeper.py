@@ -914,6 +914,18 @@ class TestOneRowPerSlotLive(unittest.TestCase):
                     if not ln.startswith("#")]
         self.assertEqual(len(body), 2)
 
+    def test_a_change_of_windows_writes_a_new_header_and_a_restart_does_not(self):
+        path = radbeeper.log_path(self.base, self.tmp, "A1")
+        for spans, at in ((list(self.spans), 1), (list(self.spans), 31),
+                          (list(self.spans) + [30000.0], 61)):
+            out = radbeeper.LogWriter(spans, self.tmp, "A1", self.every)
+            out.write(self.base + at, self.line(self.base + at))
+            out.close()
+        with open(path) as f:
+            heads = [ln for ln in f.read().splitlines() if ln.startswith("#")]
+        self.assertEqual(heads, [radbeeper.log_header(list(self.spans)),
+                                 radbeeper.log_header(list(self.spans) + [30000.0])])
+
 
 class TestSites(unittest.TestCase):
     """Where a counter was, which is a property of a serial over time.
