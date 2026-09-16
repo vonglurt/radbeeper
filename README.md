@@ -86,6 +86,7 @@ radbeeper random           # 256 bits of hex, out of decay timing
 radbeeper site             # where this counter is, and where it has been
 radbeeper export           # build index.html and random.html from the logs
 radbeeper log pull         # download the raw history to .bin and .csv
+radbeeper clock --set      # set the counter's clock from this machine's
 ```
 
 </details>
@@ -180,27 +181,58 @@ radbeeper probe
 If it finds nothing, the message says which of four things went wrong, because
 they have four different fixes — see [Troubleshooting](docs/troubleshooting.md).
 
-### Its clock
+### Its clock, and setting it
 
-The `its clock` line says how far the counter's clock is from this machine's,
-to a few hundredths of a second. The counter answers in whole seconds, so one
-reading is only good to a second. RadBeeper asks again, back to back, until the
-second changes: the tick falls between two round trips, which pins it down.
-Backfill uses the same measurement to put the counter's history on this
-machine's clock.
+The counter keeps its own time, and nothing sets it for you — the one on this
+desk had drifted to nearly two minutes fast. Every row RadBeeper rebuilds from
+the counter's memory is placed by that clock, so `probe` says how far out it is:
 
-```sh
-radbeeper clock          # the same measurement, and whether this machine is NTP-synced
-radbeeper clock --set    # set the counter from this machine, then measure it again
+```
+its clock  2026-09-16 16:04:18   111.4 s ahead of this machine (±0.02 s)
+           radbeeper clock --set  corrects it from this machine
 ```
 
-`--set` sends `<SETDATETIME>>` as this machine's clock reaches the whole second
-it names, measures the result, and corrects the timing once if it landed off.
-**Set it from a synchronised clock**: `clock` says whether the kernel thinks
-NTP is steering this one, and a counter set from a clock nothing steers is only
-as right as that clock. **The flash is not rewritten.** History recorded before
-the set still carries the old clock, and a backfill applies one offset to
-everything it reads, so backfill before setting if the log has gaps to fill.
+**How it measures to a hundredth.** The counter answers in whole seconds, so
+one reading is only good to a second — 0.85 s out, on this unit. RadBeeper asks
+again, back to back, until the second changes: the counter ticked after the last
+old answer was asked for and before the first new one came back, which pins the
+tick between two round trips. Backfill uses the same measurement.
+
+**Setting it:**
+
+```
+$ radbeeper clock --set
+its clock      2026-09-16 16:17:32
+               111.5 s ahead of this machine (±0.02 s)
+this machine   synchronised (the kernel says NTP is steering it)
+set            2026-09-16 16:15:43
+               matches this machine (±0.02 s)
+
+  history the counter recorded before now carries the old clock, 111 s
+  ahead. A backfill applies one offset to everything it reads, so rows
+  it rebuilds from before this moment will be out by that much.
+```
+
+`radbeeper clock` on its own is the measurement without the set. The set is
+`<SETDATETIME>>`, sent as this machine's clock reaches the whole second it
+names; the result is measured the same way, and if it landed off the timing is
+corrected and it is sent once more. Three things to know first:
+
+- **Only one program can hold the port.** Stop the service
+  (`doas rc-service radbeeper stop`), set it, start it again.
+- **Set it from a clock that is right.** `clock` asks the kernel whether NTP is
+  steering this machine. A counter set from a clock nothing steers is only as
+  right as that clock, and it says so rather than refusing.
+- **Backfill first.** The counter's memory is not rewritten: what it recorded
+  before the set keeps the old time, and a backfill applies one offset to
+  everything it reads. If the log has gaps, fill them before you set the clock,
+  or the rows rebuilt from before it will be out by what you corrected.
+
+Afterwards, `radbeeper clock` may say `matches this machine (±0.1 s)` rather
+than ±0.02. On this unit, after the set, the first answer after the counter's
+second rolled over took about 250 ms every time, against 20–50 ms otherwise,
+and a slow answer at the tick widens the bracket. The clock is still right to
+the bracket; it is the measurement that got coarser.
 
 ## 4. Watch it
 
