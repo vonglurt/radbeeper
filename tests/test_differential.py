@@ -771,3 +771,59 @@ class TestTheRustServiceBackfillsAtStart(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertNotIn("backfill", out.stdout)
         self.assertFalse([r for r in rows if r.split("\t")[-2] == "flash"])
+
+
+class TestTheCountersClock(unittest.TestCase):
+    """How far the counter's clock is out, to the hundredth, and setting it.
+
+    `probe` used to print the counter's time beside this machine's as a unix
+    number and leave the subtraction to the reader -- and a reading in whole
+    seconds is only good to a second however carefully it is subtracted.
+    """
+
+    BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(cls.BINARY):
+            raise unittest.SkipTest("no release binary to run")
+
+    def device(self, ahead):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fake_gmc import FakeGMC
+        dev = FakeGMC(cpm=600.0, seed=3)
+        dev.clock_ahead = ahead
+        dev.start()
+        self.addCleanup(dev.stop)
+        return dev
+
+    def run_native(self, dev, *argv):
+        out = subprocess.run([self.BINARY, "-d", dev.path] + list(argv),
+                             capture_output=True, text=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        return out.stdout
+
+    def test_probe_says_how_far_ahead_to_the_tenth(self):
+        out = self.run_native(self.device(111.4), "probe")
+        self.assertIn("111.4 s ahead of this machine", out)
+        self.assertIn("radbeeper clock --set", out)
+
+    def test_probe_says_behind_when_it_is_behind(self):
+        out = self.run_native(self.device(-2180.25), "probe")
+        self.assertRegex(out, r"2180\.[123] s behind this machine")
+
+    def test_set_brings_it_within_a_tenth_and_says_so(self):
+        dev = self.device(-500.0)
+        out = self.run_native(dev, "clock", "--set")
+        self.assertAlmostEqual(dev.clock_ahead, 0.0, delta=0.1)
+        self.assertIn("matches this machine", out.split("set ", 1)[1])
+        self.assertIn("carries the old clock, 500 s", out)
+
+    def test_the_python_measures_the_same_offset(self):
+        dev = self.device(37.25)
+        c = radbeeper.identify(dev.path, baud=115200)
+        try:
+            self.assertAlmostEqual(radbeeper.measure_clock_offset(c), -37.25,
+                                   delta=0.1)
+        finally:
+            c.close()

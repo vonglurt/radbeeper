@@ -14,6 +14,16 @@ pub const COUNT_MASK: u16 = 0x3FFF;
 pub const DEFAULT_CPM_PER_USVH: f64 = 151.5;
 pub const SPIR_CHUNK: usize = 2048;
 
+/// How far the counter's clock is ahead of this machine's, and how far that
+/// figure can be trusted. Negative `ahead` is behind.
+#[derive(Clone, Copy, Debug)]
+pub struct ClockOffset {
+    pub ahead: f64,
+    pub within: f64,
+    /// What the counter's clock read, as seconds since the epoch in local time.
+    pub theirs: f64,
+}
+
 pub struct Counter {
     port: Serial,
     pub version: String,
@@ -95,14 +105,76 @@ impl Counter {
         (r.len() == 1).then(|| r[0] as f64 / 10.0)
     }
 
-    pub fn datetime(&self) -> Option<String> {
+    /// One <GETDATETIME>> as (the counter's time, when it was asked, when it
+    /// answered), all seconds since the epoch.
+    fn clock_reading(&self) -> Option<(f64, f64, f64)> {
+        let sent = radbeeper::clock::now();
         let r = self.ask(b"<GETDATETIME>>", 7);
-        (r.len() == 7).then(|| {
-            format!(
-                "20{:02}-{:02}-{:02} {:02}:{:02}:{:02}",
-                r[0], r[1], r[2], r[3], r[4], r[5]
-            )
-        })
+        let got = radbeeper::clock::now();
+        if r.len() != 7 {
+            return None;
+        }
+        let theirs = radbeeper::clock::from_parts(
+            2000 + r[0] as i32, r[1] as i32, r[2] as i32,
+            r[3] as i32, r[4] as i32, r[5] as i32,
+        )?;
+        Some((theirs, sent, got))
+    }
+
+    /// The counter's clock against this machine's, timed to its tick.
+    ///
+    /// ONE READING IS ONLY GOOD TO A SECOND. The counter answers in whole
+    /// seconds, so "15:31:54" is anywhere in that second and the difference
+    /// from this machine's clock is uncertain by all of it -- 0.85 s out on
+    /// the unit this was written against. So it asks again, back to back,
+    /// until the second changes. The tick happened after the counter took
+    /// the last old answer and before it sent the first new one, which pins
+    /// it between two round trips: a few hundredths of a second at 115200.
+    ///
+    /// Falls back to the single reading, and says so in `within`, if the
+    /// second never turns over -- a stopped clock is worth reporting too.
+    pub fn clock_ahead(&self) -> Option<ClockOffset> {
+        let (first, sent, got) = self.clock_reading()?;
+        let fallback = ClockOffset {
+            ahead: first - (sent + got) / 2.0 + 0.5,
+            within: 0.5 + (got - sent) / 2.0,
+            theirs: first,
+        };
+        let mut before = sent;
+        let give_up = got + 2.5;
+        while radbeeper::clock::now() < give_up {
+            let (theirs, s, g) = match self.clock_reading() {
+                Some(r) => r,
+                None => return Some(fallback),
+            };
+            if theirs != first {
+                let tick = (before + g) / 2.0;
+                return Some(ClockOffset {
+                    ahead: theirs - tick,
+                    within: (g - before) / 2.0,
+                    theirs,
+                });
+            }
+            before = s;
+        }
+        Some(fallback)
+    }
+
+    /// Set the counter's clock to `when`, seconds since the epoch, read as
+    /// local time. True if the counter acknowledged it.
+    pub fn set_clock(&self, when: f64) -> bool {
+        let parts = radbeeper::clock::format(when, "%y %m %d %H %M %S");
+        let bytes: Vec<u8> = parts
+            .split(' ')
+            .filter_map(|p| p.parse::<u8>().ok())
+            .collect();
+        if bytes.len() != 6 {
+            return false;
+        }
+        let mut cmd = b"<SETDATETIME".to_vec();
+        cmd.extend_from_slice(&bytes);
+        cmd.extend_from_slice(b">>");
+        self.ask(&cmd, 1) == [0xAA]
     }
 
     /// How much history flash the model carries.

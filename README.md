@@ -158,7 +158,7 @@ of anything older on your `PATH` — `which -a radbeeper` shows the order.
 
 The one-file `python3` program is still in the repository beside it and still
 installs the same way — `make py-install` — because it owns the verbs the port
-has not reached yet. `probe`, `cpm`, `watch`, `service`, `random`, `backfill`, `log` and `hotplug`
+has not reached yet. `probe`, `clock`, `cpm`, `watch`, `service`, `random`, `backfill`, `log` and `hotplug`
 are native; `export`, `site`, `recompute`, `--plain` and `--source sim` are
 still the Python and are the reason it is still here.
 [§10](docs/native-build.md) is that story.
@@ -179,6 +179,28 @@ radbeeper probe
 
 If it finds nothing, the message says which of four things went wrong, because
 they have four different fixes — see [Troubleshooting](docs/troubleshooting.md).
+
+### Its clock
+
+The `its clock` line says how far the counter's clock is from this machine's,
+to a few hundredths of a second. The counter answers in whole seconds, so one
+reading is only good to a second. RadBeeper asks again, back to back, until the
+second changes: the tick falls between two round trips, which pins it down.
+Backfill uses the same measurement to put the counter's history on this
+machine's clock.
+
+```sh
+radbeeper clock          # the same measurement, and whether this machine is NTP-synced
+radbeeper clock --set    # set the counter from this machine, then measure it again
+```
+
+`--set` sends `<SETDATETIME>>` as this machine's clock reaches the whole second
+it names, measures the result, and corrects the timing once if it landed off.
+**Set it from a synchronised clock**: `clock` says whether the kernel thinks
+NTP is steering this one, and a counter set from a clock nothing steers is only
+as right as that clock. **The flash is not rewritten.** History recorded before
+the set still carries the old clock, and a backfill applies one offset to
+everything it reads, so backfill before setting if the log has gaps to fill.
 
 ## 4. Watch it
 
@@ -544,6 +566,7 @@ drift from the log format.
 |---|---|
 | `probe` | find the counter and say what it is |
 | `watch` | the monitor; `--plain` for line output |
+| `clock` | how far the counter's clock is out; `--set` corrects it from this machine |
 | `cpm` | one 30-second average, for a script. Takes 30 s, and says so |
 | `service` | monitor and log; dormant when there is nothing to read |
 | `hotplug` | sit in the session, open the monitor on plug-in |

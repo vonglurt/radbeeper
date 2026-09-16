@@ -20,7 +20,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BIG_ROWS: usize = 12;
@@ -828,15 +828,115 @@ fn read_history_tail(c: &counter::Counter, want: usize, quiet: bool) -> Vec<u8> 
 /// The counter's RTC is not this machine's. On the unit here it reads about
 /// half an hour behind, which is six hundred slots at the default row
 /// spacing: backfilling without this correction would file four hours of
-/// recording under the wrong four hours. Bracketed by two readings of our own
-/// clock and taken from the middle, because the counter's answer takes a
-/// measurable fraction of a second to arrive.
+/// recording under the wrong four hours. Timed to the counter's tick rather
+/// than read once, because one reading is only good to the whole second it
+/// names -- see `Counter::clock_ahead`.
 fn measure_clock_offset(c: &counter::Counter) -> Option<f64> {
-    let before = clock::now();
-    let text = c.datetime()?;
-    let after = clock::now();
-    let theirs = clock::parse(&text, "%Y-%m-%d %H:%M:%S")?;
-    Some((before + after) / 2.0 - theirs)
+    c.clock_ahead().map(|o| -o.ahead)
+}
+
+/// "111.4 s ahead of this machine (±0.02 s)", or "matches" when it does.
+fn describe_offset(o: &counter::ClockOffset) -> String {
+    let within = if o.within < 0.1 {
+        format!("\u{b1}{:.2} s", o.within)
+    } else {
+        format!("\u{b1}{:.1} s", o.within)
+    };
+    if o.ahead.abs() <= o.within.max(0.05) {
+        return format!("matches this machine ({})", within);
+    }
+    let (n, way) = if o.ahead > 0.0 { (o.ahead, "ahead of") } else { (-o.ahead, "behind") };
+    let size = if n >= 10.0 { format!("{:.1} s", n) } else { format!("{:.2} s", n) };
+    format!("{} {} this machine ({})", size, way, within)
+}
+
+/// Whether the kernel believes this machine's clock is disciplined by NTP.
+///
+/// Setting the counter from this clock copies its error, so a clock nothing
+/// is steering is worth a line of warning. adjtimex with no modes changes
+/// nothing; it reports TIME_ERROR while the kernel's clock is unsynchronised.
+fn system_clock_synced() -> bool {
+    let mut t: libc::timex = unsafe { std::mem::zeroed() };
+    unsafe { libc::adjtimex(&mut t) != libc::TIME_ERROR }
+}
+
+/// `radbeeper clock`, and `--set` to correct it from this machine.
+///
+/// THE SET IS AIMED AT A WHOLE SECOND. <SETDATETIME>> carries whole seconds,
+/// so it is sent as this machine's clock reaches the second it names, and
+/// the result is measured the same way `probe` measures. If it landed off --
+/// the counter's own latency, or a firmware that keeps its sub-second phase
+/// -- the send is moved by what was measured and tried once more, and
+/// whatever the second measurement says is what gets printed.
+fn clock_cmd(c: &counter::Counter, set: bool) -> i32 {
+    let before = match c.clock_ahead() {
+        Some(o) => o,
+        None => {
+            eprintln!("radbeeper: the counter did not answer <GETDATETIME>>");
+            return 1;
+        }
+    };
+    let synced = system_clock_synced();
+    println!("its clock      {}", clock::format(before.theirs, "%Y-%m-%d %H:%M:%S"));
+    println!("               {}", describe_offset(&before));
+    println!("this machine   {}", if synced {
+        "synchronised (the kernel says NTP is steering it)"
+    } else {
+        "NOT synchronised -- nothing is steering this clock"
+    });
+    if !set {
+        if before.ahead.abs() > 1.0 {
+            println!("               radbeeper clock --set  corrects it from this machine");
+        }
+        return 0;
+    }
+    if !synced {
+        println!("               setting anyway: the counter will be as right as this machine is");
+    }
+
+    let mut lead = 0.0f64;
+    let mut after = None;
+    for _ in 0..2 {
+        let now = clock::now();
+        let target = now.floor() + 2.0;
+        let wait = target - lead - clock::now();
+        if wait > 0.0 {
+            std::thread::sleep(Duration::from_secs_f64(wait));
+        }
+        if !c.set_clock(target) {
+            eprintln!("radbeeper: the counter did not acknowledge <SETDATETIME>>");
+            return 1;
+        }
+        after = c.clock_ahead();
+        match after {
+            Some(o) if o.ahead.abs() > o.within.max(0.05) => {
+                lead = (lead - o.ahead).clamp(-0.9, 0.9);
+            }
+            _ => break,
+        }
+    }
+    let after = match after {
+        Some(o) => o,
+        None => {
+            eprintln!("radbeeper: set, but the counter did not answer the check");
+            return 1;
+        }
+    };
+    println!("set            {}", clock::format(after.theirs, "%Y-%m-%d %H:%M:%S"));
+    println!("               {}", describe_offset(&after));
+    if before.ahead.abs() >= 1.0 {
+        // The flash does not rewrite itself. A backfill measures one offset
+        // and applies it to the whole tail it reads, so a tail that spans
+        // this moment has two clocks in it and the older part is out by
+        // what was just corrected.
+        println!();
+        println!("  history the counter recorded before now carries the old clock, {:.0} s",
+                 before.ahead.abs());
+        println!("  {}. A backfill applies one offset to everything it reads, so rows",
+                 if before.ahead > 0.0 { "ahead" } else { "behind" });
+        println!("  it rebuilds from before this moment will be out by that much.");
+    }
+    0
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -988,6 +1088,7 @@ fn usage() {
     println!();
     println!("  radbeeper probe            find the counter and say what it is");
     println!("  radbeeper cpm              the counter's own CPM, once");
+    println!("  radbeeper clock [--set]    its clock against this machine's, or correct it");
     println!("  radbeeper watch            the monitor");
     println!("  radbeeper service          log to disk, a row every 30 seconds");
     println!("  radbeeper random           256 bits of hex, out of decay timing");
@@ -1034,6 +1135,7 @@ fn main() {
     let mut bytes: Option<usize> = None;
     let mut max_gap = 300.0f64;
     let mut no_backfill = false;
+    let mut set_clock = false;
     let mut output: Option<String> = None;
     // hotplug's three. Four seconds is a read of /dev fifteen times a minute,
     // which costs nothing; settle is the grace a node gets between appearing
@@ -1085,6 +1187,7 @@ fn main() {
             "--serial" => serial = next(&mut i),
             "--bytes" | "--backfill-bytes" => bytes = next(&mut i).and_then(|v| v.parse().ok()),
             "--no-backfill" => no_backfill = true,
+            "--set" => set_clock = true,
             "--max-gap" => {
                 max_gap = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(max_gap)
             }
@@ -1166,10 +1269,12 @@ fn main() {
             if let Some(v) = c.voltage() {
                 println!("battery    {:.1} V", v);
             }
-            if let Some(d) = c.datetime() {
-                let now = SystemTime::now();
-                let secs = now.duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-                println!("its clock  {}   (this machine: unix {})", d, secs);
+            if let Some(o) = c.clock_ahead() {
+                println!("its clock  {}   {}",
+                         clock::format(o.theirs, "%Y-%m-%d %H:%M:%S"), describe_offset(&o));
+                if o.ahead.abs() > 1.0 {
+                    println!("           radbeeper clock --set  corrects it from this machine");
+                }
             }
             if let Some(n) = c.cpm() {
                 println!(
@@ -1179,6 +1284,7 @@ fn main() {
             }
         }
         "cpm" => std::process::exit(cpm_cmd(&c, cpm_per_usvh)),
+        "clock" => std::process::exit(clock_cmd(&c, set_clock)),
         "watch" => watch(&c, &spans, cpm_per_usvh, duration, logs),
         other => {
             eprintln!("radbeeper: unknown command {}", other);

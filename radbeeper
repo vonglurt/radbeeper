@@ -2015,24 +2015,45 @@ def measure_clock_offset(counter):
     The counter's RTC is not this machine's. On the unit here it reads about
     half an hour behind, which is six hundred slots at the default row
     spacing: backfilling without this correction would file four hours of
-    recording under the wrong four hours. The reading is bracketed by two
-    calls to time() and taken from the middle, because the counter's answer
-    takes a measurable fraction of a second to arrive.
+    recording under the wrong four hours.
+
+    TIMED TO THE COUNTER'S TICK, NOT READ ONCE. The answer is in whole
+    seconds, so a single reading is uncertain by the whole of one -- 0.85 s
+    on the unit here. It is asked again, back to back, until the second
+    changes: the tick fell after the counter took the last old answer and
+    before it sent the first new one, which is two round trips wide. If the
+    second never turns over it falls back to the one reading, centred.
 
     It assumes the offset held over the whole recording, which is the best a
     single measurement can do -- and is why the number is always printed
     rather than quietly applied.
     """
-    before = time.time()
-    text = counter.datetime()
-    after = time.time()
-    if not text:
+    def reading():
+        sent = time.time()
+        text = counter.datetime()
+        got = time.time()
+        if not text:
+            return None
+        try:
+            return time.mktime(time.strptime(text, "%Y-%m-%d %H:%M:%S")), sent, got
+        except ValueError:
+            return None
+
+    r = reading()
+    if r is None:
         return None
-    try:
-        theirs = time.mktime(time.strptime(text, "%Y-%m-%d %H:%M:%S"))
-    except ValueError:
-        return None
-    return (before + after) / 2.0 - theirs
+    first, before, got = r
+    fallback = (before + got) / 2.0 - (first + 0.5)
+    give_up = got + 2.5
+    while time.time() < give_up:
+        r = reading()
+        if r is None:
+            return fallback
+        theirs, sent, got = r
+        if theirs != first:
+            return (before + got) / 2.0 - theirs
+        before = sent
+    return fallback
 
 
 # PORT: replaced by src/main.rs :: first_mark_time() -- same name

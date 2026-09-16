@@ -96,6 +96,9 @@ class FakeGMC(threading.Thread):
         # A beat queued just ahead of every reply while the stream is on: the
         # worst case of a race the real device loses often enough to matter.
         self.interleave = False
+        # Seconds its real-time clock runs ahead of this machine's; negative
+        # is behind. <SETDATETIME>> sets it, as setting the real one does.
+        self.clock_ahead = 0.0
         self.running = True
         self.commands = []
 
@@ -171,9 +174,14 @@ class FakeGMC(threading.Thread):
         elif body == b"GETVOLT":
             self._send(bytes([39]))
         elif body == b"GETDATETIME":
-            t = time.localtime()
+            t = time.localtime(time.time() + self.clock_ahead)
             self._send(bytes([t.tm_year - 2000, t.tm_mon, t.tm_mday,
                               t.tm_hour, t.tm_min, t.tm_sec, 0xAA]))
+        elif body.startswith(b"SETDATETIME") and len(body) == 17:
+            y, mo, d, h, mi, s = body[11:17]
+            when = time.mktime((2000 + y, mo, d, h, mi, s, 0, 0, -1))
+            self.clock_ahead = when - time.time()
+            self._send(b"\xaa")
         elif body == b"HEARTBEAT1":
             self.heartbeat = True
         elif body == b"HEARTBEAT0":

@@ -137,7 +137,7 @@ chronological.
 
 | | |
 |---|---|
-| **native now** | `probe`, `cpm` (its own 30 s window, not the device's 60 s one), `watch`, `service`, `random`, `random --check`, **`backfill`** and **`log info`/`log pull`**; the log format; the entropy pool, the SP 800-90B estimator and SHA-256; the history decoder with both corrections to GQ's published format, the wrapped-ring search and the measured sample intervals; local time, which Rust's standard library does not have at all |
+| **native now** | `probe`, `clock` and `clock --set`, `cpm` (its own 30 s window, not the device's 60 s one), `watch`, `service`, `random`, `random --check`, **`backfill`** and **`log info`/`log pull`**; the log format; the entropy pool, the SP 800-90B estimator and SHA-256; the history decoder with both corrections to GQ's published format, the wrapped-ring search and the measured sample intervals; local time, which Rust's standard library does not have at all |
 | **next** | `export` — the two pages. Biggest and most mechanical, and the only one with no correctness risk beyond "the HTML differs" |
 | **the rule** | one dependency, still `libc`. It has `strftime`, `strptime` and `mktime`, so the port does not need a date crate; the one primitive that must be written out is SHA-256 |
 
