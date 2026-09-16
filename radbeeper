@@ -1651,9 +1651,10 @@ def run_curses(counter, w, args):
                 for i, line in enumerate(digits):
                     stdscr.addnstr(i, left, line, width - left - 1, attr)
             row += 2
-            # Three rows of air: the chart is the only picture on the screen
-            # and it was sitting straight on top of the arithmetic.
-            row += 3
+            # Two rows of air: the chart is the only picture on the screen
+            # and it was sitting straight on top of the arithmetic. It was
+            # three; the third is the clock's, at the bottom.
+            row += 2
             if width > 20:
                 # COLOURED BY WHAT IT MEANS, not by what it is. A column is
                 # one second, so its count times sixty is the rate it implies,
@@ -1777,6 +1778,13 @@ def run_curses(counter, w, args):
                 else:
                     stdscr.addnstr(row, 0, "random   " + pool_status(pool),
                                    width - 1, curses.A_DIM)
+                # The time now, two rows under the random line whether or not
+                # it has a note yet, so it does not jump when the first line
+                # arrives -- and so a screenshot says when it was taken.
+                if row + 2 < h - 2:
+                    stdscr.addnstr(row + 2, 0, "clock", width - 1, curses.A_DIM)
+                    stdscr.addnstr(row + 2, 9, time.strftime("%Y-%m-%d %H:%M:%S"),
+                                   width - 10)
             if footer["text"] and h > row + 1:
                 stdscr.addnstr(h - 2, 0, footer["text"], width - 1,
                                footer["attr"])

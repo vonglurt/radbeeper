@@ -624,7 +624,7 @@ class TestTheTwoMonitorsDrawTheSameScreen(unittest.TestCase):
 
     BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
     RECORD = os.path.join(ROOT, "tools", "record.py")
-    ANCHORS = ("now", "run", "random", "spectrum")
+    ANCHORS = ("now", "run", "random", "clock", "spectrum")
 
     @classmethod
     def setUpClass(cls):

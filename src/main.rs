@@ -282,8 +282,9 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
             }
         }
 
-        // Three rows of air, then the counts.
-        row += 3;
+        // Two rows of air, then the counts. It was three; the third is the
+        // clock's, at the bottom, and the chart still clears the digits.
+        row += 2;
         let counts_rows = if h > row + 12 { 5 } else { 1 };
         let vals: Vec<f64> = w.samples.iter().map(|&(_, c)| c as f64).collect();
         let tail: Vec<f64> = vals.iter().rev().take(width - 1).rev().cloned().collect();
@@ -397,6 +398,13 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
                     "{}{}random   {}{}", at(row, 0), DIM,
                     entropy::pool_status(&pool, "next in "), OFF
                 )),
+            }
+            // The time now, two rows under the random line whether or not
+            // it has a note yet, so it does not jump when the first line
+            // arrives -- and so a screenshot says when it was taken.
+            if row + 2 < h.saturating_sub(2) {
+                out.push_str(&format!("{}{}clock{}    {}", at(row + 2, 0), DIM, OFF,
+                                      clock::format(clock::now(), "%Y-%m-%d %H:%M:%S")));
             }
         }
 
