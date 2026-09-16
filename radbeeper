@@ -35,11 +35,11 @@
 #  goes looking for a leak.
 #
 # ---------------------------------------------------------------------------
-#  DEPRECATED. THE IMPLEMENTATION IS THE RUST BUILD IN rust/.
+#  DEPRECATED. THE IMPLEMENTATION IS THE RUST CRATE AT THE ROOT OF THIS REPO.
 # ---------------------------------------------------------------------------
 #
 #  This file is the original and is now the ARCHIVE. New behaviour goes into
-#  rust/src/, not here; what remains of this file is kept for three reasons and
+#  src/, not here; what remains of this file is kept for three reasons and
 #  no others:
 #
 #    1. It is the ORACLE the port is checked against. tests/test_differential.py
@@ -57,7 +57,7 @@
 #  where its behaviour now lives -- the Rust file, the Rust name, and whether
 #  the name changed. Read it as a map, not as an apology:
 #
-#    # PORT: replaced by rust/src/analysis.rs :: Ladder (renamed) -- ...
+#    # PORT: replaced by src/analysis.rs :: Ladder (renamed) -- ...
 #    # PORT: NOT PORTED. `export` is the largest thing still owned by this file.
 #
 #  The renames are few and all in one direction, towards shorter names inside a
@@ -216,7 +216,7 @@ TERMINALS = (("foot", "-e"), ("alacritty", "-e"), ("urxvt", "-e"),
 # Where the boot service leaves things. Under /var/log when it can write there
 # and under the home directory when it cannot, because a service that refuses
 # to run unprivileged is a service nobody runs.
-# PORT: replaced by rust/src/log.rs :: state_dir() -- same name, same $XDG_STATE_HOME rules
+# PORT: replaced by src/log.rs :: state_dir() -- same name, same $XDG_STATE_HOME rules
 def state_dir():
     for d in ("/var/log/radbeeper", os.path.expanduser("~/.local/share/radbeeper")):
         try:
@@ -232,12 +232,12 @@ def state_dir():
 
 
 # ------------------------------------------------------------------ serial ---
-# PORT: replaced by rust/src/serial.rs :: OpenError::Busy -- an enum variant, not an exception
+# PORT: replaced by src/serial.rs :: OpenError::Busy -- an enum variant, not an exception
 class Busy(Exception):
     """The port is open in another process, and is being left alone."""
 
 
-# PORT: replaced by rust/src/serial.rs :: Serial -- open/write_all/read_exact_or_timeout/flush_input; termios either way
+# PORT: replaced by src/serial.rs :: Serial -- open/write_all/read_exact_or_timeout/flush_input; termios either way
 class Serial:
     """A raw serial port, in termios rather than in pyserial.
 
@@ -339,7 +339,7 @@ class Serial:
 
 
 # ------------------------------------------------------------------ device ---
-# PORT: replaced by rust/src/counter.rs :: Counter -- cpm/voltage/datetime/model/flash_size/read_history/heartbeat map one to one; samples() becomes next_sample(timeout), pulled rather than yielded
+# PORT: replaced by src/counter.rs :: Counter -- cpm/voltage/datetime/model/flash_size/read_history/heartbeat map one to one; samples() becomes next_sample(timeout), pulled rather than yielded
 class Counter:
     """A GQ GMC counter, found and identified."""
 
@@ -528,7 +528,7 @@ class SimCounter:
 SERIAL_GLOBS = ("/dev/ttyUSB", "/dev/ttyACM")
 
 
-# PORT: replaced by rust/src/counter.rs :: candidate_ports() -- same name, same /dev glob
+# PORT: replaced by src/counter.rs :: candidate_ports() -- same name, same /dev glob
 def candidate_ports():
     out = []
     for prefix in SERIAL_GLOBS:
@@ -543,7 +543,7 @@ def candidate_ports():
     return out
 
 
-# PORT: replaced by rust/src/counter.rs :: usb_serial_driver_present() -- same name
+# PORT: replaced by src/counter.rs :: usb_serial_driver_present() -- same name
 def usb_serial_driver_present():
     """Whether the running kernel could bind a USB serial adapter at all."""
     release = os.uname().release
@@ -566,7 +566,7 @@ def usb_serial_driver_present():
     return False
 
 
-# PORT: replaced by rust/src/counter.rs :: identify() -- same name, same <GETVER>> handshake across BAUD_RATES
+# PORT: replaced by src/counter.rs :: identify() -- same name, same <GETVER>> handshake across BAUD_RATES
 def identify(path, baud=None, timeout=1.0):
     """Open a port and ask what it is. None if it is not a GMC."""
     rates = (baud,) if baud else BAUD_RATES
@@ -599,7 +599,7 @@ def identify(path, baud=None, timeout=1.0):
     return None
 
 
-# PORT: replaced by rust/src/counter.rs :: NotFound -- a struct carrying the same four reasons
+# PORT: replaced by src/counter.rs :: NotFound -- a struct carrying the same four reasons
 class NotFound(Exception):
     """No counter, with a reason a person can act on."""
 
@@ -612,7 +612,7 @@ class NotFound(Exception):
         self.busy = busy
 
 
-# PORT: replaced by rust/src/counter.rs :: find(device, baud) -- same search, minus the sim source
+# PORT: replaced by src/counter.rs :: find(device, baud) -- same search, minus the sim source
 def find_counter(device=None, baud=None, source="auto", sim_cpm=25.0, seed=None):
     if source == "sim":
         return SimCounter(sim_cpm, seed)
@@ -685,7 +685,7 @@ def find_counter(device=None, baud=None, source="auto", sim_cpm=25.0, seed=None)
 # divides that scatter by root N, so a real line climbs out of the grass while
 # the grass settles down. Ten minutes of watching is five windows; an hour is
 # twenty-eight, and by then a peak twice the mean is worth believing.
-# PORT: replaced by rust/src/analysis.rs :: fft() -- same iterative radix-2, over a local complex pair
+# PORT: replaced by src/analysis.rs :: fft() -- same iterative radix-2, over a local complex pair
 def fft(values):
     """Iterative radix-2 Cooley-Tukey. Stdlib cmath, for the same reason there
     is no pyserial: 25 lines against a dependency this program cannot assume.
@@ -720,7 +720,7 @@ def fft(values):
     return a
 
 
-# PORT: replaced by rust/src/analysis.rs :: Spectrum -- add/wait/relative/sigma/chance_max/period/loudest all keep their names
+# PORT: replaced by src/analysis.rs :: Spectrum -- add/wait/relative/sigma/chance_max/period/loudest all keep their names
 class Spectrum:
     """A running average of periodograms over a fixed window.
 
@@ -882,7 +882,7 @@ class Spectrum:
         return self.window / (k * rate)
 
 
-# PORT: replaced by rust/src/analysis.rs :: Ladder (renamed) -- new/add/best, the same 128/256/512 rungs
+# PORT: replaced by src/analysis.rs :: Ladder (renamed) -- new/add/best, the same 128/256/512 rungs
 class SpectrumLadder:
     """Several windows at once, so resolution grows with observation time.
 
@@ -924,7 +924,7 @@ class SpectrumLadder:
         return min(self.rungs, key=lambda r: r.wait())
 
 
-# PORT: replaced by rust/src/analysis.rs :: spectrum_columns() -- same name, same loudest-bin fold
+# PORT: replaced by src/analysis.rs :: spectrum_columns() -- same name, same loudest-bin fold
 def spectrum_columns(rel, width):
     """Fold the bins onto the columns the screen actually has.
 
@@ -990,7 +990,7 @@ ENTROPY_BITS = 256          # 64 hex characters
 ENTROPY_LABEL = b"radbeeper/entropy/1"
 
 
-# PORT: replaced by rust/src/entropy.rs :: poisson_min_entropy() -- same name; kept only as the number to print beside the measured one
+# PORT: replaced by src/entropy.rs :: poisson_min_entropy() -- same name; kept only as the number to print beside the measured one
 def poisson_min_entropy(rate):
     """Bits per sample for Poisson arrivals at `rate` per sample.
 
@@ -1011,7 +1011,7 @@ def poisson_min_entropy(rate):
     return -math.log(best, 2)
 
 
-# PORT: replaced by rust/src/entropy.rs :: mcv_min_entropy() -- same name, same SP 800-90B 6.3.1 bound
+# PORT: replaced by src/entropy.rs :: mcv_min_entropy() -- same name, same SP 800-90B 6.3.1 bound
 def mcv_min_entropy(counts, confidence=2.576):
     """Measured min-entropy per sample, bits. NIST SP 800-90B section 6.3.1.
 
@@ -1045,7 +1045,7 @@ def mcv_min_entropy(counts, confidence=2.576):
     return -math.log(upper, 2)
 
 
-# PORT: replaced by rust/src/entropy.rs :: Entropy -- add/rate/bits/ready/draw keep their names; pool_bits_modelled() becomes the model_bits() method
+# PORT: replaced by src/entropy.rs :: Entropy -- add/rate/bits/ready/draw keep their names; pool_bits_modelled() becomes the model_bits() method
 class Entropy:
     """Random bits from decay timing, with the accounting to justify them."""
 
@@ -1132,7 +1132,7 @@ class Entropy:
         return out, record
 
 
-# PORT: replaced by rust/src/entropy.rs :: pack_counts() -- same name, same hex-digit-per-second packing
+# PORT: replaced by src/entropy.rs :: pack_counts() -- same name, same hex-digit-per-second packing
 def pack_counts(counts):
     """Per-second counts as hex nibbles, 15 meaning "15 or more".
 
@@ -1144,18 +1144,18 @@ def pack_counts(counts):
     return "".join("%x" % min(15, max(0, int(c))) for c in counts)
 
 
-# PORT: replaced by rust/src/entropy.rs :: unpack_counts() -- same name
+# PORT: replaced by src/entropy.rs :: unpack_counts() -- same name
 def unpack_counts(text):
     return [int(ch, 16) for ch in text]
 
 
-# PORT: replaced by rust/src/entropy.rs :: Entropy::model_bits() -- a method there, a free function here
+# PORT: replaced by src/entropy.rs :: Entropy::model_bits() -- a method there, a free function here
 def pool_bits_modelled(record):
     """What Poisson at the observed rate would have claimed for this pool."""
     return poisson_min_entropy(record["rate"]) * record["seconds"]
 
 
-# PORT: replaced by rust/src/entropy.rs :: check_record() (renamed) -- same digest over the same label, seq, start and counts
+# PORT: replaced by src/entropy.rs :: check_record() (renamed) -- same digest over the same label, seq, start and counts
 def check_entropy_record(record):
     """Recompute a line from the counts recorded beside it."""
     e = Entropy()
@@ -1165,7 +1165,7 @@ def check_entropy_record(record):
     return e.digest(record["seq"]) == record["hex"]
 
 
-# PORT: replaced by rust/src/entropy.rs :: pool_status() -- same name, same countdown wording
+# PORT: replaced by src/entropy.rs :: pool_status() -- same name, same countdown wording
 def pool_status(pool, prefix="next in "):
     """Where the pool has got to, in the words each state deserves.
 
@@ -1181,7 +1181,7 @@ def pool_status(pool, prefix="next in "):
     return "measuring the source (%ds)" % len(pool.counts)
 
 
-# PORT: replaced by rust/src/entropy.rs :: group_hex() -- same name; the 8/space grouping is fixed there
+# PORT: replaced by src/entropy.rs :: group_hex() -- same name; the 8/space grouping is fixed there
 def group_hex(text, size=8, sep=" "):
     """Hex in blocks, because 64 undifferentiated characters cannot be read,
     compared against a screen, or dictated down a phone."""
@@ -1189,7 +1189,7 @@ def group_hex(text, size=8, sep=" "):
 
 
 # ---------------------------------------------------------------- averages ---
-# PORT: replaced by rust/src/analysis.rs :: Windows -- new/add/elapsed/average keep their names and the same running sums
+# PORT: replaced by src/analysis.rs :: Windows -- new/add/elapsed/average keep their names and the same running sums
 class Windows:
     """Counts per second in, three running CPM averages out.
 
@@ -1265,7 +1265,7 @@ class Windows:
         return cpm / cpm_per_usvh
 
 
-# PORT: replaced by rust/src/log.rs :: Interval -- new/reset/add/cps, the per-row accumulator between log writes
+# PORT: replaced by src/log.rs :: Interval -- new/reset/add/cps, the per-row accumulator between log writes
 class Interval:
     """What happened between two log lines, in constant space.
 
@@ -1322,13 +1322,13 @@ class Interval:
 
 
 # ---------------------------------------------------------------- commands ---
-# PORT: replaced by rust/src/main.rs, which calls counter::find() directly -- there is no separate wrapper there
+# PORT: replaced by src/main.rs, which calls counter::find() directly -- there is no separate wrapper there
 def open_counter(args):
     return find_counter(args.device, args.baud, args.source, args.sim_cpm,
                         args.seed)
 
 
-# PORT: replaced by rust/src/main.rs :: the "probe" arm of main() -- same fields in the same order
+# PORT: replaced by src/main.rs :: the "probe" arm of main() -- same fields in the same order
 def cmd_probe(args):
     try:
         c = open_counter(args)
@@ -1362,7 +1362,7 @@ def cmd_probe(args):
 CPM_WINDOW = 30
 
 
-# PORT: replaced by rust/src/main.rs :: cpm_cmd() -- same 30-second window, same stderr note and stdout answer
+# PORT: replaced by src/main.rs :: cpm_cmd() -- same 30-second window, same stderr note and stdout answer
 def cmd_cpm(args):
     """RadBeeper's own 30-second average, counted here rather than asked for.
 
@@ -1436,7 +1436,7 @@ LEVEL_RAISED = 100.0
 LEVEL_HIGH = 300.0
 
 
-# PORT: replaced by rust/src/analysis.rs :: level() -- same name, same LEVEL_RAISED/LEVEL_HIGH thresholds
+# PORT: replaced by src/analysis.rs :: level() -- same name, same LEVEL_RAISED/LEVEL_HIGH thresholds
 def level(cpm):
     if cpm is None:
         return "unknown"
@@ -1522,7 +1522,7 @@ BIG_DIGITS = {
 BIG_ROWS = 12
 
 
-# PORT: replaced by rust/src/main.rs :: big_number() -- same name, same block-glyph digits
+# PORT: replaced by src/main.rs :: big_number() -- same name, same block-glyph digits
 def big_number(text, on="\u2588", off=" "):
     """`text` as six rows of block glyphs. Unknown characters are skipped."""
     rows = [""] * BIG_ROWS
@@ -1536,7 +1536,7 @@ def big_number(text, on="\u2588", off=" "):
     return rows
 
 
-# PORT: replaced by rust/src/analysis.rs :: bar_rows() -- same name, same eight levels a row
+# PORT: replaced by src/analysis.rs :: bar_rows() -- same name, same eight levels a row
 def bar_rows(samples, width, height=4):
     """The counts as a column chart `height` terminal rows tall.
 
@@ -1561,7 +1561,7 @@ def bar_rows(samples, width, height=4):
     return rows
 
 
-# PORT: replaced by rust/src/main.rs :: watch() -- the same panels, drawn with escape codes rather than curses
+# PORT: replaced by src/main.rs :: watch() -- the same panels, drawn with escape codes rather than curses
 def run_curses(counter, w, args):
     import curses
 
@@ -1790,7 +1790,7 @@ def run_curses(counter, w, args):
     curses.wrapper(draw)
 
 
-# PORT: replaced by rust/src/main.rs :: watch(), reached from the "watch" arm of main()
+# PORT: replaced by src/main.rs :: watch(), reached from the "watch" arm of main()
 def cmd_watch(args):
     try:
         counter = open_counter(args)
@@ -1856,7 +1856,7 @@ def cmd_watch(args):
 # So it is three bytes and the two that follow it are samples. 0x55AA itself
 # turned up as a "count" of 21,930 under the old reading, which is the marker
 # eating itself and was the thread worth pulling.
-# PORT: replaced by rust/src/history.rs :: raw() returning RawIter -- same name, same three record shapes
+# PORT: replaced by src/history.rs :: raw() returning RawIter -- same name, same three record shapes
 def _history_raw(blob):
     """Yield (offset, kind, value) for each record: mark, count or note.
 
@@ -1904,7 +1904,7 @@ def _history_raw(blob):
         i += 1
 
 
-# PORT: replaced by rust/src/history.rs :: marks() -- same name, same wrapped-ring search
+# PORT: replaced by src/history.rs :: marks() -- same name, same wrapped-ring search
 def history_marks(blob):
     """[[offset, unix time, samples before the next mark]] -- one per timestamp.
 
@@ -1927,7 +1927,7 @@ def history_marks(blob):
     return marks
 
 
-# PORT: replaced by rust/src/history.rs :: sample_intervals() -- same name, same measured spacing
+# PORT: replaced by src/history.rs :: sample_intervals() -- same name, same measured spacing
 def sample_intervals(marks):
     """Seconds per sample for each stretch between two timestamps.
 
@@ -1965,7 +1965,7 @@ def sample_intervals(marks):
             else x for x in raw]
 
 
-# PORT: replaced by rust/src/history.rs :: records() -- same name
+# PORT: replaced by src/history.rs :: records() -- same name
 def history_records(blob):
     """Yield (offset, when, dt, count, note) for every record in an image.
 
@@ -1995,7 +1995,7 @@ def history_records(blob):
             yield off, base, dt, None, val
 
 
-# PORT: replaced by rust/src/history.rs :: samples() -- same name, same clock offset
+# PORT: replaced by src/history.rs :: samples() -- same name, same clock offset
 def history_samples(blob, offset=0.0):
     """Yield (unix time, count, seconds this sample covers).
 
@@ -2006,7 +2006,7 @@ def history_samples(blob, offset=0.0):
             yield when + offset, count, dt
 
 
-# PORT: replaced by rust/src/main.rs :: measure_clock_offset() -- same name
+# PORT: replaced by src/main.rs :: measure_clock_offset() -- same name
 def measure_clock_offset(counter):
     """Seconds to add to the counter's timestamps to land on this clock.
 
@@ -2033,7 +2033,7 @@ def measure_clock_offset(counter):
     return (before + after) / 2.0 - theirs
 
 
-# PORT: replaced by rust/src/main.rs :: first_mark_time() -- same name
+# PORT: replaced by src/main.rs :: first_mark_time() -- same name
 def first_mark_time(counter, address, probe):
     """The time of the first timestamp in a probe read at `address`."""
     chunk = counter.read_history(address, probe) or b""
@@ -2043,7 +2043,7 @@ def first_mark_time(counter, address, probe):
     return None
 
 
-# PORT: replaced by rust/src/main.rs :: find_history_end() -- same name, same probe
+# PORT: replaced by src/main.rs :: find_history_end() -- same name, same probe
 def find_history_end(counter, size, probe=2048):
     """(newest byte address, whether the flash has wrapped).
 
@@ -2110,7 +2110,7 @@ def find_history_end(counter, size, probe=2048):
     return lo + probe, True
 
 
-# PORT: replaced by rust/src/main.rs :: log_cmd() -- `log info` and `log pull`
+# PORT: replaced by src/main.rs :: log_cmd() -- `log info` and `log pull`
 def cmd_log(args):
     try:
         c = open_counter(args)
@@ -2180,7 +2180,7 @@ def cmd_log(args):
 # from the file. Nothing is interpolated across it, because a row that says
 # 0.000 CPS for a half hour nobody measured is worse than no row at all -- it
 # is the same mistake as drawing an unfilled window as zero, one file down.
-# PORT: replaced by rust/src/log.rs :: header() -- same columns, same %g formatting via log.rs :: g()
+# PORT: replaced by src/log.rs :: header() -- same columns, same %g formatting via log.rs :: g()
 def log_header(spans):
     head = ["time", "cps", "counts", "seconds"]
     head += ["cpm_%g" % s for s in spans]
@@ -2196,7 +2196,7 @@ def log_header(spans):
     return "#" + "\t".join(head)
 
 
-# PORT: replaced by rust/src/log.rs :: row() -- same tabs, same field order
+# PORT: replaced by src/log.rs :: row() -- same tabs, same field order
 def log_row(when, cps, counts, seconds, averages, peaks, src, site=""):
     """One tab-separated line: when, how fast, the worst it got, and whence.
 
@@ -2213,7 +2213,7 @@ def log_row(when, cps, counts, seconds, averages, peaks, src, site=""):
     return "\t".join(cells)
 
 
-# PORT: replaced by rust/src/log.rs :: read_sites() -- same name
+# PORT: replaced by src/log.rs :: read_sites() -- same name
 def read_sites(directory=None):
     """[(serial, from_time, name)], oldest first."""
     path = os.path.join(directory or state_dir(), SITES_NAME)
@@ -2237,7 +2237,7 @@ def read_sites(directory=None):
     return out
 
 
-# PORT: replaced by rust/src/log.rs :: site_at() -- same name, same as-of lookup
+# PORT: replaced by src/log.rs :: site_at() -- same name, same as-of lookup
 def site_at(serial, when, sites):
     """Where that counter was at that moment.
 
@@ -2286,7 +2286,7 @@ def ensure_site(serial, directory=None):
     return read_sites(directory)
 
 
-# PORT: replaced by rust/src/log.rs :: path() -- same cpm-<serial>-<YYYY-MM>.tsv name
+# PORT: replaced by src/log.rs :: path() -- same cpm-<serial>-<YYYY-MM>.tsv name
 def log_path(when, directory=None, serial=None):
     """The dated log a row belongs in: one file per counter per month.
 
@@ -2314,7 +2314,7 @@ def log_path(when, directory=None, serial=None):
                            time.strftime("%Y-%m", time.localtime(when))))
 
 
-# PORT: replaced by rust/src/log.rs :: align_row() -- same name, same match-by-name
+# PORT: replaced by src/log.rs :: align_row() -- same name, same match-by-name
 def align_row(cells, from_names, to_names):
     """One row re-columned from the header it was written under.
 
@@ -2330,7 +2330,7 @@ def align_row(cells, from_names, to_names):
     return [have.get(name, "") for name in to_names]
 
 
-# PORT: replaced by rust/src/log.rs :: columns() -- same name
+# PORT: replaced by src/log.rs :: columns() -- same name
 def log_columns(header_line):
     """The column names a header line declares, '#' stripped from the first."""
     if not header_line.startswith("#"):
@@ -2338,7 +2338,7 @@ def log_columns(header_line):
     return header_line[1:].rstrip("\n").split("\t")
 
 
-# PORT: replaced by rust/src/log.rs :: read_table() -- same name
+# PORT: replaced by src/log.rs :: read_table() -- same name
 def read_table(path, to_names):
     """(when, cells) for a log written under any header, aligned to `to_names`.
 
@@ -2371,13 +2371,13 @@ def read_table(path, to_names):
     return out
 
 
-# PORT: replaced by rust/src/log.rs :: slot_of() -- same name
+# PORT: replaced by src/log.rs :: slot_of() -- same name
 def slot_of(when, every):
     """The slot a time falls in. This is a row's identity -- see above."""
     return int(when // every)
 
 
-# PORT: replaced by rust/src/log.rs :: row_time() -- same name
+# PORT: replaced by src/log.rs :: row_time() -- same name
 def row_time(line):
     """The unix time a written row carries, or None if it is not a row."""
     if not line or line.startswith("#"):
@@ -2389,7 +2389,7 @@ def row_time(line):
         return None
 
 
-# PORT: replaced by rust/src/log.rs :: merge() reads the file itself; there is no separate reader there
+# PORT: replaced by src/log.rs :: merge() reads the file itself; there is no separate reader there
 def read_log(path):
     """[(unix time, line)] for an existing log. Missing is empty, not an error."""
     out = []
@@ -2405,7 +2405,7 @@ def read_log(path):
     return out
 
 
-# PORT: replaced by rust/src/log.rs :: merge() -- same slot identity, same rewrite-in-place
+# PORT: replaced by src/log.rs :: merge() -- same slot identity, same rewrite-in-place
 def merge_log(path, header, rows, every):
     """Fold rows into the log, one per slot, never over one already there.
 
@@ -2446,7 +2446,7 @@ def merge_log(path, header, rows, every):
     return added, clashed
 
 
-# PORT: replaced by rust/src/log.rs :: Writer (renamed) -- new/write/close, the same month rotation and inode check
+# PORT: replaced by src/log.rs :: Writer (renamed) -- new/write/close, the same month rotation and inode check
 class LogWriter:
     """Appends rows to the dated log for their month.
 
@@ -2564,7 +2564,7 @@ def migrate_legacy_log(args, directory=None, serial=None):
 # averaging: the same one, fed from a different source. A backfilled row and a
 # live row of the same stretch would agree, which is the only way to be sure
 # the reconstruction means what the live rows mean.
-# PORT: replaced by rust/src/history.rs :: rows_from_samples() -- same name, same gap handling
+# PORT: replaced by src/history.rs :: rows_from_samples() -- same name, same gap handling
 def rows_from_samples(samples, spans, every, max_gap, src=SRC_FLASH,
                       site_for=None):
     """Replay timed samples into log rows, one per slot, gaps ending averages."""
@@ -2603,7 +2603,7 @@ def rows_from_samples(samples, spans, every, max_gap, src=SRC_FLASH,
     return rows
 
 
-# PORT: replaced by rust/src/history.rs :: backfill() -- same name, returning the same Report
+# PORT: replaced by src/history.rs :: backfill() -- same name, returning the same Report
 def backfill(blob, args, offset=0.0, path=None, serial=None):
     """Fold whatever the image can account for into the log. Returns a report."""
     every = args.log_every
@@ -2647,7 +2647,7 @@ def backfill(blob, args, offset=0.0, path=None, serial=None):
             "holes": holes, "files": sorted(files)}
 
 
-# PORT: replaced by rust/src/main.rs :: read_history_tail() -- same name
+# PORT: replaced by src/main.rs :: read_history_tail() -- same name
 def read_history_tail(counter, want, quiet=False):
     """The newest `want` bytes of the flash, in the order they were recorded.
 
@@ -2686,7 +2686,7 @@ def read_history_tail(counter, want, quiet=False):
     return grab(size - over, over) + head
 
 
-# PORT: replaced by rust/src/main.rs :: backfill_cmd() prints the same report inline
+# PORT: replaced by src/main.rs :: backfill_cmd() prints the same report inline
 def say_backfill(report, offset):
     if not report["samples"]:
         print("radbeeper: no placeable samples in the history read")
@@ -2706,7 +2706,7 @@ def say_backfill(report, offset):
         print("           -> %s" % one)
 
 
-# PORT: replaced by rust/src/main.rs :: backfill_cmd() -- same name
+# PORT: replaced by src/main.rs :: backfill_cmd() -- same name
 def cmd_backfill(args):
     if not args.log:
         try:
@@ -2749,7 +2749,7 @@ def cmd_backfill(args):
     return 0
 
 
-# PORT: replaced by rust/src/entropy.rs :: write_record() (renamed) -- same TSV, same suspect column
+# PORT: replaced by src/entropy.rs :: write_record() (renamed) -- same TSV, same suspect column
 def write_entropy(record, serial, suspect):
     """Append an emission and the counts that made it, so it can be checked.
 
@@ -2772,7 +2772,7 @@ def write_entropy(record, serial, suspect):
     return path
 
 
-# PORT: replaced by rust/src/main.rs :: check_random(), over entropy.rs :: read_emissions() and check_record()
+# PORT: replaced by src/main.rs :: check_random(), over entropy.rs :: read_emissions() and check_record()
 def check_random_log(path):
     """Recompute every emission from the counts written beside it.
 
@@ -2808,7 +2808,7 @@ def check_random_log(path):
     return 1 if bad else 0
 
 
-# PORT: replaced by rust/src/main.rs :: random() -- same pool, same spectrum health check
+# PORT: replaced by src/main.rs :: random() -- same pool, same spectrum health check
 def cmd_random(args):
     """Collect until the pool has earned the bits, then print one line."""
     if getattr(args, "check", None):
@@ -3036,7 +3036,7 @@ HOMEPAGE = "https://github.com/vonglurt/radbeeper"
 TAGLINE = "A GQ GMC Geiger-Muller counter on the desk"
 
 
-# PORT: replaced by rust/src/log.rs :: files() -- same name, same sort
+# PORT: replaced by src/log.rs :: files() -- same name, same sort
 def log_files(directory=None):
     """[(serial, path)] for every dated log in a directory, oldest name first."""
     d = directory or state_dir()
@@ -3058,7 +3058,7 @@ def log_files(directory=None):
     return out
 
 
-# PORT: replaced by rust/src/log.rs :: read_table() covers this
+# PORT: replaced by src/log.rs :: read_table() covers this
 def read_rows(path):
     """Yield (when, cells) for a dated log, header and blanks skipped."""
     try:
@@ -3676,7 +3676,7 @@ def random_files(directory=None):
     return out
 
 
-# PORT: replaced by rust/src/entropy.rs :: read_emissions() reads the same file for `random --check`; the page-building use of it is still here
+# PORT: replaced by src/entropy.rs :: read_emissions() reads the same file for `random --check`; the page-building use of it is still here
 def read_random(path):
     """Emissions, oldest first, each with the counts that produced it."""
     rows = []
@@ -4146,7 +4146,7 @@ def cmd_export(args):
 # that respawns forever on a Pi Zero is a service that costs more than it
 # measures. The retry is the next boot -- or `rc-service radbeeper start` the
 # moment the thing is plugged in.
-# PORT: replaced by rust/src/log.rs :: write_status() -- same name, same status file
+# PORT: replaced by src/log.rs :: write_status() -- same name, same status file
 def write_status(text):
     path = os.path.join(state_dir(), "status")
     try:
@@ -4157,7 +4157,7 @@ def write_status(text):
     return path
 
 
-# PORT: replaced by rust/src/main.rs :: service() -- same cadence, same dormant/waiting exits
+# PORT: replaced by src/main.rs :: service() -- same cadence, same dormant/waiting exits
 def cmd_service(args):
     stop = {"now": False}
 
@@ -4438,7 +4438,7 @@ def cmd_hotplug(args):
 
 
 # -------------------------------------------------------------------- main ---
-# PORT: replaced by rust/src/main.rs :: parse_spans() (renamed) -- same comma-separated seconds
+# PORT: replaced by src/main.rs :: parse_spans() (renamed) -- same comma-separated seconds
 def spans_arg(text):
     try:
         spans = tuple(int(x) for x in text.split(","))
@@ -4449,7 +4449,7 @@ def spans_arg(text):
     return spans
 
 
-# PORT: replaced by rust/src/main.rs :: the hand-written flag loop in main(), with usage() for the help text
+# PORT: replaced by src/main.rs :: the hand-written flag loop in main(), with usage() for the help text
 def build_parser():
     p = argparse.ArgumentParser(
         prog="radbeeper",
@@ -4584,7 +4584,7 @@ def build_parser():
     return p
 
 
-# PORT: replaced by rust/src/main.rs :: main() -- same commands, same exit codes
+# PORT: replaced by src/main.rs :: main() -- same commands, same exit codes
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)

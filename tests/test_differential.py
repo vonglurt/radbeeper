@@ -36,7 +36,7 @@ radbeeper = importlib.util.module_from_spec(_spec)
 sys.modules["radbeeper"] = radbeeper
 _loader.exec_module(radbeeper)
 
-ORACLE = os.path.join(ROOT, "rust", "target", "release", "examples",
+ORACLE = os.path.join(ROOT, "target", "release", "examples",
                       "format_oracle")
 
 
@@ -55,7 +55,7 @@ def build_oracle():
     try:
         subprocess.run(
             ["cargo", "build", "--release", "--example", "format_oracle"],
-            cwd=os.path.join(ROOT, "rust"), check=True,
+            cwd=ROOT, check=True,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
     except (subprocess.SubprocessError, OSError):
         return None
@@ -470,14 +470,14 @@ class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
     tested by comparing strings.
     """
 
-    BINARY = os.path.join(ROOT, "rust", "target", "release", "radbeeper")
+    BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
 
     @classmethod
     def setUpClass(cls):
         if not os.path.exists(cls.BINARY):
             try:
                 subprocess.run(["cargo", "build", "--release"],
-                               cwd=os.path.join(ROOT, "rust"), check=True,
+                               cwd=ROOT, check=True,
                                stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL, timeout=300)
             except (subprocess.SubprocessError, OSError):
@@ -622,7 +622,7 @@ class TestTheTwoMonitorsDrawTheSameScreen(unittest.TestCase):
     what is asserted.
     """
 
-    BINARY = os.path.join(ROOT, "rust", "target", "release", "radbeeper")
+    BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
     RECORD = os.path.join(ROOT, "tools", "record.py")
     ANCHORS = ("now", "run", "random", "spectrum")
 

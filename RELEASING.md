@@ -19,9 +19,9 @@ Do this once, by hand. After it, every release is a tag.
    only yours once a version exists under it. From a clean tree:
 
    ```sh
-   make rust-publish-dry            # everything but the upload
+   make publish-dry                 # everything but the upload
    cargo login                      # paste a token from crates.io/settings/tokens
-   cd rust && cargo publish --locked
+   cargo publish --locked
    ```
 
    That first publish is manual on purpose: it is the only one that needs a
@@ -75,7 +75,7 @@ git push origin main && git push origin v0.2.0
 
 The workflow then, in this order:
 
-1. **verify** — the tag equals `rust/Cargo.toml`'s version, the crate builds
+1. **verify** — the tag equals `Cargo.toml`'s version, the crate builds
    with no warnings, the tests pass, `cargo package` succeeds, and the Python
    suite passes.
 2. **binaries** — four static musl builds: x86\_64, aarch64, armv7 and armv6.

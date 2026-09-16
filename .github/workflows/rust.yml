@@ -13,20 +13,22 @@ name: rust
 on:
   push:
     paths:
-      - 'rust/**'
+      - 'src/**'
+      - 'examples/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/rust.yml'
   pull_request:
     paths:
-      - 'rust/**'
+      - 'src/**'
+      - 'examples/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
       - '.github/workflows/rust.yml'
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
-
-defaults:
-  run:
-    working-directory: rust
 
 jobs:
   build:
@@ -53,7 +55,6 @@ jobs:
       # the output compared character for character. It caught a %g that
       # rounded differently in the sixth significant figure on its first run.
       - name: The Rust and the Python write the same bytes
-        working-directory: .
         run: python3 -m unittest discover -v -s tests -k TestSameBytes
 
   msrv:

@@ -3,7 +3,14 @@
 **A GQ GMC-320 Plus Geiger–Müller counter on the desk, read from Alpine Linux —
 and from [Copal](https://github.com/vonglurt/copal), its distillation.**
 
-MIT · `0.1.0` · one file, `python3` and nothing else
+MIT · `0.1.0` · `cargo install radbeeper` · one dependency, and it is `libc`
+
+The program is a **Rust crate at the root of this repository** — `Cargo.toml`,
+`Cargo.lock`, `src/`. The one-file `python3` original is still here beside it:
+it is the oracle the port is checked against byte for byte, and it still owns
+`export`, `site`, `recompute`, `hotplug`, `window`, `--plain` and
+`--source sim`, which have no Rust counterpart yet. [§10](#10-the-native-build)
+is the whole arrangement.
 
 **You need a GQ GMC-320 Plus plugged into a USB port.** The counter is a
 USB-serial device: plug it into a machine running Alpine — including a VM the
@@ -574,7 +581,7 @@ a `# PORT:` line saying which Rust file and which Rust name replaced it, or
 saying plainly that nothing has:
 
 ```
-# PORT: replaced by rust/src/analysis.rs :: Ladder (renamed) -- new/add/best, …
+# PORT: replaced by src/analysis.rs :: Ladder (renamed) -- new/add/best, …
 # PORT: NOT PORTED. `export` is the largest thing still owned by this file.
 ```
 
@@ -612,17 +619,24 @@ has to match the version in the manifest or nothing is published, and crates.io
 is reached over GitHub's OIDC identity rather than an API key stored here.
 [RELEASING.md](RELEASING.md) is the procedure.
 
-`rust/` is a Cargo crate carrying the **read side** natively: `probe`, `cpm`
+**This repository is that crate.** `Cargo.toml`, `Cargo.lock` and `src/` sit
+at the root, which is where `copal-build` and every other tree in this account
+put them; the crate carries the **read side** natively: `probe`, `cpm`
 and the full monitor — the same five time constants, coloured counts chart,
 accumulating spectrum ladder and twelve-row digits. One dependency, `libc`,
 because a serial port is termios and termios is libc; the FFT, the digits and
 the drawing are arithmetic and escape codes.
 
 ```sh
-make rust            # build it
-make rust-install    # cargo install --path rust
-make rust-package    # exactly what a publish would upload
+make build      # build it, into target/release/radbeeper
+make install    # cargo install --path .
+make package    # exactly what a publish would upload
+make check      # the warning-free build, the tests, clippy and the oracle
 ```
+
+The one-file Python program is still at the root beside it, still runnable,
+and its own targets are prefixed: `make py-test`, `make py-check`,
+`make py-install`.
 
 A full probe against the counter takes **82 ms** and the binary is 400 KB.
 
@@ -635,7 +649,7 @@ two dialects**, so the port is arranged around one rule: nothing counts as
 ported until both programs produce the *same characters* on the same input.
 
 `tests/test_differential.py` is that rule. It drives
-`rust/examples/format_oracle.rs` and the Python's own functions with identical
+`examples/format_oracle.rs` and the Python's own functions with identical
 directives and compares the output byte for byte — not equivalent, identical.
 It skips rather than fails where there is no Rust toolchain, because the
 Python suite has to run on a machine with nothing installed.
@@ -663,7 +677,7 @@ would match.
 
 ```sh
 diff <(radbeeper random --check logs/random-*.tsv) \
-     <(rust/target/release/radbeeper random --check logs/random-*.tsv)
+     <(target/release/radbeeper random --check logs/random-*.tsv)
 ```
 
 is empty, character for character. SHA-256 is written out by hand — sixty

@@ -1,66 +1,74 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Paul Richeson
-# radbeeper — all the important targets.
+# RADBEEPER -- build, run, check, release.
 #
-# There is nothing to compile. The program is one stdlib Python file, and the
-# install is a copy: that is the point of it, on a machine where the package
-# manager may be a long way away.
+# The Makefile is the front door; cargo is what it calls. That is the
+# convention across copal, copal-tm, orrery, ascitty and yodacon, and it is
+# what `copal-build` expects to find beside a Cargo.toml -- which is why the
+# crate sits at the root of this repository and not under a subdirectory.
+#
+# Requires: cargo, and libc's headers. Nothing else -- the one dependency in
+# Cargo.toml is libc, because a serial port is termios.
+#
+# THE PYTHON IS STILL HERE, and still a program. `export`, `site`,
+# `recompute`, `hotplug`, `window`, `--plain` and `--source sim` have no Rust
+# counterpart yet, so the one-file `radbeeper` at the root owns them and the
+# `py-` targets below run it. It is also the oracle: `make check` puts both
+# implementations on the same input and compares the bytes.
 
-PREFIX  ?= $(HOME)/.local
-BINDIR   = $(PREFIX)/bin
-PYTHON  ?= python3
+CARGO  ?= cargo
+PYTHON ?= python3
+BIN     = target/release/radbeeper
+PREFIX ?= $(HOME)/.local
 
-.PHONY: all test check install uninstall probe watch sim service help \
-        rust rust-install rust-check rust-package rust-publish-dry \
-        release-check release promo promo-fast
+.PHONY: all build test check clippy install uninstall package publish-dry \
+        release-check release probe watch sim service \
+        py-test py-check py-install promo promo-fast clean help
 
-all: check
+all: build
 
-## test: the suite — no hardware, no network
+## build: the release binary, target/release/radbeeper
+build:
+	$(CARGO) build --release
+	@printf '  built   $(BIN)\n'
+
+## test: cargo test
 test:
-	$(PYTHON) -m unittest discover -q -s tests
+	$(CARGO) test --locked
 
-## check: syntax, then the suite (what to run before committing)
+## check: a warning-free build, the tests, clippy's bug lints, and both implementations writing the same bytes
 check:
-	$(PYTHON) -c "import ast;ast.parse(open('radbeeper').read()+chr(10))"
-	@$(MAKE) --no-print-directory test
+	RUSTFLAGS="-D warnings" $(CARGO) build --release --locked --all-targets
+	$(CARGO) test --locked
+	$(PYTHON) -m unittest discover -q -s tests -k TestSameBytes
+	$(CARGO) clippy --all-targets --locked \
+	  -- -D clippy::correctness -D clippy::suspicious 2>/dev/null \
+	  || echo "  (clippy not installed -- CI will run it)"
 
-## install: copy the program into $(BINDIR) — no root, no packages
-install: check
-	@mkdir -p "$(BINDIR)"
-	install -m 0755 radbeeper "$(BINDIR)/radbeeper"
-	@echo "installed $(BINDIR)/radbeeper"
-	@case ":$$PATH:" in *":$(BINDIR):"*) ;; \
-	  *) echo "note: $(BINDIR) is not on your PATH" ;; esac
+## clippy: the bug lints on their own
+clippy:
+	$(CARGO) clippy --all-targets --locked \
+	  -- -D clippy::correctness -D clippy::suspicious
 
-## rust: build the native read-side binary (cargo, in rust/)
-rust:
-	cd rust && cargo build --release
-	@printf '  built   rust/target/release/radbeeper\n'
-
-## rust-install: cargo install it, so `radbeeper` on PATH is the native one
-rust-install:
-	cargo install --path rust --locked
+## install: cargo install it, so `radbeeper` on PATH is the native one
+install:
+	$(CARGO) install --path . --locked --force
 	@printf '  installed the native binary; `which radbeeper` says where\n'
 
-## rust-check: what CI checks — a warning-free build, tests, clippy's bug lints
-rust-check:
-	cd rust && RUSTFLAGS="-D warnings" cargo build --release --locked --all-targets
-	cd rust && cargo test --locked
-	$(PYTHON) -m unittest discover -q -s tests -k TestSameBytes
-	cd rust && cargo clippy --all-targets --locked \
-	  -- -D clippy::correctness -D clippy::suspicious 2>/dev/null \
-	  || echo "  (clippy not installed — CI will run it)"
+## uninstall: remove it again
+uninstall:
+	$(CARGO) uninstall radbeeper || true
+	rm -f "$(PREFIX)/bin/radbeeper"
 
-## rust-package: exactly what a `cargo publish` would upload
-rust-package:
-	cd rust && cargo package --locked --list
-	cd rust && cargo package --locked
-	@printf '  packaged rust/target/package/\n'
+## package: exactly what a `cargo publish` would upload
+package:
+	$(CARGO) package --locked --list
+	$(CARGO) package --locked
+	@printf '  packaged target/package/\n'
 
-## rust-publish-dry: the publish, right up to the upload
-rust-publish-dry:
-	cd rust && cargo publish --locked --dry-run
+## publish-dry: the publish, right up to the upload
+publish-dry:
+	$(CARGO) publish --locked --dry-run
 
 ## release-check: is the tree ready to be tagged V=x.y.z
 release-check:
@@ -71,24 +79,55 @@ release-check:
 	  || { echo "working tree is dirty"; exit 1; }
 	@git rev-parse -q --verify "refs/tags/v$(V)" >/dev/null \
 	  && { echo "tag v$(V) already exists"; exit 1; } || true
-	@$(MAKE) --no-print-directory check
-	cd rust && cargo build --release --locked
-	cd rust && cargo test --locked
+	@$(MAKE) --no-print-directory py-check
+	$(CARGO) build --release --locked
+	$(CARGO) test --locked
 	@echo "ready to release $(V)"
 
-## release: bump, commit, tag and push V=x.y.z — the workflow does the rest
+## release: bump, commit, tag V=x.y.z -- the workflow does the rest
 release: release-check
-	@grep -c '^version = ' rust/Cargo.toml | grep -qx 1 \
-	  || { echo "rust/Cargo.toml: expected exactly one version line"; exit 1; }
-	sed -i 's|^version = ".*"|version = "$(V)"|' rust/Cargo.toml
-	cd rust && cargo update --workspace --offline
-	git add rust/Cargo.toml rust/Cargo.lock
+	@grep -c '^version = ' Cargo.toml | grep -qx 1 \
+	  || { echo "Cargo.toml: expected exactly one version line"; exit 1; }
+	sed -i 's|^version = ".*"|version = "$(V)"|' Cargo.toml
+	$(CARGO) update --workspace --offline
+	git add Cargo.toml Cargo.lock
 	git commit -m "radbeeper $(V)"
-	@$(MAKE) --no-print-directory rust-publish-dry
+	@$(MAKE) --no-print-directory publish-dry
 	git tag -a "v$(V)" -m "radbeeper $(V)"
 	@echo
 	@echo "  tagged v$(V). Push it and the release workflow takes over:"
 	@echo "      git push origin main && git push origin v$(V)"
+
+## probe: what is on the USB right now
+probe: build
+	./$(BIN) probe
+
+## watch: the monitor against real hardware
+watch: build
+	./$(BIN) watch
+
+## service: what the boot service runs, in the foreground
+service: build
+	./$(BIN) service
+
+## sim: the monitor against the built-in Poisson background (the Python: --source sim is not ported yet)
+sim:
+	./radbeeper --source sim --sim-cpm 400 watch
+
+## py-test: the Python suite -- no hardware, no network
+py-test:
+	$(PYTHON) -m unittest discover -q -s tests
+
+## py-check: the Python parses, then its suite
+py-check:
+	$(PYTHON) -c "import ast;ast.parse(open('radbeeper').read()+chr(10))"
+	@$(MAKE) --no-print-directory py-test
+
+## py-install: copy the one-file program into $(PREFIX)/bin -- no toolchain
+py-install: py-check
+	@mkdir -p "$(PREFIX)/bin"
+	install -m 0755 radbeeper "$(PREFIX)/bin/radbeeper"
+	@echo "installed $(PREFIX)/bin/radbeeper"
 
 ## promo: re-record every screenshot in docs/ from the real program
 promo:
@@ -98,25 +137,9 @@ promo:
 promo-fast:
 	$(PYTHON) tools/promo.py --keep $(if $(SHOTS),--only $(SHOTS))
 
-## uninstall: remove it again
-uninstall:
-	rm -f "$(BINDIR)/radbeeper"
-
-## probe: what is on the USB right now
-probe:
-	./radbeeper probe
-
-## watch: the monitor against real hardware
-watch:
-	./radbeeper watch
-
-## sim: the monitor against the built-in Poisson background
-sim:
-	./radbeeper --source sim --sim-cpm 400 watch
-
-## service: what the boot service runs, in the foreground
-service:
-	./radbeeper service
+## clean: cargo clean
+clean:
+	$(CARGO) clean
 
 ## help: list targets
 help:

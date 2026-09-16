@@ -13,15 +13,20 @@ homepage = "https://github.com/vonglurt/radbeeper"
 keywords = ["geiger", "radiation", "serial", "gmc", "tui"]
 categories = ["command-line-utilities", "science"]
 # An explicit list, so a stray file in the working tree can never end up in a
-# published .crate. What ships is the four sources, the manifest, the lock,
-# the readme and the licence -- and `make rust-package` prints exactly that.
+# published .crate. What ships is the sources, the manifest, the lock, the
+# readme and the licence -- and `make package` prints exactly that.
+#
+# EVERY PATTERN IS ANCHORED WITH A LEADING SLASH. These are gitignore-style
+# globs, so an unanchored "README.md" matches a README.md at ANY depth: it
+# quietly pulled logs/README.md into the .crate, which is the exact stray
+# file this list exists to keep out. "/README.md" is the root one and only it.
 include = [
-    "src/**/*.rs",
-    "examples/*.rs",
-    "Cargo.toml",
-    "Cargo.lock",
-    "README.md",
-    "LICENSE",
+    "/src/**/*.rs",
+    "/examples/*.rs",
+    "/Cargo.toml",
+    "/Cargo.lock",
+    "/README.md",
+    "/LICENSE",
 ]
 
 [[bin]]
