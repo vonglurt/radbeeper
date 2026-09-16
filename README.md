@@ -5,23 +5,24 @@ and from [Copal](https://github.com/vonglurt/copal), its distillation.**
 
 MIT · `0.1.0` · `cargo install radbeeper` · one dependency, and it is `libc`
 
-The program is a **Rust crate at the root of this repository** — `Cargo.toml`,
-`Cargo.lock`, `src/`. The one-file `python3` original is still here beside it:
-it is the oracle the port is checked against byte for byte, and it still owns
-`export`, `site`, `recompute`, `window`, `--plain` and `--source sim`, which
-have no Rust counterpart yet. (`hotplug` did until it was ported — it is the
-verb the desktop autostart runs.) [§10](#10-the-native-build)
-is the whole arrangement.
+**You need a GQ GMC-320 Plus plugged into USB.** There is no substitute for it
+in software: RadBeeper reads a real tube over a real serial port, and every
+number on the screen comes off the wire. Plug it into a machine running Alpine
+— **including a VM with the counter passed through, which is what these logs
+were taken on** — switch it on, and RadBeeper finds it, shows what it is
+counting, pulls the history it recorded while nobody was watching, and builds a
+web page out of the result.
 
-**You need a GQ GMC-320 Plus plugged into a USB port.** The counter is a
-USB-serial device: plug it into a machine running Alpine — including a VM the
-counter is shared into over USB pass-through — switch the counter on, and
-RadBeeper finds it, shows what it is counting, pulls the history it recorded
-while nobody was watching, and builds a web page out of the result. Fork this
-repository, drop your own logs into `logs/`, and a GitHub Action regenerates
-that page on every push. [§1](#1-what-you-need) is the full list of what has to
-be true; the Python program's `--source sim` draws the whole monitor with no
-hardware at all.
+```sh
+cargo install radbeeper            # or a static binary from the releases page
+doas adduser $USER dialout         # once, then log out and back in
+radbeeper probe                    # it should name your counter
+```
+
+[§1](#1-what-you-need) is the full list of what has to be true — and if you are
+running Alpine in a VM, **[the kernel is the thing that catches people](#1-what-you-need)**:
+`linux-virt` ships no USB-serial driver at all, so a perfectly good
+pass-through produces no `/dev/ttyUSB0`.
 
 ![the monitor](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch.png)
 
@@ -41,28 +42,18 @@ and its countdown ticks from 187 s to 165 s across these twenty seconds.
 
 ## Fast track
 
-```sh
-git clone https://github.com/vonglurt/radbeeper.git
-cd radbeeper
-make install
-
-doas adduser $USER dialout    # once, then log out and back in
-```
-
-No packages and nothing to compile — the install is a copy of one stdlib Python
-file. The `dialout` line is not optional: the serial node is `root:dialout` and
-RadBeeper does not want root.
-
-Then, with the GMC-320 Plus plugged in and switched on:
+With the counter plugged in and switched on:
 
 ```sh
 radbeeper probe      # find it, confirm it's talking
 radbeeper watch      # the monitor — q to quit
 ```
 
-That is the whole of it. If `probe` finds nothing it says which of four things
-went wrong, and they have four different fixes — [§1](#1-what-you-need) is the
-list of what has to be true. **No counter yet?**
+That is the whole of it. The `dialout` line in the install above is not
+optional: the serial node is `root:dialout` and RadBeeper does not want root.
+If `probe` finds nothing it says which of four things went wrong, and they have
+four different fixes — [§1](#1-what-you-need) is the list of what has to be
+true. **No counter yet?**
 `radbeeper --source sim --sim-cpm 400 watch` draws the entire monitor against a
 synthetic Poisson background, which is a real one: decay is a Poisson process.
 That verb is the Python program's — a `cargo install radbeeper` does not carry
@@ -98,10 +89,10 @@ before yours arrives.
 
 | | |
 |---|---|
-| **The counter** | A **GQ GMC-320 Plus**. The 320 is what this was written against and what every screenshot here is. A **GMC-300** works — RadBeeper tries its 57600 baud as well as the 320's 115200 — and a 500 or 600 will be found and read, but its tube is not an M4011, so give it `--cpm-per-usvh` (see [The tube factor](#the-tube-factor)). |
-| **The cable** | The **USB cable that came with it**. The socket on the counter is USB-C on a Plus and micro-B on older units, and it is easy to grab a charge-only cable by mistake: one that carries no data leaves you at [Troubleshooting](#troubleshooting) case 1 with nothing plugged in as far as Linux is concerned. |
+| **The counter** | A **GQ GMC-320 Plus**. The 320 is what this was written against and what every screenshot here is. A **GMC-300** works — RadBeeper tries its 57600 baud as well as the 320's 115200 — and a 500 or 600 will be found and read, but its tube is not an M4011, so give it `--cpm-per-usvh` (see [The tube factor](docs/reference.md#the-tube-factor)). |
+| **The cable** | The **USB cable that came with it**. The socket on the counter is USB-C on a Plus and micro-B on older units, and it is easy to grab a charge-only cable by mistake: one that carries no data leaves you at [Troubleshooting](docs/troubleshooting.md) case 1 with nothing plugged in as far as Linux is concerned. |
 | **The counter, switched on** | The USB-serial chip inside is powered by the counter, not by the bus. A 320 that is off, or flat, enumerates as nothing. |
-| **A kernel with `ch341`** | The 320 Plus presents as a CH340 USB-serial device. `linux-lts` and `linux-rpi` carry the driver; Alpine's `linux-virt` **does not**, which is the single most common reason a counter that is plugged in cannot be found. **Copal installs the `linux-lts` Alpine package**, so a Copal machine has the driver already. |
+| **A kernel with `ch341`** | The 320 Plus presents as a CH340 USB-serial device. `linux-lts` and `linux-rpi` carry the driver; Alpine's `linux-virt` **does not**, which is the single most common reason a counter that is plugged in cannot be found. **Copal's stage 10 installs `linux-lts` when the running kernel is a `-virt` one**, so a Copal VM has the driver after its next boot. |
 | **Membership of `dialout`** | The serial node is `root:dialout` and RadBeeper does not want root. |
 
 Plug it in, and Linux should say so:
@@ -112,36 +103,50 @@ ls -l /dev/ttyUSB*                    # crw-rw---- 1 root dialout ... /dev/ttyUS
 ```
 
 If `/dev/ttyUSB0` is there, you are done — `radbeeper probe` in [§3](#3-find-the-counter)
-will identify it. If it is not, [Troubleshooting](#troubleshooting) names the four
+will identify it. If it is not, [Troubleshooting](docs/troubleshooting.md) names the four
 things it can be and they have four different fixes.
 
-**USB pass-through counts.** These logs were taken from a 320 Plus shared into a
-VM, and the counter cannot tell the difference. What the VM's kernel needs is the
-same `ch341` — pass the device through to a guest running `linux-virt` and it will
-never appear, no matter how correct the pass-through is. This is exactly the
-trap **Copal** avoids by installing the `linux-lts` Alpine package rather than
-the virt kernel a VM image would otherwise default to: the counter appears
-because the driver is there to claim it.
+**USB pass-through counts, and the kernel is what catches people.** These logs
+were taken from a 320 Plus shared into a VM, and the counter cannot tell the
+difference. What the VM's kernel needs is the same `ch341` — pass the device
+through to a guest running `linux-virt` and it will never appear, however
+correct the pass-through is.
+
+It looks like this when the pass-through is working and the driver is not:
+
+```
+$ lsusb
+Bus 003 Device 002: ID 1a86:7523  USB2.0-Serial      # the counter is right there
+
+$ ls /dev/ttyUSB*
+ls: cannot access '/dev/ttyUSB*': No such file or directory
+
+$ find /lib/modules/$(uname -r) -name 'ch341*'       # nothing: linux-virt has none
+```
+
+`doas apk add linux-lts`, reboot into it, and the same device enumerates as
+`/dev/ttyUSB0`. This is the trap **Copal** avoids by installing the `linux-lts`
+Alpine package rather than the virt kernel a VM image would otherwise default
+to: the counter appears because the driver is there to claim it.
 
 ## 2. Install
 
-No packages, no build. The program is one stdlib Python file and the install is
-a copy:
+**The Rust build is the implementation.**
 
 ```sh
-git clone https://github.com/vonglurt/radbeeper.git
-cd radbeeper
-make install          # copies to ~/.local/bin/radbeeper
+cargo install radbeeper                  # or a static binary from the releases
 ```
 
-`make install` takes `PREFIX=`. On Alpine you need `python3` and nothing more.
+A static binary off the releases page needs no toolchain at all, which is the
+point on a Pi. From a clone, `make install` builds it and copies it to
+`~/.local/bin`, and takes `PREFIX=`.
 
-There is a native build too — `cargo install radbeeper`, or a static binary off
-the releases page for a machine with no toolchain — and **it is now the
-implementation**. `probe`, `cpm`, `watch`, `service`, `random`, `backfill`, `log` and `hotplug`
+The one-file `python3` program is still in the repository beside it and still
+installs the same way — `make py-install` — because it owns the verbs the port
+has not reached yet. `probe`, `cpm`, `watch`, `service`, `random`, `backfill`, `log` and `hotplug`
 are native; `export`, `site`, `recompute`, `--plain` and `--source sim` are
 still the Python and are the reason it is still here.
-[§10](#10-the-native-build) is that story.
+[§10](docs/native-build.md) is that story.
 
 **Add yourself to `dialout`**, or the serial node will not open:
 
@@ -158,7 +163,7 @@ radbeeper probe
 ![radbeeper probe](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/probe.png)
 
 If it finds nothing, the message says which of four things went wrong, because
-they have four different fixes — see [Troubleshooting](#troubleshooting).
+they have four different fixes — see [Troubleshooting](docs/troubleshooting.md).
 
 ## 4. Watch it
 
@@ -240,99 +245,19 @@ converting in their head.
 ![the accumulating spectrum](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-spectrum.png)
 
 Radioactive decay is a Poisson process, and **the power spectrum of a Poisson
-process is flat** — white noise, every frequency carrying the same expected
-power. A healthy counter watching background therefore produces no shape at all,
-and that featureless strip is the useful result: a statement that nothing
+process is flat**. A healthy counter watching background produces no shape at
+all, and that featureless strip is the useful result: a statement that nothing
 periodic is happening.
 
 It earns its place on the other case. A peak means something is arriving on a
-schedule, and decay does not have a schedule — mains hum on the tube's supply, a
-fan carrying a source past, a loose connector, firmware that batches its
-reporting. In the time domain every one of those looks exactly like more counts.
+schedule, and decay does not have one — mains hum on the tube's supply, a fan
+carrying a source past, a loose connector, firmware that batches its reporting.
+In the time domain every one of those looks exactly like more counts.
 
-**It accumulates.** One periodogram of a Poisson process is flat in expectation
-and violently noisy in fact — every bin an exponential variable whose standard
-deviation equals its own mean. Averaging *N* of them divides that scatter by
-√*N*, so a real line climbs out of the grass while the grass settles. Windows are
-half-overlapped (Welch rather than Bartlett), which gets two averages out of each
-window's data instead of one.
-
-**Sigma alone is not a reason to believe anything**, and this is the trap the
-panel is most likely to fall into. Sigma is computed for one bin, but the eye
-picks the *tallest of 127*, and the largest of many draws is far bigger than any
-single draw. One bin of an *N*-window average is Gamma(*N*)/*N*; asking how high
-*B* draws of it reach means solving *N*(r − 1 − ln r) = ln *B*, and expanding
-that gives
-
-> **chance max ≈ 1 + √(2·ln B / N) + ⅔·ln B / N**
-
-At two windows that is **5.4×**. So a bin at 4.9×, reading as a confident five
-sigma, is *below* what a perfectly healthy counter produces every time you look.
-At twenty-eight windows the same arithmetic gives 1.86×, and 4.9× is then
-overwhelming. The headline compares against *that*:
-
-```
-spectrum   flat -- arrivals look random, as decay should (28 windows)
-spectrum   peak at 8s, 9.4x the mean (chance gives 1.86x), 7.2 sigma
-```
-
-**The leading term is the square root, and leaving it out cost a year of false
-alarms.** This used to compute the bar as 1 + ln(B)/*N*, which is the correct
-answer for *one* periodogram — a single bin of white noise is exponential, and
-the largest of *B* of those does land near ln(*B*) above the mean — and the
-wrong one for an average of *N*, whose tail is not exponential at all. The two
-agree only at *N* = 1. Everywhere else the old form was too low, and it got
-worse the longer you watched: **the bar sinks like 1/*N* while the real peak
-only sinks like 1/√*N***, so the two cross over.
-
-Measured against a null built from this counter's own recorded counts,
-resampled i.i.d. so the spectrum is flat *by construction* and every flag is
-a false one:
-
-| Watching for | Old bar | Real median peak | Called suspect |
-|---|---|---|---|
-| 30 minutes | 2.13× | 2.51× | **33%** |
-| 1 hour | 1.52× | 1.97× | **64%** |
-| 2 hours | 1.25× | 1.64× | **80%** |
-
-The longer the session, the more reliably it cried wolf — and a health check
-that fires four times in five on healthy hardware is not a health check, it is
-a decoration. **"Called suspect" is the rule the panel actually applies**, which
-wants a peak at 1.25× the bar rather than merely above it; that margin is the
-only reason the first row is a third and not a half, given that the median peak
-has already overtaken the old bar. With the square-root term restored the same
-null stays under 1% at every length.
-
-**Raising the bar did not cost the detection it is there for.** The same null
-with a period-8 s source added on top — Poisson arrivals at a fraction of the
-background rate, which for this counter is 0.73 counts a second, about 44 CPM:
-
-| Source at | Peak after 30 min | Called at 30 min | at 1 h | at 2 h |
-|---|---|---|---|---|
-| 0.2 × background | 2.7× | 2% | 2% | 11% |
-| 0.3 × background | 3.0× | 19% | 50% | 92% |
-| 0.4 × background | 4.5× | 65% | **98%** | **100%** |
-| 0.5 × background | 6.4× | **95%** | **100%** | **100%** |
-
-**The detection floor is a real number, and it sits between a third and a half
-of background.** Half the counts arriving on a schedule is unmissable inside
-half an hour. A fifth of them is invisible at every length, and no threshold
-would fix that: half an hour at 44 CPM is thirteen hundred arrivals, and the
-line is not in them to be found. `radbeeper` and the Rust build were both wrong
-in the same way and are both fixed; `chance_max()`'s two quoted values, 5.4×
-and 1.86×, have a test pinning them in each.
-
-**Resolution grows with time, because it has to.** Frequency resolution is 1/*T*
-for an observation of length *T* — you cannot resolve a 512-second period in 128
-seconds of listening. Rather than pick one, RadBeeper runs a **ladder**: 128, 256
-and 512 seconds side by side, fed the same samples. The 128 answers after two
-minutes; the 512 takes eight and a half but resolves four times as finely, and by
-the time it has anything to say it is the better answer. It costs about ten
-kilobytes, fixed for the life of the process.
-
-The axis runs from long periods on the left to short on the right (2 s, the
-Nyquist limit), and the bars are coloured by significance rather than height.
-
+The panel accumulates windows so a real line climbs out of the noise, and it
+will not call a peak on sigma alone, because the eye picks the tallest of 127
+bins and the largest of many draws is far bigger than any single one.
+[**How it decides, and why it is cautious →**](docs/the-spectrum.md)
 ### The random line
 
 256 bits of hex, out of decay timing, refreshed whenever the pool has earned
@@ -578,192 +503,6 @@ GitHub Pages serves them with no build step. There is nothing to install in the
 workflow — the generator is this same file, which is also why the pages cannot
 drift from the log format.
 
-## 10. The native build
-
-**This is where new work goes now.** The one-file Python is the original, and
-it is now the archive: it is kept as the differential oracle, as the owner of
-the parts that have no Rust counterpart yet, and because it runs on a fresh Pi
-with python3 and nothing else. Every top-level function and class in it carries
-a `# PORT:` line saying which Rust file and which Rust name replaced it, or
-saying plainly that nothing has:
-
-```
-# PORT: replaced by src/analysis.rs :: Ladder (renamed) -- new/add/best, …
-# PORT: NOT PORTED. `export` is the largest thing still owned by this file.
-```
-
-The renames all run one way, towards shorter names inside a module that already
-names the subject — `SpectrumLadder` → `analysis::Ladder`, `LogWriter` →
-`log::Writer`, `log_header` → `log::header`, `write_entropy` →
-`entropy::write_record`, `spans_arg` → `parse_spans`. Everything else kept its
-name; classes became structs with the same methods. The one shape change worth
-knowing is `Counter.samples()`, a generator, becoming
-`Counter::next_sample(timeout)`, which is pulled rather than yielded.
-
-```sh
-cargo install radbeeper
-```
-
-That is the whole install: crates.io builds it and drops the binary in
-`~/.cargo/bin/radbeeper`, which cargo already put on your PATH. Nothing is
-installed system-wide and nothing needs root.
-
-No toolchain on the machine? Take a static binary from the
-[releases](https://github.com/vonglurt/radbeeper/releases) — musl, so one file
-runs on Alpine, on Debian and on a Pi with no libc to match:
-
-```sh
-v=0.1.0; t=aarch64-unknown-linux-musl        # or x86_64-…, armv7-…, arm-… for a Zero
-curl -LO https://github.com/vonglurt/radbeeper/releases/download/v$v/radbeeper-$v-$t.tar.gz
-curl -LO https://github.com/vonglurt/radbeeper/releases/download/v$v/SHA256SUMS
-sha256sum --check --ignore-missing SHA256SUMS
-tar xzf radbeeper-$v-$t.tar.gz
-install -m 0755 radbeeper-$v-$t/radbeeper ~/.local/bin/radbeeper
-```
-
-Every release is cut from a tag by `.github/workflows/release.yml` — the tag
-has to match the version in the manifest or nothing is published, and crates.io
-is reached over GitHub's OIDC identity rather than an API key stored here.
-[RELEASING.md](RELEASING.md) is the procedure.
-
-**This repository is that crate.** `Cargo.toml`, `Cargo.lock` and `src/` sit
-at the root, which is where `copal-build` and every other tree in this account
-put them; the crate carries the **read side** natively: `probe`, `cpm`
-and the full monitor — the same five time constants, coloured counts chart,
-accumulating spectrum ladder and twelve-row digits. One dependency, `libc`,
-because a serial port is termios and termios is libc; the FFT, the digits and
-the drawing are arithmetic and escape codes.
-
-```sh
-make build      # build it, into target/release/radbeeper
-make install    # cargo install --path .
-make package    # exactly what a publish would upload
-make check      # the warning-free build, the tests, clippy and the oracle
-```
-
-The one-file Python program is still at the root beside it, still runnable,
-and its own targets are prefixed: `make py-test`, `make py-check`,
-`make py-install`.
-
-A full probe against the counter takes **82 ms** and the binary is 400 KB.
-
-### Going native, one piece at a time
-
-`service`, `backfill`, `export`, `site`, `random`, `recompute` and `hotplug`
-are still Python, and the binary says so if you ask it for one. They are being
-ported. **Two implementations of a file format is how a file format acquires
-two dialects**, so the port is arranged around one rule: nothing counts as
-ported until both programs produce the *same characters* on the same input.
-
-`tests/test_differential.py` is that rule. It drives
-`examples/format_oracle.rs` and the Python's own functions with identical
-directives and compares the output byte for byte — not equivalent, identical.
-It skips rather than fails where there is no Rust toolchain, because the
-Python suite has to run on a machine with nothing installed.
-
-There is a second half to it, and it is the one that matters more: the Rust
-`service` is run against the counter and **the Python's own reader parses what
-it wrote** — same header, same columns, same meaning for an empty field, one
-row per slot across a restart, and the file still chronological under plain
-`sort`. Comparing strings tests one end of a format. Reading the file with the
-other implementation tests both.
-
-`radbeeper service --logs DIR` is what makes that testable at all; without it
-the only way to exercise the logger is against the machine's real log.
-
-**The entropy pool was the one place a difference would have been silent.** A
-log row that disagrees between the two is at least visible in the file; a
-digest that disagrees is sixty-four characters of hex that look exactly as
-random either way, and the only thing that would ever notice is somebody
-running `--check` a year later and being told their audit trail is a lie. So
-the Rust recomputes **every line this counter has ever emitted** — real
-emissions recorded by the Python before any of the Rust existed — and gets the
-same digests. If its SHA-256, its NUL framing, its integer formatting of the
-opened second or its nibble packing were off by one byte, not one of them
-would match.
-
-```sh
-diff <(radbeeper random --check logs/random-*.tsv) \
-     <(target/release/radbeeper random --check logs/random-*.tsv)
-```
-
-is empty, character for character. SHA-256 is written out by hand — sixty
-lines, no dependency — and checked against the FIPS 180-4 vectors, the
-million-`a` vector and the 55/56-byte cases that catch a padding path which
-has only ever seen one block.
-
-The Rust monitor also has the random line and its countdown now, which it
-never had at all.
-
-**The history decoder is where GQ's document is wrong twice**, so it gets the
-most testing of anything here: thirteen constructed images covering truncation
-mid-record, corrupt timestamps, notes, erased flash, marker bytes appearing as
-ordinary counts and the measured-interval median — and then
-`tests/fixtures/flash-gmc320re.bin`, **16 KiB cut out of this counter's own
-flash at a timestamp marker**. 82,084 records off a 96 KiB read decode
-identically in both. Then the whole chain end to end: `backfill --image`
-through both command lines, into a fresh log, and the two files compared byte
-for byte — 394 rows, decoder to merge, identical.
-
-It earned its place on the first run. Python's `%g` — which formats the
-`seconds` column and every span in the header, and which Rust has no formatter
-for — picks scientific notation from the exponent the value has **after**
-rounding to six significant figures. Taking it from the unrounded value prints
-`999999.5` as `1000000` where C and Python print `1e+06`. One character, in a
-column nobody reads, in a file whose one promise is that `sort` on it is
-chronological.
-
-| | |
-|---|---|
-| **native now** | `probe`, `cpm` (its own 30 s window, not the device's 60 s one), `watch`, `service`, `random`, `random --check`, **`backfill`** and **`log info`/`log pull`**; the log format; the entropy pool, the SP 800-90B estimator and SHA-256; the history decoder with both corrections to GQ's published format, the wrapped-ring search and the measured sample intervals; local time, which Rust's standard library does not have at all |
-| **next** | `export` — the two pages. Biggest and most mechanical, and the only one with no correctness risk beyond "the HTML differs" |
-| **the rule** | one dependency, still `libc`. It has `strftime`, `strptime` and `mktime`, so the port does not need a date crate; the one primitive that must be written out is SHA-256 |
-
-Nothing about this is a reason to hurry the Python out: it runs on a machine
-with no toolchain and no network, which is the whole reason it has no
-dependencies.
-
-**Where the speed actually was.** The monitor's budget is one sample a second
-and Python used a fraction of a percent of it, so this is about start-up and
-footprint rather than throughput. The one genuinely slow path was `backfill`,
-and that was an algorithm — fixed in the Python for a 7× win before any of this
-was written.
-
-## Troubleshooting
-
-**1. No serial node.** `/dev/ttyUSB*` does not exist. Four causes, in the order
-they are worth checking — the first three are the counter's end and cost nothing
-to rule out ([§1](#1-what-you-need)):
-
-- **The counter is switched off.** Its USB-serial chip runs off the counter's
-  own battery, not the bus, so a flat or powered-down 320 enumerates as nothing.
-- **A charge-only USB cable.** Very common, and indistinguishable from a dead
-  port until you try another cable. `dmesg` stays silent.
-- **Nothing is actually plugged in.** Worth the glance.
-- **The running kernel has no USB-serial driver.** Alpine's `linux-virt` ships
-  none — no `ch341`, no `usbserial` — so a counter plugged into a VM running it
-  can never appear as `/dev/ttyUSB0`, and `dmesg` is silent because nothing ever
-  claims the device. `linux-lts` and `linux-rpi` carry the drivers, and Copal
-  installs `linux-lts`, so this case does not arise there:
-  `apk add linux-lts` and reboot is the fix on a plain Alpine that has it wrong.
-
-`dmesg | tail` separates them: a working cable into a switched-on counter on a
-kernel with `ch341` says `ch341-uart converter now attached to ttyUSB0`. Silence
-means the device was never seen; a `ch341` line with no node means the driver is
-missing.
-
-**2. Permission denied.** The node is `root:dialout`. `doas adduser $USER
-dialout`, then log in again.
-
-**3. Something is there but is not a GMC.** A CH340 is a generic USB-serial cable
-and plenty of things that are not Geiger counters use one.
-
-**4. The port is busy.** Only one program can read a serial device sensibly — two
-readers share the bytes between them and neither is told — so RadBeeper locks the
-port. `doas rc-service radbeeper stop` hands it over. The service waits on the
-lock rather than giving up, so the log picks up again by itself when you close
-the monitor.
-
 ## Reference
 
 ### Commands
@@ -786,107 +525,12 @@ Options: `--source sim`, `--sim-cpm`, `--seed`, `--spans 3,30,300`,
 `--cpm-per-usvh`, `--log-every`, `--duration`, `--clock-offset`,
 `--backfill-bytes`, `--max-gap`, `--entropy-bits`, `--device`, `--baud`.
 
-### The tube factor
+## More documentation
 
-µSv/h is CPM divided by a number that belongs to the **tube**, not the counter.
-The default, 151.5, is the M4011 in a GMC-320. A 500 with a different tube needs a
-different number, which is why it is `--cpm-per-usvh` and not a constant buried in
-the arithmetic.
-
-### Protocol
-
-Commands are ASCII `<NAME>>`; replies are raw bytes with no framing, so every read
-asks for an exact count and times out rather than blocking.
-
-| Command | Reply |
+| | |
 |---|---|
-| `<GETVER>>` | 14 bytes, e.g. `GMC-320Re 4.26` |
-| `<GETSERIAL>>` | 7 bytes |
-| `<GETCPM>>` | 2 bytes, big-endian |
-| `<GETCPS>>` | 2 bytes, mask `0x3FFF` |
-| `<HEARTBEAT1>>` | then 2 bytes every second until `<HEARTBEAT0>>` |
-| `<GETVOLT>>` | 1 byte, tenths of a volt |
-| `<GETDATETIME>>` | 7 bytes |
-| `<SPIR[addr][len]>>` | `len` bytes of history flash |
-
-Baud is 115200 on the 320 and 57600 on the 300; RadBeeper tries both.
-
-There is no `pyserial`. Alpine packages it, but this runs on a Pi Zero with 512 MB
-and on a fresh install with no network, and a serial port is thirty lines of
-`termios`.
-
-**Two corrections to GQ's published history format**, both measured against a full
-1 MiB image from a GMC-320Re 4.26. The datetime record is **nine** bytes, not ten.
-And `55 AA 01` is a **three-byte marker carrying no payload**, not a two-byte
-count: reading it as one invented 1,701 readings between 256 and 21,930 counts per
-second on a tube that saturates three orders of magnitude below that. `log pull`
-writes the raw flash image before decoding it, which is why both were fixable
-against data already on disk.
-
-### Speed
-
-The monitor's budget is one sample a second and it uses a fraction of a percent of
-it — a 512-point FFT is 0.5 ms, once every few minutes. The one place that ever
-mattered was `backfill`, and it turned out to be an algorithm rather than a
-language: each window re-summed its own tail on every sample, O(samples × window),
-which cost 16.5 s to turn 850,000 samples into 28,000 rows — 765 million
-additions. Keeping a running sum and subtracting what falls out the back is O(1)
-per sample. **Same output, byte for byte, in 2.3 s instead of 16.5.**
-
-### Tests
-
-```sh
-make check        # syntax, then 208 tests: no hardware, no network
-```
-
-`tests/fake_gmc.py` serves a fake GMC-320 on a pseudo-terminal, so the serial path
-— termios, exact-length reads, command framing, the heartbeat stream, the chunked
-history download — is tested without a counter on the desk. It also runs
-standalone:
-
-```sh
-python3 tests/fake_gmc.py --cpm 400
-radbeeper -d /dev/pts/N watch
-```
-
-The full-screen monitor is tested too, on a 132×46 pty, because it only runs when
-stdout is a terminal and two bugs shipped in the part nothing was executing.
-
-### The screenshots
-
-Every image in `docs/screenshots` is a recording, not a picture. `tools/record.py`
-runs the program under a pseudo-terminal, logs every byte it writes with a
-timestamp, and replays that through a small VT emulator into a grid of cells,
-which is then drawn with one rectangle per block glyph and one glyph per
-character. `tools/promo.py` drives it.
-
-```sh
-make promo                 # all of them: needs the counter plugged in, ~7 min
-make promo-fast            # the same, reusing the last monitor recording
-make promo SHOTS=probe     # just one
-```
-
-Two consequences worth having. **A screenshot cannot claim something the
-program does not do** — the log-format shot found that busybox `sed` ignores
-`\x` escapes, because the recording showed the escape instead of the arrow.
-And **the monitor shots are one session**: the hero, the filling shot, the
-spectrum strip and the twenty-second animation are four moments of the same
-380-second run against the counter, so the numbers in them agree with each
-other because they are the same numbers.
-
-`tools/record.py inventory <cast>` prints the escape sequences a recording
-actually contains. The emulator implements that list and nothing else, so a
-future ncurses emitting something new shows up there rather than as a quietly
-wrong pixel.
-
-**And it is tested**, in `tests/test_record.py`, because a bug in a terminal
-emulator does not raise an exception — it publishes a picture of something the
-program never drew. One did: on a screen busy enough for ncurses to decide
-scrolling was cheaper than redrawing, it emits `CSI T` inside a scroll region,
-and an emulator that ignores `DECSTBM` puts every row below the scroll point in
-the wrong place. It drew the random line five rows up, on top of the spectrum.
-The program was correct; the picture of it was not.
-
----
-
-MIT License — Copyright (c) 2026 Paul Richeson
+| [The spectrum](docs/the-spectrum.md) | why flat is the good answer, how windows are accumulated, and why a peak is not called on sigma alone |
+| [The native build](docs/native-build.md) | the Rust crate, what is ported and what is not, and how the two implementations are held to each other |
+| [Reference](docs/reference.md) | the tube factor, the counter's protocol, what it costs to run, the tests, and how the screenshots are made |
+| [Troubleshooting](docs/troubleshooting.md) | the four things it can be when `probe` finds nothing, and the four different fixes |
+| [Prior art](docs/prior-art.md) | what else reads these counters, and what this does differently |
