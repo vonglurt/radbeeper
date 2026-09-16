@@ -30,7 +30,13 @@ pub struct NotFound {
     pub busy: bool,
 }
 
-fn candidate_ports() -> Vec<String> {
+/// The device nodes a counter could be behind, sorted.
+///
+/// `hotplug` watches this list rather than the port itself: opening a serial
+/// port every few seconds to ask what is on it would fight the monitor for the
+/// device the moment one was running, and rattle every other serial cable on
+/// the machine besides. A node APPEARING is the event worth acting on.
+pub fn candidate_ports() -> Vec<String> {
     let mut out = Vec::new();
     if let Ok(entries) = fs::read_dir("/dev") {
         let mut names: Vec<String> = entries

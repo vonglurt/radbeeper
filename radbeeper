@@ -47,9 +47,11 @@
 #       identical. Deleting this file deletes the only thing that can prove the
 #       Rust writes the same log format, and the format is the promise.
 #    2. It still OWNS the parts that have no Rust counterpart yet. `export`
-#       (index.html and random.html), `recompute`, `hotplug`, the write side of
-#       `site`, `--plain` and `--source sim` are implemented here and nowhere
-#       else. Every one of them is marked NOT PORTED below.
+#       (index.html and random.html), `recompute`, the write side of `site`,
+#       `--plain` and `--source sim` are implemented here and nowhere else.
+#       Every one of them is marked NOT PORTED below. (`hotplug` was one of
+#       them until it was ported; the four functions it is made of now say
+#       which Rust replaced them.)
 #    3. It runs where nothing is installed: python3 and the stdlib, no cargo,
 #       no network. That is still the fastest way onto a fresh Pi.
 #
@@ -4313,7 +4315,9 @@ def cmd_service(args):
     return 0
 
 
-# PORT: NOT PORTED. Part of `hotplug`.
+# PORT: replaced by src/main.rs :: find_terminal() and find_terminal_in(),
+# which splits the search from the reading of PATH so a test can lay out a
+# directory and ask which terminal would be picked. Same list, same order.
 def find_terminal():
     """The first terminal emulator on PATH, as (path, name, exec flag)."""
     for term, flag in TERMINALS:
@@ -4324,7 +4328,13 @@ def find_terminal():
     return None
 
 
-# PORT: NOT PORTED. Part of `hotplug`.
+# PORT: replaced by src/main.rs :: open_window(), with one difference. Here
+# the counter check happens in a forked child, so that opening the port cannot
+# stall the watcher; there it happens in the watcher itself, which then spawns
+# the terminal only if there is something to watch. The Rust does not need the
+# fork to keep the loop moving -- the loop sleeps for seconds anyway -- and
+# doing it this way tells "never opened" from "opened and closed" directly
+# rather than by how quickly a child exited.
 def cmd_window(args):
     """Open the monitor in a terminal, but only if there is something to watch.
 
@@ -4379,7 +4389,9 @@ def cmd_window(args):
 # other serial cable on the machine besides. A device NODE appearing is the
 # event worth acting on; whether it is a GMC is settled once, by the window
 # that opens, which exits silently when it is not.
-# PORT: NOT PORTED. Part of `hotplug`.
+# PORT: replaced by src/main.rs :: open_window()'s Command::spawn with a
+# pre_exec setsid -- the same "so the window outlives the watcher", without a
+# hand-written fork.
 def spawn_window(args):
     """Fork a child that becomes the monitor's terminal. Returns its pid."""
     pid = os.fork()
@@ -4395,7 +4407,9 @@ def spawn_window(args):
     return pid
 
 
-# PORT: NOT PORTED. `hotplug` is still Python.
+# PORT: replaced by src/main.rs :: hotplug(), whose decision of when to open a
+# window is pulled out into the Watcher struct beside it -- the part that can
+# be wrong, tested without /dev and without processes.
 def cmd_hotplug(args):
     """Open the monitor when a counter appears -- now, or in an hour's time."""
     seen = set(candidate_ports())
@@ -4509,7 +4523,7 @@ def build_parser():
     sub = p.add_subparsers(dest="command")
     sub.add_parser("probe", help="find the counter and say what it is")
     sub.add_parser("cpm", help="print the counter's own CPM once and exit")
-    sub.add_parser("watch", help="the monitor: 3s / 30s / 300s averages")
+    sub.add_parser("watch", help="the monitor: 3s / 30s / 5m / 50m / working day")
     sv = sub.add_parser("service", help="what the boot service runs: monitor "
                                        "if present, dormant if not")
     sv.add_argument("--no-backfill", dest="backfill", action="store_false",

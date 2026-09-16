@@ -14,7 +14,11 @@ use radbeeper::{analysis, clock, entropy, history, log};
 use analysis::{
     bar_rows, level, spectrum_columns, Ladder, Level, Windows,
 };
+use std::collections::BTreeSet;
 use std::io::{Read, Write};
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -965,6 +969,7 @@ fn usage() {
     println!("  radbeeper random --check F recompute every line in an emission log");
     println!("  radbeeper backfill         fill the log's gaps from the counter's flash");
     println!("  radbeeper log info|pull    what history it holds, or download it");
+    println!("  radbeeper hotplug          sit in the session, open the monitor on plug-in");
     println!();
     println!("  -d, --device PATH          serial port (default: search /dev)");
     println!("  -b, --baud RATE            baud (default: try 115200 then 57600)");
@@ -978,9 +983,12 @@ fn usage() {
     println!("      --serial SERIAL        which counter an image came from");
     println!("      --bytes N              how much flash to read");
     println!("      --max-gap SECONDS      a longer hole ends the averages");
+    println!("      --poll SECONDS         hotplug: how often /dev is read (default 4)");
+    println!("      --settle SECONDS       hotplug: grace before a new node is opened (default 2)");
+    println!("      --tries N              hotplug: attempts per plug event (default 3)");
     println!("  -o, --output STEM          where log pull writes .bin and .csv");
     println!();
-    println!("export, site, recompute and hotplug are in the");
+    println!("export, site and recompute are in the");
     println!("Python program in the same repository. They are being ported; the");
     println!("log format is here already, and tests/test_differential.py is what");
     println!("says it is the same format and not a second dialect of it.");
@@ -1001,6 +1009,13 @@ fn main() {
     let mut bytes: Option<usize> = None;
     let mut max_gap = 300.0f64;
     let mut output: Option<String> = None;
+    // hotplug's three. Four seconds is a read of /dev fifteen times a minute,
+    // which costs nothing; settle is the grace a node gets between appearing
+    // and being opened, and tries is how many times one plug event is worth
+    // retrying before it is written off.
+    let mut poll: f64 = 4.0;
+    let mut settle: f64 = 2.0;
+    let mut tries: u32 = 3;
     let mut log_action = "info".to_string();
     let mut serial: Option<String> = None;
 
@@ -1047,8 +1062,11 @@ fn main() {
                 max_gap = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(max_gap)
             }
             "-o" | "--output" => output = next(&mut i),
+            "--poll" => poll = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(poll),
+            "--settle" => settle = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(settle),
+            "--tries" => tries = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(tries),
             "info" | "pull" if command == "log" => log_action = a.to_string(),
-            "export" | "site" | "hotplug" => {
+            "export" | "site" => {
                 eprintln!(
                     "radbeeper: `{}` is not in the Rust build -- it writes the log\n\
                      format, which the Python program owns. Use that one:\n\
@@ -1089,6 +1107,9 @@ fn main() {
             std::process::exit(check_random(&p));
         }
         std::process::exit(random(&spans, duration, device.as_deref(), baud, logs));
+    }
+    if command == "hotplug" {
+        std::process::exit(hotplug(device.as_deref(), baud, poll, settle, tries, duration));
     }
     if command == "service" {
         std::process::exit(service(
@@ -1138,6 +1159,220 @@ fn main() {
     }
 }
 
+// ----------------------------------------------------------------- hotplug ---
+//
+// WHY THE SESSION WATCHES AND udev DOES NOT. A udev rule fires as root, in
+// whatever environment udev happens to have: no WAYLAND_DISPLAY, no session
+// bus, and no idea which of several logged-in people a window would belong to.
+// Starting a background LOGGER from udev is right, and the rule Copal installs
+// does exactly that. Opening a WINDOW from udev is guesswork. So the two
+// halves are split at the line where the guessing starts: the rule starts the
+// service, and this -- one process inside the session, on the desktop's
+// autostart line -- opens the monitor.
+//
+// WHAT IT POLLS, AND WHAT IT DOES NOT. The names in /dev, never the serial
+// port. See counter::candidate_ports.
+
+/// Terminal emulators the autostart will open the monitor in, best first.
+/// foot is the Wayland session's; the rest are what an X11 one is likely to
+/// have. The first that exists wins.
+const TERMINALS: [(&str, &str); 5] = [
+    ("foot", "-e"),
+    ("alacritty", "-e"),
+    ("urxvt", "-e"),
+    ("xterm", "-e"),
+    ("st", "-e"),
+];
+
+/// The first terminal emulator on PATH, as (path, exec flag).
+fn find_terminal() -> Option<(PathBuf, &'static str)> {
+    find_terminal_in(&std::env::var_os("PATH")?)
+}
+
+/// The search itself, given the PATH to search.
+///
+/// Taking the value rather than reading the environment is what makes this
+/// testable: a test can lay out a directory of its own and ask which terminal
+/// would be picked, without setting a variable the whole process shares.
+fn find_terminal_in(path: &std::ffi::OsStr) -> Option<(PathBuf, &'static str)> {
+    // BEST FIRST, AND THE ORDER IS THE POINT: the whole of PATH is searched
+    // for foot before anything is searched for alacritty. A session that has
+    // both wants the one its desktop installed, not the one that happens to
+    // sit in an earlier directory.
+    for (term, flag) in TERMINALS {
+        for dir in std::env::split_paths(path) {
+            let p = dir.join(term);
+            if p.is_file() && is_executable(&p) {
+                return Some((p, flag));
+            }
+        }
+    }
+    None
+}
+
+fn is_executable(p: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p).map(|m| m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+}
+
+/// When a window is wanted, with no `/dev` and no processes in it.
+///
+/// This is the whole of `hotplug` that can be wrong, so it is the whole of
+/// `hotplug` that is tested. The loop around it does two things a test cannot
+/// usefully do: read `/dev`, and start a terminal.
+struct Watcher {
+    tries: u32,
+    max_tries: u32,
+    settle: f64,
+    due: f64,
+}
+
+impl Watcher {
+    /// A counter already plugged in at login is the same event as one plugged
+    /// in later, and gets the same retries rather than a special case. That is
+    /// the whole reason the autostart line runs this and not a one-shot.
+    fn new(max_tries: u32, settle: f64, anything_plugged_in: bool, now: f64) -> Watcher {
+        Watcher {
+            tries: if anything_plugged_in { max_tries } else { 0 },
+            max_tries,
+            settle,
+            due: now,
+        }
+    }
+
+    /// Should a window be opened at `now`? `window_open` is whether the last
+    /// one is still up.
+    fn should_open(&mut self, now: f64, window_open: bool) -> bool {
+        if window_open {
+            // It took: this plug event is dealt with, and no later tick is to
+            // open a second window for it.
+            self.tries = 0;
+            return false;
+        }
+        if self.tries > 0 && now >= self.due {
+            // THE RETRIES ARE FOR THE GAP between a node appearing and udev
+            // giving it its group: the first open can be EACCES on a node that
+            // is perfectly good a second later. A few attempts, then the event
+            // is written off -- a cable that is not a counter must not be
+            // opened again every four seconds for the rest of the session.
+            self.tries -= 1;
+            self.due = now + self.settle;
+            return true;
+        }
+        false
+    }
+
+    /// Nodes that were not there before are there now.
+    fn plugged(&mut self, now: f64) {
+        self.tries = self.max_tries;
+        self.due = now + self.settle;
+    }
+}
+
+/// Open the monitor in a terminal, if there is something to watch.
+///
+/// DELIBERATELY SILENT WHEN THERE IS NO COUNTER. A window that opens at every
+/// login to say "nothing is plugged in" gets closed at every login and then
+/// gets deleted. A busy port is silent too: it means the counter is already
+/// being read, by the service or by a monitor this session opened earlier, and
+/// neither wants a second window -- the status file belongs to whoever holds
+/// the port.
+fn open_window(device: Option<&str>, baud: Option<u32>) -> Option<Child> {
+    match counter::find(device, baud) {
+        Ok(_) => {}
+        Err(e) => {
+            if !e.busy {
+                log::write_status(&format!("dormant: {}", e.reason));
+            }
+            return None;
+        }
+    }
+    let (term, flag) = match find_terminal() {
+        Some(t) => t,
+        None => {
+            eprintln!("no terminal emulator found; run: radbeeper watch");
+            return None;
+        }
+    };
+    // AN ABSOLUTE PATH TO OURSELVES. The terminal inherits whatever directory
+    // the caller had, and hotplug is started from a session whose directory is
+    // not this checkout. A relative argv[0] works from the Makefile and
+    // nowhere else, which is the worst way for it to be wrong.
+    let me = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("radbeeper: cannot find my own path: {}", e);
+            return None;
+        }
+    };
+    let mut cmd = Command::new(&term);
+    cmd.arg(flag).arg(&me);
+    if let Some(d) = device {
+        cmd.arg("--device").arg(d);
+    }
+    if let Some(b) = baud {
+        cmd.arg("--baud").arg(b.to_string());
+    }
+    cmd.arg("watch");
+    // setsid, so the window outlives the watcher that opened it.
+    //
+    // SAFETY: setsid is async-signal-safe and touches nothing this process
+    // shares with the child between fork and exec.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    match cmd.spawn() {
+        Ok(child) => Some(child),
+        Err(e) => {
+            eprintln!("radbeeper: could not open {}: {}", term.display(), e);
+            None
+        }
+    }
+}
+
+/// `radbeeper hotplug`: open the monitor when a counter appears -- now, or in
+/// an hour's time.
+fn hotplug(
+    device: Option<&str>,
+    baud: Option<u32>,
+    poll: f64,
+    settle: f64,
+    tries: u32,
+    duration: Option<f64>,
+) -> i32 {
+    let mut seen: BTreeSet<String> = counter::candidate_ports().into_iter().collect();
+    let started = Instant::now();
+    let now = || started.elapsed().as_secs_f64();
+    let mut w = Watcher::new(tries, settle, !seen.is_empty(), now());
+    let mut child: Option<Child> = None;
+
+    loop {
+        // Is the last window still up? A window that was closed, or that never
+        // opened at all, leaves this None.
+        if let Some(c) = child.as_mut() {
+            match c.try_wait() {
+                Ok(Some(_)) | Err(_) => child = None,
+                Ok(None) => {}
+            }
+        }
+        if w.should_open(now(), child.is_some()) {
+            child = open_window(device, baud);
+        }
+        if duration.map_or(false, |d| now() >= d) {
+            return 0;
+        }
+        std::thread::sleep(Duration::from_secs_f64(poll));
+        let ports: BTreeSet<String> = counter::candidate_ports().into_iter().collect();
+        if ports.difference(&seen).next().is_some() {
+            w.plugged(now());
+        }
+        seen = ports;
+    }
+}
+
 // ----------------------------------------------------------------- tests ---
 #[cfg(test)]
 mod tests {
@@ -1146,6 +1381,117 @@ mod tests {
     /// The header the monitor draws on row 0, at its real length: a path, a
     /// baud rate, a firmware string and a fourteen-character serial.
     const HEAD: &str = "/dev/ttyUSB0 @ 115200 baud   GMC-320Re 4.26   serial F48824B8207F7E";
+
+    /// A counter already plugged in at login gets a window, and gets it at
+    /// once: the autostart line runs hotplug precisely so that "already there"
+    /// and "plugged in later" are one case.
+    #[test]
+    fn a_counter_already_there_at_login_opens_a_window() {
+        let mut w = Watcher::new(3, 2.0, true, 0.0);
+        assert!(w.should_open(0.0, false), "no waiting for a plug that already happened");
+    }
+
+    #[test]
+    fn an_empty_dev_opens_nothing_and_waits() {
+        let mut w = Watcher::new(3, 2.0, false, 0.0);
+        assert!(!w.should_open(0.0, false));
+        assert!(!w.should_open(100.0, false), "and goes on not opening one");
+        // Until something appears.
+        w.plugged(100.0);
+        assert!(!w.should_open(101.0, false), "the node gets its settling time");
+        assert!(w.should_open(102.0, false));
+    }
+
+    /// THE RETRIES ARE FOR THE GAP between a node appearing and udev giving it
+    /// its group: the first open can be EACCES on a node that is good a second
+    /// later. Three attempts, then the event is written off -- a cable that is
+    /// not a counter must not be opened again every four seconds all session.
+    #[test]
+    fn a_plug_event_is_retried_and_then_written_off() {
+        let mut w = Watcher::new(3, 2.0, true, 0.0);
+        let mut opens = 0;
+        let mut t = 0.0;
+        while t < 60.0 {
+            if w.should_open(t, false) {
+                opens += 1;
+            }
+            t += 1.0;
+        }
+        assert_eq!(opens, 3, "three tries for one plug event, and no more");
+    }
+
+    #[test]
+    fn a_window_that_took_stops_the_retries() {
+        let mut w = Watcher::new(3, 2.0, true, 0.0);
+        assert!(w.should_open(0.0, false), "the first attempt");
+        // It opened and is still up.
+        assert!(!w.should_open(4.0, true));
+        // And now it is closed again -- but the event was dealt with, so this
+        // does not open a second window behind the person who closed the first.
+        assert!(!w.should_open(8.0, false), "closing the window is not a plug event");
+        assert!(!w.should_open(400.0, false));
+    }
+
+    #[test]
+    fn a_second_counter_is_a_second_event() {
+        let mut w = Watcher::new(3, 2.0, true, 0.0);
+        assert!(w.should_open(0.0, false));
+        assert!(!w.should_open(4.0, true), "the first window took");
+        // Another node appears while that window is up.
+        w.plugged(10.0);
+        assert!(!w.should_open(11.0, false), "settling");
+        assert!(w.should_open(12.0, false), "and the new one gets its window");
+    }
+
+    /// The terminals are tried in order, and the list is the one the desktop
+    /// actually installs. foot is the Wayland session's.
+    #[test]
+    fn the_terminals_are_tried_best_first() {
+        assert_eq!(TERMINALS[0].0, "foot");
+        assert!(TERMINALS.iter().all(|(_, flag)| *flag == "-e"));
+        assert!(TERMINALS.iter().any(|(t, _)| *t == "xterm"), "an X11 session has one of these");
+    }
+
+    fn a_terminal_called(dir: &Path, name: &str, executable: bool) {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join(name);
+        std::fs::write(&p, b"#!/bin/sh\n").unwrap();
+        let mode = if executable { 0o755 } else { 0o644 };
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    #[test]
+    fn the_terminal_search_prefers_the_desktops_over_the_directory_order() {
+        let root = std::env::temp_dir().join(format!("radbeeper-term-{}", std::process::id()));
+        let (first, second) = (root.join("first"), root.join("second"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::create_dir_all(&second).unwrap();
+        // xterm sits in the EARLIER directory and foot in the later one. foot
+        // still wins: the list is ordered by what the desktop installs, not by
+        // what PATH happens to reach first.
+        a_terminal_called(&first, "xterm", true);
+        a_terminal_called(&second, "foot", true);
+        let path = std::env::join_paths([&first, &second]).unwrap();
+        let (found, flag) = find_terminal_in(&path).expect("one of them");
+        assert_eq!(found, second.join("foot"));
+        assert_eq!(flag, "-e");
+
+        // A file that is not executable is not a terminal.
+        let root2 = root.join("third");
+        std::fs::create_dir_all(&root2).unwrap();
+        a_terminal_called(&root2, "foot", false);
+        a_terminal_called(&root2, "st", true);
+        let path = std::env::join_paths([&root2]).unwrap();
+        assert_eq!(find_terminal_in(&path).unwrap().0, root2.join("st"));
+
+        // And a PATH with none of them opens nothing rather than guessing.
+        let empty = root.join("empty");
+        std::fs::create_dir_all(&empty).unwrap();
+        let path = std::env::join_paths([&empty]).unwrap();
+        assert!(find_terminal_in(&path).is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn the_big_digits_start_clear_of_the_header() {
