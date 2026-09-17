@@ -240,7 +240,26 @@ the bracket; it is the measurement that got coarser.
 radbeeper watch
 ```
 
-Five panels, top to bottom.
+**The monitor is also the logger.** Only one program can hold the counter's
+port, so while the monitor is open the service cannot log — and the log used to
+have a hole exactly where somebody was watching. Now `watch` does what the
+service does, with a screen on top:
+
+1. **On connect it reads the counter's history** — "reading the counter's
+   history to fill the log's gaps" — for fifteen or twenty seconds, and fills
+   whatever the log is missing, from the ring of flash the counter kept while
+   nothing was listening (see [§7](#7-backfill-from-the-counters-own-memory)).
+2. **It writes a row every 30 seconds**, through the same code the service
+   uses, to the same dated file.
+3. **It appends every random line**, to `random-<serial>.tsv` with its counts
+   and to `random-<serial>.hex` as a time and sixty-four digits.
+4. **It writes `index.html` and `random.html`** beside the log: after the
+   backfill, every hour, and when you quit.
+
+What it did sits beside the clock. `--no-log` turns all four off, and
+`--no-backfill` and `--no-export` turn off one each.
+
+Six panels, top to bottom.
 
 ### The number, big
 
@@ -300,14 +319,36 @@ A three-second CPM built from one sample is twenty times noisier than it looks,
 and drawing it as though it were settled is how a 25 CPM background reads as 60
 and somebody goes hunting for a leak.
 
-### The counts, five rows of them
+### The counts, compressing as they age
 
-One column per second, five rows tall. One row of block glyphs has eight levels,
-which is enough to say something happened and not enough to say how much; five
-rows have forty. Coloured by the same calm / raised / high bands as the numbers
-above it — a column is one second, so its count times sixty is the rate it
-implies, and a spike that reads red up there reads red down here without anyone
-converting in their head.
+Five rows tall. One row of block glyphs has eight levels, which is enough to say
+something happened and not enough to say how much; five rows have forty.
+Coloured by the same calm / raised / high bands as the numbers above it, so a
+spike that reads red up there reads red down here without anyone converting in
+their head.
+
+**Three tiers, finer to the right.** The right half is one second a bar, newest
+at the edge. The left half holds two more tiers, at *k* and *k²* seconds a bar,
+with *k* the smallest factor that makes the whole strip reach back as far as the
+spectrum's window — at 160 columns that is 80 s of seconds, then 40 bars of 3 s,
+then 40 bars of 9 s, 559 s in all against a 512-second spectrum. A second that
+scrolls off the fine tier lands in the newest bar of the next, which fills as
+its seconds arrive, and that bar in turn lands in the coarsest.
+
+```
+9s/bar · 6m                 F 3s/bar · 117s               F 1s/bar · 80s      ¦            ¦
+```
+
+The `F` above each tier marks the hand-over, with how long a bar is and how far
+back the tier reaches. Over the fine tier, a `¦` marks where each log row
+closes: the frames the log is cut into, scrolling left with the counts.
+
+- **A bar is a mean, not a sum.** A nine-second bar holding nine seconds of counts
+  would dwarf the fine tier, and the colours are rates. The same height is the
+  same rate in every tier.
+- **A bar does not change as it scrolls.** Its edges are fixed to the count of
+  samples, not to the screen, so a three-second bar always holds the same three
+  seconds; only the newest, still-filling bar moves.
 
 ### The spectrum, where flat is the good answer
 
@@ -327,10 +368,23 @@ The panel accumulates windows so a real line climbs out of the noise, and it
 will not call a peak on sigma alone, because the eye picks the tallest of 127
 bins and the largest of many draws is far bigger than any single one.
 [**How it decides, and why it is cautious →**](docs/the-spectrum.md)
-### The random line
+### The random line, and the clock
 
 256 bits of hex, out of decay timing, refreshed whenever the pool has earned
-them — see [§6](#6-random-numbers-out-of-decay).
+them — see [§6](#6-random-numbers-out-of-decay). Under it, the time now, so a
+screenshot says when it was taken; beside that, what the log last did.
+
+### The log, scrolling
+
+The bottom of the screen is the log itself: its own header, then its newest
+rows, oldest scrolling off the top like a terminal. They are the cells written
+to disk, aligned into columns and cut at the screen's edge, so what is on screen
+is what is in the file. Rows filled in from the counter's history are dim; an
+empty field is a dim `-`, because a window that was not full yet is not a zero.
+
+On a screen under 36 rows the charts go compact — the counts in three rows, the
+spectrum in one — to leave the table six. From 36 rows the charts are full size
+again and the table takes every row after 30.
 
 ### Line output, for a pipe or a log
 
@@ -361,7 +415,8 @@ radbeeper --source sim --sim-cpm 400 watch
 radbeeper service         # what the boot service runs, in the foreground
 ```
 
-One row every 30 seconds into a dated file per counter:
+One row every 30 seconds into a dated file per counter. `watch` writes the same
+rows while it is open, so it does not matter which of the two has the port:
 
 ![the log on disk](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/log-output.png)
 
@@ -519,6 +574,14 @@ radbeeper random --check logs/random-F48824B8207F7E.tsv
 That is an audit trail. It says nothing about the *next* line, which comes from
 decays that have not happened yet.
 
+**For the numbers alone**, every line is also appended to
+`random-<serial>.hex` — the time it was drawn, two spaces, sixty-four hex
+digits — by `random` and by `watch` alike:
+
+```sh
+tail -f ~/.local/share/radbeeper/random-F48824B8207F7E.hex | cut -c22-
+```
+
 > Treat this as a good physical entropy source, not a certified one. It has not
 > been through a statistical test battery, and 256 bits of accounted min-entropy
 > is a claim about the model of the source, not a proof about the output.
@@ -570,6 +633,9 @@ place, the column is empty.
 radbeeper export --logs logs -o index.html
 ```
 
+`watch` writes both pages into the log directory by itself — after its
+backfill, every hour and on quit — so a monitor left open keeps them current.
+
 One self-contained page: a how-to, summary cards, a log-scale plot of counts per
 minute by the hour, a by-day table and the latest rows. **No JavaScript, no web
 fonts, no CDN** — the chart is SVG the program draws itself, and the full record
@@ -598,7 +664,7 @@ same two pages, byte for byte, and `tests/test_differential.py` is what says so.
 | | |
 |---|---|
 | `probe` | find the counter and say what it is |
-| `watch` | the monitor; `--plain` for line output |
+| `watch` | the monitor, logging while it is open; `--no-log` to only watch |
 | `clock` | how far the counter's clock is out; `--set` corrects it from this machine |
 | `cpm` | one 30-second average, for a script. Takes 30 s, and says so |
 | `service` | monitor and log; dormant when there is nothing to read |
@@ -607,12 +673,13 @@ same two pages, byte for byte, and `tests/test_differential.py` is what says so.
 | `random` | 256 bits from decay timing, with the accounting for it |
 | `recompute` | fill long-window columns in existing logs from their own counts |
 | `site` | where a counter is, and where it has been |
-| `export` | build `index.html` from the logs |
+| `export` | build `index.html` and `random.html` from the logs; `watch` does it hourly |
 | `log info` / `log pull` | how much history flash, and download it |
 
 Options: `--source sim`, `--sim-cpm`, `--seed`, `--spans 3,30,300`,
 `--cpm-per-usvh`, `--log-every`, `--duration`, `--clock-offset`,
-`--backfill-bytes`, `--max-gap`, `--entropy-bits`, `--device`, `--baud`.
+`--backfill-bytes`, `--max-gap`, `--entropy-bits`, `--device`, `--baud`,
+`--no-log`, `--no-backfill`, `--no-export`.
 
 ## More documentation
 
