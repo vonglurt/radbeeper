@@ -89,7 +89,10 @@ import sys
 import termios
 import time
 
-VERSION = "0.1.0"
+# Kept in step with Cargo.toml by hand and by test: both programs write the
+# version into the pages they export, so a drift here is five differential
+# failures and no other symptom. tests/test_version.py is the guard.
+VERSION = "0.3.0"
 
 # ---------------------------------------------------------------- protocol ---
 #
