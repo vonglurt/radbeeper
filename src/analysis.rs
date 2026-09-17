@@ -401,15 +401,29 @@ pub struct Tier {
     pub values: Vec<Option<f64>>,
 }
 
+/// How many stretches the strip is cut into. Four: a second a bar at the
+/// right, then `k`, `k*k` and `k*k*k` as it ages leftwards.
+pub const TIERS: usize = 4;
+
 /// The counts, as a strip that compresses as it ages.
 ///
-/// The right half is a second a bar, newest at the right edge. The left half
-/// is two more tiers, the nearer at `k` seconds a bar and the farther at
-/// `k * k`, with `k` the smallest whole factor that makes the strip reach
-/// back `span` seconds -- the spectrum's window, so the strip and the
-/// spectrum are views of the same stretch of time. A second scrolling off
-/// the left of the fine tier lands in the newest bar of the next one, which
-/// fills as its seconds arrive; that bar in turn lands in the coarsest.
+/// Four tiers of equal width, newest at the right edge. The rightmost is a
+/// second a bar; each one to its left holds `k` times as long in a bar, with
+/// `k` the smallest whole factor that makes the strip reach back `span`
+/// seconds -- the spectrum's window, so the strip and the spectrum are views
+/// of the same stretch of time. A second scrolling off the left of the fine
+/// tier lands in the newest bar of the next one, which fills as its seconds
+/// arrive; that bar in turn lands in the next, and that one in the last.
+///
+/// EQUAL WIDTHS, so each tier costs twice the time of the one on its right:
+/// at k = 2 and a quarter of 160 columns, 40 s of seconds, then 80 s of
+/// pairs, 160 s of fours and 320 s of eights. Every tier leftwards takes a
+/// bar half as often and twice as long to fill, and the strip as a whole
+/// reaches back an hour of counts in the width of a terminal.
+///
+/// It was three tiers, with the fine one taking half the width. The fourth
+/// came out of that half: a second a bar for forty seconds is as much of the
+/// present as anyone reads, and the room buys another doubling of the past.
 ///
 /// BAR EDGES ARE FIXED TO THE SAMPLE COUNT, not to the screen: a k-second bar
 /// always covers the same k samples, so a bar does not change as the strip
@@ -420,11 +434,24 @@ pub struct Tier {
 /// the fine tier, and the colour bands are rates. The same height means the
 /// same rate in every tier.
 pub fn tiers(samples: &[u32], first: usize, width: usize, span: usize) -> Vec<Tier> {
-    let right = width - width / 2;
-    let mid = (width / 2) / 2;
-    let far = width / 2 - mid;
+    // Equal quarters, and what does not divide goes to the fine tier, which
+    // is the one whose rightmost bar is the second happening now.
+    let q = width / TIERS;
+    let fine_cols = width - q * (TIERS - 1);
+    // The smallest k whose four tiers reach back as far as the spectrum
+    // looks. Each tier left multiplies by k again, so the reach grows as
+    // k*k*k and the answer is nearly always 2.
+    let reach = |k: usize| -> usize {
+        let mut unit = 1usize;
+        let mut total = fine_cols;
+        for _ in 1..TIERS {
+            unit *= k;
+            total += q * unit;
+        }
+        total
+    };
     let mut k = 2usize;
-    while right + mid * k + far * k * k < span && k < 60 {
+    while reach(k) < span && k < 60 {
         k += 1;
     }
     let n = (first + samples.len()) as i64;
@@ -438,33 +465,32 @@ pub fn tiers(samples: &[u32], first: usize, width: usize, span: usize) -> Vec<Ti
             (lo..hi).map(|a| at(a).unwrap_or(0) as f64).sum::<f64>() / (hi - lo) as f64
         })
     };
-    let fine: Vec<Option<f64>> = (0..right as i64)
-        .map(|j| at(n - right as i64 + j).map(|c| c as f64))
+    let fine: Vec<Option<f64>> = (0..fine_cols as i64)
+        .map(|j| at(n - fine_cols as i64 + j).map(|c| c as f64))
         .collect();
-    // The fine tier starts at b1; everything older is grouped.
-    let b1 = n - right as i64;
-    let ki = k as i64;
-    let top = (b1 - 1).div_euclid(ki);
-    let near: Vec<Option<f64>> = (0..mid as i64)
-        .map(|j| {
-            let g = top - mid as i64 + 1 + j;
-            mean(g * ki, (g * ki + ki).min(b1))
-        })
-        .collect();
-    let b2 = (top - mid as i64 + 1) * ki;
-    let kk = ki * ki;
-    let top2 = (b2 - 1).div_euclid(kk);
-    let old: Vec<Option<f64>> = (0..far as i64)
-        .map(|j| {
-            let g = top2 - far as i64 + 1 + j;
-            mean(g * kk, (g * kk + kk).min(b2))
-        })
-        .collect();
-    vec![
-        Tier { columns: far, seconds: k * k, values: old },
-        Tier { columns: mid, seconds: k, values: near },
-        Tier { columns: right, seconds: 1, values: fine },
-    ]
+    let mut out = vec![Tier { columns: fine_cols, seconds: 1, values: fine }];
+    // Walk left a tier at a time. `b` is where the tier to the right begins:
+    // everything older than it is this tier's to group, and the group it
+    // starts on becomes the boundary for the next one out.
+    let mut b = n - fine_cols as i64;
+    let mut unit = 1i64;
+    for _ in 1..TIERS {
+        unit *= k as i64;
+        let c = q as i64;
+        let top = (b - 1).div_euclid(unit);
+        let values: Vec<Option<f64>> = (0..c)
+            .map(|j| {
+                let g = top - c + 1 + j;
+                mean(g * unit, (g * unit + unit).min(b))
+            })
+            .collect();
+        b = (top - c + 1) * unit;
+        out.push(Tier { columns: q, seconds: unit as usize, values });
+    }
+    // Coarsest first: the strip is drawn left to right, and time runs that
+    // way too.
+    out.reverse();
+    out
 }
 
 /// `bar_rows` against a peak given from outside, so tiers drawn side by side
@@ -806,10 +832,29 @@ mod tests {
     #[test]
     fn the_strip_reaches_back_the_spectrum_window() {
         let t = tiers(&[], 0, 159, 512);
-        assert_eq!(t.iter().map(|x| x.columns).collect::<Vec<_>>(), vec![40, 39, 80]);
-        assert_eq!(t.iter().map(|x| x.seconds).collect::<Vec<_>>(), vec![9, 3, 1]);
+        assert_eq!(t.len(), TIERS);
+        // Four quarters, the odd three columns to the fine tier, and k = 2:
+        // 39*8 + 39*4 + 39*2 + 42 = 588 seconds in 159 columns.
+        assert_eq!(t.iter().map(|x| x.columns).collect::<Vec<_>>(), vec![39, 39, 39, 42]);
+        assert_eq!(t.iter().map(|x| x.seconds).collect::<Vec<_>>(), vec![8, 4, 2, 1]);
         let reach: usize = t.iter().map(|x| x.columns * x.seconds).sum();
         assert!(reach >= 512, "{}", reach);
+    }
+
+    #[test]
+    fn every_tier_leftwards_is_one_more_doubling() {
+        // The whole point of the strip: a bar arrives half as often and the
+        // tier takes twice as long to fill, each step to the left. Written
+        // down as a test because it is the property, not the layout, that
+        // must survive a change to either.
+        let t = tiers(&[], 0, 160, 512);
+        for w in t.windows(2) {
+            let (left, right) = (&w[0], &w[1]);
+            assert_eq!(left.seconds, right.seconds * 2,
+                       "a bar left is not two bars right");
+            assert_eq!(left.columns * left.seconds, right.columns * right.seconds * 2,
+                       "a tier left does not take twice as long to fill");
+        }
     }
 
     #[test]
@@ -818,20 +863,30 @@ mod tests {
         // says which samples it holds.
         let s: Vec<u32> = (0..200).collect();
         let t = tiers(&s, 0, 20, 30);
-        let (far, near, fine) = (&t[0], &t[1], &t[2]);
-        assert_eq!((far.columns, near.columns, fine.columns), (5, 5, 10));
-        // The fine tier is the newest ten, one each.
-        assert_eq!(fine.values[9], Some(199.0));
-        assert_eq!(fine.values[0], Some(190.0));
-        // k = 2 reaches 10 + 10 + 20 = 40 >= 30. The near tier's newest bar
-        // is samples 188..190, the next 186..188.
+        let (oldest, far, near, fine) = (&t[0], &t[1], &t[2], &t[3]);
+        assert_eq!(
+            (oldest.columns, far.columns, near.columns, fine.columns),
+            (5, 5, 5, 5)
+        );
+        // The fine tier is the newest five, one each.
+        assert_eq!(fine.values[4], Some(199.0));
+        assert_eq!(fine.values[0], Some(195.0));
+        // k = 2 reaches 5 + 10 + 20 + 40 = 75 >= 30. The near tier's newest
+        // bar is the one sample 194 that is not in the fine tier yet; the
+        // next holds 192 and 193.
         assert_eq!(near.seconds, 2);
-        assert_eq!(near.values[4], Some(188.5));
-        assert_eq!(near.values[3], Some(186.5));
-        // The far tier starts where the near tier's oldest bar does (180),
-        // in fours: 176..180 is 177.5.
+        assert_eq!(near.values[4], Some(194.0));
+        assert_eq!(near.values[3], Some(192.5));
+        // The far tier starts where the near tier's oldest bar does (186),
+        // in fours: 184..186 is 184.5, and the four before it 180..184.
         assert_eq!(far.seconds, 4);
-        assert_eq!(far.values[4], Some(177.5));
+        assert_eq!(far.values[4], Some(184.5));
+        assert_eq!(far.values[3], Some(181.5));
+        // And the new one, in eights, from where the far tier began (168):
+        // 160..168 is 163.5.
+        assert_eq!(oldest.seconds, 8);
+        assert_eq!(oldest.values[4], Some(163.5));
+        assert_eq!(oldest.values[3], Some(155.5));
     }
 
     #[test]
@@ -841,18 +896,19 @@ mod tests {
         let after = tiers(&s[..302], 0, 40, 80);
         // Two seconds later, with k = 2, every complete near bar has moved one
         // column left and is otherwise the same bar.
-        let k = before[1].seconds;
+        let k = before[2].seconds;
         assert_eq!(k, 2);
-        let b = &before[1].values;
-        let a = &after[1].values;
+        let b = &before[2].values;
+        let a = &after[2].values;
         assert_eq!(&a[..a.len() - 2], &b[1..b.len() - 1]);
     }
 
     #[test]
     fn early_on_the_old_tiers_are_empty_not_zero() {
         let t = tiers(&[3, 4, 5], 0, 40, 512);
-        assert!(t[0].values.iter().all(|v| v.is_none()));
-        assert!(t[1].values.iter().all(|v| v.is_none()));
-        assert_eq!(t[2].values.iter().filter(|v| v.is_some()).count(), 3);
+        for coarse in &t[..TIERS - 1] {
+            assert!(coarse.values.iter().all(|v| v.is_none()));
+        }
+        assert_eq!(t[TIERS - 1].values.iter().filter(|v| v.is_some()).count(), 3);
     }
 }

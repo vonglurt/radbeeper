@@ -55,6 +55,36 @@ fn digits_left(head: &str) -> usize {
     head.chars().count() + 3
 }
 
+/// The widest reading there is. `<GETCPM>>` answers in two bytes, so 65535
+/// is the most this counter can ever say, and the big readout keeps room for
+/// all five digits whether or not this second needs them.
+const MAX_READOUT: &str = "65535";
+
+/// How many columns the readout is allowed, and always takes.
+fn readout_width() -> usize {
+    big_number(MAX_READOUT)
+        .iter()
+        .map(|r| r.chars().count())
+        .max()
+        .unwrap_or(0)
+}
+
+/// What is drawing this screen, for a screen that outlives its terminal: a
+/// recording, a screenshot pasted into somebody's issue. Out of the manifest,
+/// so it cannot drift from the binary.
+fn nameplate() -> String {
+    format!("{} {}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+}
+
+/// Where the nameplate goes: hard against the right edge of the top row, in
+/// the corner the readout does not reach -- and nowhere at all if it would
+/// come within two columns of `busy_to`. The counter has priority; a version
+/// string is worth nothing beside a number somebody is watching.
+fn nameplate_left(width: usize, busy_to: usize, plate: usize) -> Option<usize> {
+    let x = width.checked_sub(plate)?;
+    (x > busy_to + 1).then_some(x)
+}
+
 fn big_number(text: &str) -> Vec<String> {
     let mut rows = vec![String::new(); BIG_ROWS];
     for ch in text.chars() {
@@ -375,8 +405,10 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         let hv = h - tl;
         out.clear();
         out.push_str("\x1b[2J");
-        // No title row: the program's name is the one thing on this screen
-        // nobody needs telling. The firmware moves in beside the port.
+        // The port, the firmware beside it, the serial. The program's own
+        // name is not here: it goes in the top right corner, out of the way
+        // of the readout, because a header that grows pushes the big number
+        // right and the number is what people are looking at.
         let head = format!(
             "{} @ {} baud   {}   serial {}",
             c.path, c.baud, c.version, c.serial_no
@@ -426,18 +458,32 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
             Some(v) => format!("{:.0}", v),
             None => "--".to_string(),
         });
-        let wide = digits.iter().map(|d| d.chars().count()).max().unwrap_or(0);
         // Clear of the header, which is on the row the digits start on. This
         // was a constant 54 and the header outgrew it: a serial is fourteen
         // characters and the firmware sits beside the port, so the digits
         // were landing on top of the counter's own name. Measured, not
-        // guessed -- the same fix the Python carries.
+        // guessed.
         let left = digits_left(&head);
-        if width > left + wide + 6 && h > BIG_ROWS {
+        // RESERVED, NOT MEASURED. The block is as wide as 65535 draws even
+        // while the reading is 20, so the readout neither shifts under the
+        // eye as a digit arrives nor -- which is worse -- gets dropped for
+        // want of room at the one moment it is worth reading. Everything
+        // optional on this screen is placed around this block, not before it.
+        let reserve = readout_width();
+        let readout = width >= left + reserve && h > BIG_ROWS;
+        if readout {
             let tint = headline.map(|v| colour_for(level(v))).unwrap_or(DIM);
             for (i, d) in digits.iter().enumerate() {
                 out.push_str(&format!("{}{}{}{}", at(i, left), tint, d, OFF));
             }
+        }
+        // The top right corner, which the readout reaches only on a narrow
+        // terminal: what program this is and which version drew the screen.
+        // It is the last thing placed and the first thing dropped.
+        let plate = nameplate();
+        let busy = if readout { left + reserve } else { head.chars().count() };
+        if let Some(x) = nameplate_left(width, busy, plate.chars().count()) {
+            out.push_str(&format!("{}{}{}{}", at(0, x), DIM, plate, OFF));
         }
 
         // Two rows of air, then the counts. It was three; the third is the
@@ -445,9 +491,11 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         row += 2;
         let counts_rows = if hv > row + 12 { 5 } else if hv > row + 8 { 3 } else { 1 };
         // THE COUNTS, COMPRESSING AS THEY AGE. A second a bar on the right,
-        // then k seconds, then k*k, reaching back as far as the spectrum's
-        // window -- see analysis::tiers. One scale for all three, so the
-        // same height is the same rate wherever it is drawn.
+        // then k seconds, then k*k and k*k*k, reaching back as far as the
+        // spectrum's window -- see analysis::tiers. Four tiers of equal
+        // width, so each one leftwards is another doubling and the strip
+        // holds ten minutes where three tiers held five. One scale for all
+        // four, so the same height is the same rate wherever it is drawn.
         let counts: Vec<u32> = w.samples.iter().map(|&(_, c)| c).collect();
         let strip = tiers(&counts, w.first_index(), width - 1, spec.window);
         let peak = strip
@@ -1952,6 +2000,46 @@ mod tests {
         // implementations, and nowhere near where anyone was looking for it.
         assert!(HEAD.chars().count() > 54, "the header outgrew the old constant");
         assert!(digits_left(HEAD) > HEAD.chars().count());
+    }
+
+    #[test]
+    fn the_readout_has_room_for_everything_the_counter_can_say() {
+        // Two bytes of CPM is 0..=65535, and every one of them has to fit in
+        // the block the readout reserves -- at the reference width of 160
+        // columns, beside the longest header a 320 produces.
+        let reserve = readout_width();
+        for v in [0u16, 7, 42, 999, 9999, u16::MAX] {
+            let drawn = big_number(&v.to_string())
+                .iter()
+                .map(|r| r.chars().count())
+                .max()
+                .unwrap_or(0);
+            assert!(drawn <= reserve, "{} needs {} of {}", v, drawn, reserve);
+        }
+        assert!(digits_left(HEAD) + reserve <= 160,
+                "the readout does not fit the terminal the shots are taken in");
+    }
+
+    #[test]
+    fn the_nameplate_names_the_program_and_its_version() {
+        // Out of the manifest, not a string somebody remembers to bump.
+        let plate = nameplate();
+        assert!(plate.starts_with(env!("CARGO_PKG_NAME")));
+        assert!(plate.ends_with(env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn the_nameplate_yields_the_corner_to_the_readout() {
+        let plate = nameplate().chars().count();
+        let left = digits_left(HEAD);
+        let busy = left + readout_width();
+        // 160 columns: the corner is free and the plate sits in it.
+        let x = nameplate_left(160, busy, plate).expect("no corner at 160");
+        assert_eq!(x + plate, 160, "not against the right edge");
+        assert!(x > busy, "drawn over the readout");
+        // Narrow enough that the readout wants those columns: nothing.
+        assert_eq!(nameplate_left(busy + plate, busy, plate), None);
+        assert_eq!(nameplate_left(40, busy, plate), None);
     }
 
     #[test]
