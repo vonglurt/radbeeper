@@ -146,7 +146,7 @@ def main():
 
     # ---------------------------------------------------------- monitor ---
     if any(want(n) for n in ("watch", "watch-filling", "watch-spectrum",
-                             "watch-20s", "watch-fast")):
+                             "watch-20s", "watch-fast", "watch-3to4")):
         if not (a.keep and os.path.exists(cast("watch-long"))):
             print("recording %d s of the monitor -- this takes that long"
                   % seconds)
@@ -195,6 +195,25 @@ def main():
                 "-o", os.path.join(SHOTS, "watch-fast.gif"),
                 "--from", step, "--to", seconds, "--step", step,
                 "--speed", step * 10, "--rows", MONITOR_ROWS, "--size", 11)
+
+        if want("watch-3to4"):
+            # The README's first moving picture: the fourth minute, 180 s to
+            # 240 s, a frame a second played at fifteen times speed -- sixty
+            # seconds in four. A minute is what it takes for the monitor to
+            # show it is a monitor and not a screenshot: two log rows close,
+            # the 30 s window walks, the countdowns count and the strip ages
+            # a bar to the left. Short enough that a reader watches all of it
+            # before deciding whether to read on.
+            #
+            # It needs four minutes of recording. A shorter --monitor-seconds
+            # takes the last minute there is instead of claiming a fourth one
+            # that was never recorded.
+            stop = min(240, seconds)
+            run(sys.executable, RECORD, "gif", cast("watch-long"),
+                "-o", os.path.join(SHOTS, "watch-3to4.gif"),
+                "--from", max(0, stop - 60), "--to", stop,
+                "--step", 1, "--speed", 15,
+                "--rows", MONITOR_ROWS, "--size", 13)
 
     # ------------------------------------------------------------ probe ---
     if want("probe"):

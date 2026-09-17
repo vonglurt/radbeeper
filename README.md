@@ -26,6 +26,18 @@ pass-through produces no `/dev/ttyUSB0`.
 
 ![the monitor](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch.png)
 
+**The fourth minute, in four seconds.** Seconds 180 to 240 of the session
+below, a frame a second played at fifteen times speed:
+
+![the monitor, the fourth minute at 15x](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-3to4.gif)
+
+A minute is how long it takes to see that this is a monitor and not a
+screenshot. The 3-second window swings between 0 and 160 CPM while the
+30-second one walks 28 up to 46 and back down to 22 — the last of the high
+readings draining out of it. Two log rows close, thirty seconds apart. The
+5-minute window counts itself down from 140 s to go to 79, the spectrum picks
+up its second window, and the counts strip slides left a bar at a time.
+
 **Four minutes of it, at forty times speed.** A whole session of the native
 build against the counter these logs came from, a frame every four seconds,
 recorded while something outside, probably construction, was
