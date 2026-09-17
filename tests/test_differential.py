@@ -1254,3 +1254,53 @@ class TestThePageReadsColumnsByName(unittest.TestCase):
         if not os.path.exists(self.BINARY):
             self.skipTest("no release binary to run")
         self.assertIn(self.WANT, self.page([self.BINARY]))
+
+
+class TestAShortReplyIsNotTheEndOfTheFlash(unittest.TestCase):
+    """A <SPIR>> reply that loses bytes is asked again, not taken as the end.
+
+    One short reply ended the whole read: a monitor's backfill got the oldest
+    7 KiB of the 64 it asked for, added nothing, and left a thirteen-minute
+    hole the counter had recorded.
+    """
+
+    BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
+
+    def test_log_pull_gets_every_byte_through_two_short_replies(self):
+        import tempfile
+        if not os.path.exists(self.BINARY):
+            self.skipTest("no release binary to run")
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fake_gmc import FakeGMC, build_history
+        size = 16 * 1024
+        dev = FakeGMC(cpm=60.0, seed=4,
+                      history=build_history(seconds=3000, size=size))
+        dev.start()
+        try:
+            stem = os.path.join(tempfile.mkdtemp(), "h")
+            dev.short_spir = 2
+            out = subprocess.run(
+                [self.BINARY, "-d", dev.path, "log", "pull", "-o", stem,
+                 "--bytes", str(size)],
+                capture_output=True, text=True, timeout=180)
+        finally:
+            dev.stop()
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        with open(stem + ".bin", "rb") as f:
+            self.assertEqual(f.read(), dev.history[:size])
+
+    def test_the_python_reader_gets_every_byte_through_two_short_replies(self):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fake_gmc import FakeGMC, build_history
+        size = 16 * 1024
+        dev = FakeGMC(cpm=60.0, seed=4,
+                      history=build_history(seconds=3000, size=size))
+        dev.start()
+        try:
+            c = radbeeper.identify(dev.path, baud=115200)
+            dev.short_spir = 2
+            got = c.read_history(0, size)
+            c.close()
+        finally:
+            dev.stop()
+        self.assertEqual(got, dev.history[:size])

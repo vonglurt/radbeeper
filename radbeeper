@@ -448,7 +448,15 @@ class Counter:
             a = address + len(out)
             cmd = b"<SPIR" + bytes([(a >> 16) & 0xFF, (a >> 8) & 0xFF, a & 0xFF,
                                     (n >> 8) & 0xFF, n & 0xFF]) + b">>"
-            chunk = self._ask(cmd, n, timeout=5.0)
+            # A short reply is asked again before it is believed: with no
+            # framing, bytes lost on the link look like the end of the flash.
+            # See src/counter.rs :: read_history.
+            for attempt in range(3):
+                if attempt:
+                    time.sleep(0.3)
+                chunk = self._ask(cmd, n, timeout=5.0)
+                if len(chunk) == n:
+                    break
             if not chunk:
                 break
             out += chunk

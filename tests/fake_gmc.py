@@ -99,6 +99,9 @@ class FakeGMC(threading.Thread):
         # Seconds its real-time clock runs ahead of this machine's; negative
         # is behind. <SETDATETIME>> sets it, as setting the real one does.
         self.clock_ahead = 0.0
+        # How many <SPIR>> replies to cut short before answering whole: a
+        # link that drops bytes now and then, which the reader must survive.
+        self.short_spir = 0
         self.running = True
         self.commands = []
 
@@ -191,7 +194,11 @@ class FakeGMC(threading.Thread):
             if len(args) == 5:
                 addr = (args[0] << 16) | (args[1] << 8) | args[2]
                 length = (args[3] << 8) | args[4]
-                self._send(self.history[addr:addr + length])
+                reply = self.history[addr:addr + length]
+                if self.short_spir > 0:
+                    self.short_spir -= 1
+                    reply = reply[:len(reply) // 3]
+                self._send(reply)
 
 
 def main():

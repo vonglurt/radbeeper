@@ -203,11 +203,27 @@ impl Counter {
             cmd.push(((n >> 8) & 0xFF) as u8);
             cmd.push((n & 0xFF) as u8);
             cmd.extend_from_slice(b">>");
-            self.port.flush_input();
-            let _ = self.port.write_all(&cmd);
-            let chunk = self
-                .port
-                .read_exact_or_timeout(n, Duration::from_millis(5000));
+            // A SHORT REPLY IS ASKED AGAIN BEFORE IT IS BELIEVED. The reply
+            // has no framing, so a chunk that lost bytes on the link and the
+            // real end of the flash look the same -- and taking the first for
+            // the second cut a monitor's backfill off after its oldest 7 KiB,
+            // so the newest hours, the ones it was reading for, were never
+            // read. The port is drained between tries so a late remainder of
+            // the last reply cannot be taken for the start of the next.
+            let mut chunk = Vec::new();
+            for attempt in 0..3 {
+                if attempt > 0 {
+                    std::thread::sleep(Duration::from_millis(300));
+                }
+                self.port.flush_input();
+                let _ = self.port.write_all(&cmd);
+                chunk = self
+                    .port
+                    .read_exact_or_timeout(n, Duration::from_millis(5000));
+                if chunk.len() == n {
+                    break;
+                }
+            }
             if chunk.is_empty() {
                 break;
             }
