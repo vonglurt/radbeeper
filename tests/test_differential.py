@@ -881,6 +881,8 @@ class TestTheMonitorLogsWhileItIsOpen(unittest.TestCase):
         names = sorted(os.listdir(logs))
         tsv = [n for n in names if n.startswith("cpm-")]
         self.assertEqual(len(tsv), 1, names)
+        # Exported after the backfill and again on quit, beside the log.
+        self.assertIn("index.html", names)
         with open(os.path.join(logs, tsv[0])) as f:
             body = [l.split("\t") for l in f.read().splitlines()
                     if l and not l.startswith("#")]

@@ -190,6 +190,24 @@ struct WatchLog {
     dir: PathBuf,
     every: f64,
     backfill: Option<(usize, f64)>,
+    /// index.html and random.html into `dir`, and how often while open.
+    export_every: Option<f64>,
+}
+
+/// Write the pages into the log directory, and say so in a few words.
+///
+/// WHEN, NOT HOW OFTEN. After the backfill, so the page carries the gap it
+/// just filled; every `export_every` while open, so a page somebody has up
+/// is at most that stale; and on quit, so the last thing the monitor saw is
+/// on it. Not on every row: a month of log is tens of thousands of rows and
+/// the page is rebuilt from all of them.
+fn export_pages(dir: &Path, cpm_per_usvh: f64) -> String {
+    match radbeeper::export::export(dir, &dir.join("index.html"), true, cpm_per_usvh,
+                                    radbeeper::export::DEFAULT_TITLE, None) {
+        Ok(r) => format!("exported {} rows {}", r.rows,
+                         clock::format(clock::now(), "%H:%M")),
+        Err(e) => format!("NOT EXPORTED: {}", e),
+    }
 }
 
 /// How many rows of log the table at the bottom gets on a screen `h` tall.
@@ -298,7 +316,12 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
             table.push_back(cells);
         }
         logger = Some(Logger::new(spans, wl.dir.clone(), &c.serial_no, wl.every));
+        if wl.export_every.is_some() {
+            let done = export_pages(&wl.dir, cpm_per_usvh);
+            table_note = if table_note.is_empty() { done } else { format!("{}   {}", table_note, done) };
+        }
     }
+    let mut exported = Instant::now();
     let mut w = Windows::new(spans);
     let mut ladder = Ladder::new();
     let mut pool = entropy::Entropy::default();
@@ -334,6 +357,14 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
                 }
                 Ok(None) => {}
                 Err(e) => table_note = format!("NOT LOGGING: {}", e),
+            }
+        }
+        if let Some(wl) = logging.as_ref() {
+            if let Some(e) = wl.export_every {
+                if exported.elapsed().as_secs_f64() >= e {
+                    exported = Instant::now();
+                    table_note = export_pages(&wl.dir, cpm_per_usvh);
+                }
             }
         }
 
@@ -602,6 +633,11 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
     if let Some(lg) = logger.as_mut() {
         let averages: Vec<Option<f64>> = spans.iter().map(|s| w.average(*s)).collect();
         lg.finish(&averages);
+    }
+    if let Some(wl) = logging.as_ref() {
+        if wl.export_every.is_some() {
+            export_pages(&wl.dir, cpm_per_usvh);
+        }
     }
     c.heartbeat(false);
 }
@@ -1355,6 +1391,7 @@ fn usage() {
              log::g(log::DEFAULT_LOG_EVERY));
     println!("      --logs DIR             where service, watch and backfill write, and export reads");
     println!("      --no-log               watch without writing anything");
+    println!("      --no-export            watch without writing index.html (hourly, and on quit)");
     println!("      --no-backfill          skip reading the counter's history at start");
     println!("      --image FILE           backfill from a saved .bin, no counter");
     println!("      --serial SERIAL        which counter an image came from");
@@ -1391,6 +1428,7 @@ fn main() {
     let mut max_gap = 300.0f64;
     let mut no_backfill = false;
     let mut no_log = false;
+    let mut no_export = false;
     let mut set_clock = false;
     let mut output: Option<String> = None;
     // hotplug's three. Four seconds is a read of /dev fifteen times a minute,
@@ -1447,6 +1485,7 @@ fn main() {
             "--bytes" | "--backfill-bytes" => bytes = next(&mut i).and_then(|v| v.parse().ok()),
             "--no-backfill" => no_backfill = true,
             "--no-log" => no_log = true,
+            "--no-export" => no_export = true,
             "--set" => set_clock = true,
             "--max-gap" => {
                 max_gap = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(max_gap)
@@ -1560,6 +1599,7 @@ fn main() {
                 dir: logs.clone().unwrap_or_else(log::state_dir),
                 every: log_every,
                 backfill: (!no_backfill).then(|| (bytes.unwrap_or(64 * 1024), max_gap)),
+                export_every: (!no_export).then_some(3600.0),
             });
             watch(&c, &spans, cpm_per_usvh, duration, logging)
         }
