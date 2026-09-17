@@ -19,9 +19,11 @@ Skipped, not failed, when there is no Rust toolchain: the Python suite has to
 run on a machine with no network and nothing installed, which is the whole
 reason the Python exists.
 """
+import contextlib
 import os
 import subprocess
 import sys
+import time
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -212,7 +214,6 @@ class TestTheSameBitsComeOut(unittest.TestCase):
         second, or its nibble packing were off by one byte in any of them,
         not one of these would match.
         """
-        import time
         path = os.path.join(ROOT, "logs", "random-F48824B8207F7E.tsv")
         if not os.path.exists(path):
             self.skipTest("no recorded emissions in the repository")
@@ -221,19 +222,51 @@ class TestTheSameBitsComeOut(unittest.TestCase):
                     if not l.startswith("#")]
         self.assertTrue(rows, "the emission log is empty")
         directives, want = [], []
-        for r in rows:
-            started = int(time.mktime(time.strptime(r[1], "%Y-%m-%dT%H:%M:%S")))
-            directives.append("digest\t%s\t%s\t%s" % (r[0], started, r[7]))
-            want.append(r[6])
+        with fixture_timezone():
+            for r in rows:
+                started = int(time.mktime(
+                    time.strptime(r[1], "%Y-%m-%dT%H:%M:%S")))
+                directives.append(
+                    "digest\t%s\t%s\t%s" % (r[0], started, r[7]))
+                want.append(r[6])
         got = self.rust(directives)
         self.assertEqual(got, want)
         # And the Python still agrees with itself, so this is a three-way
         # equality rather than two programs sharing one mistake.
         for r in rows:
-            started = time.mktime(time.strptime(r[1], "%Y-%m-%dT%H:%M:%S"))
+            with fixture_timezone():
+                started = time.mktime(
+                    time.strptime(r[1], "%Y-%m-%dT%H:%M:%S"))
             record = {"seq": int(r[0]), "started": started, "hex": r[6],
                       "counts": r[7]}
             self.assertTrue(radbeeper.check_entropy_record(record))
+
+
+# The recorded emissions in logs/ carry local time with no offset, so the
+# epoch a digest was computed over can only be reconstructed by knowing the
+# zone they were written in: this counter's desk. mktime in whatever zone the
+# test happens to run in reproduced them there and nowhere else -- in UTC,
+# which is what CI runs in, every digest came out different and the failure
+# said only that two 64-character strings were not equal. The rows span
+# December and September, so this is the zone and not a fixed offset: the
+# difference between them is an hour of daylight saving.
+FIXTURE_TZ = "America/Los_Angeles"
+
+
+@contextlib.contextmanager
+def fixture_timezone():
+    """Read the recorded timestamps in the zone that wrote them."""
+    was = os.environ.get("TZ")
+    os.environ["TZ"] = FIXTURE_TZ
+    time.tzset()
+    try:
+        yield
+    finally:
+        if was is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = was
+        time.tzset()
 
 
 def flash(records):
