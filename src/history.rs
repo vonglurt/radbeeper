@@ -344,6 +344,18 @@ pub fn backfill(
     // the wrong slots.
     let mut samples = samples(blob, offset);
     samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    // NOTHING FROM THE FUTURE, AND NOT THE SLOT BEING LOGGED NOW. A wrapped
+    // ring has no byte that says where writing stopped: the tail search ends
+    // at the first OLD timestamp after the newest data, so up to one
+    // timestamp's worth of old samples -- three minutes on a 320 -- follows
+    // the newest mark and is placed after it, past the present. Observed:
+    // a backfill at 18:03:59 wrote rows to 18:06:21, and they took the slots
+    // the live logger then had to skip. Time says what the bytes cannot:
+    // whatever the counter recorded happened before now. The current slot
+    // goes too, because the live logger is about to write it from the
+    // stream, whole.
+    let cut = crate::log::slot_of(crate::clock::now(), every) as f64 * every;
+    samples.retain(|s| s.0 < cut);
     if samples.is_empty() {
         return Report { samples: 0, rows: 0, added: 0, clashed: 0,
                         first: None, last: None, holes: 0, files: Vec::new() };

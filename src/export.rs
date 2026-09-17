@@ -277,23 +277,46 @@ fn raise(slot: &mut Option<f64>, v: Option<f64>) {
     }
 }
 
-/// (when, cells) for every row of a dated log, header and blanks skipped.
+/// The cells the page reads, in the order it reads them: counts at 2,
+/// seconds at 3, the first peak at 7, source at 10, site at 11. It is the
+/// three-window header, which is what the page was written against.
+const PAGE_COLUMNS: [&str; 12] = [
+    "time", "cps", "counts", "seconds", "cpm_3", "cpm_30", "cpm_300",
+    "peak_3", "peak_30", "peak_300", "src", "site",
+];
+
+/// (when, cells) for every row of a dated log, re-columned BY NAME into
+/// `PAGE_COLUMNS`, header and blanks skipped.
 ///
-/// THE CELLS ARE POSITIONAL, as the Python's `read_rows` hands them to the
-/// page: counts at 2, seconds at 3, the first peak at 7, site at 11. That is
-/// not `log::read_table`'s match-by-name, and it is not meant to be -- the
-/// page is held to the Python's bytes, and the Python reads by position.
+/// IT WAS POSITIONAL, and every log written since the fourth window was added
+/// was misread by it: `cpm_3000` came out under "Peak 3s", `peak_300` under
+/// "Source" and `peak_3000` under "Site", and the peak card and the chart's
+/// peaks were the 3000-second average. Each row is now read under the last
+/// header above it -- a file can carry two, where the windows changed -- and
+/// a file with no header at all is taken to be the three-window layout the
+/// positions were written for.
 fn read_rows(path: &Path) -> Vec<(f64, Vec<String>)> {
     let text = match fs::read_to_string(path) {
         Ok(t) => t,
         Err(_) => return Vec::new(),
     };
-    text.lines()
-        .filter_map(|line| {
-            let when = log::row_time(line)?;
-            Some((when, line.split('\t').map(str::to_string).collect()))
-        })
-        .collect()
+    let page: Vec<String> = PAGE_COLUMNS.iter().map(|s| s.to_string()).collect();
+    let mut names = page.clone();
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.starts_with('#') {
+            let found = log::columns(line);
+            if !found.is_empty() {
+                names = found;
+            }
+            continue;
+        }
+        if let Some(when) = log::row_time(line) {
+            let cells: Vec<&str> = line.split('\t').collect();
+            out.push((when, log::align_row(&cells, &names, &page)));
+        }
+    }
+    out
 }
 
 /// Per counter: the totals, the daily rollup, and the last rows seen.

@@ -1145,3 +1145,112 @@ class TestTheTwoExportsWriteTheSamePages(unittest.TestCase):
     def test_no_logs_at_all(self):
         results = self.run_both(self.tempdir())
         self.same_files(results, ["index.html"])
+
+
+class TestABackfillWritesNothingFromTheFuture(unittest.TestCase):
+    """The newest end of a wrapped ring is only known to a timestamp.
+
+    The tail search stops at the first old mark after the newest data, so the
+    old samples between the write pointer and that mark were read as new and
+    placed after the newest mark -- minutes past the present, in the slots
+    the live logger was about to write. Both implementations now drop every
+    sample from the current slot on.
+    """
+
+    BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
+
+    def image(self):
+        import time
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fake_gmc import build_history
+        # A mark two minutes ago with five minutes of samples after it.
+        t = time.localtime(time.time() - 120)
+        return build_history(seconds=420, cpm=120.0, per_mark=400,
+                             size=4096, start=(t.tm_year - 2000, t.tm_mon,
+                                               t.tm_mday, t.tm_hour,
+                                               t.tm_min, t.tm_sec))
+
+    def rows_after(self, d, cut):
+        out = []
+        for n in os.listdir(d):
+            if n.startswith("cpm-"):
+                with open(os.path.join(d, n)) as f:
+                    for line in f:
+                        if line[:1].isdigit():
+                            w = radbeeper.row_time(line)
+                            if w is not None and w >= cut:
+                                out.append(line)
+        return out
+
+    def test_the_python_writes_no_row_for_now_or_later(self):
+        import argparse
+        import tempfile
+        import time
+        cut = (int(time.time()) // 30) * 30
+        d = tempfile.mkdtemp()
+        path = os.path.join(d, "cpm-FUTURE1-now.tsv")
+        args = argparse.Namespace(spans=[3.0, 30.0, 300.0, 3000.0, 30000.0],
+                                  log_every=30.0, max_gap=10.0)
+        report = radbeeper.backfill(self.image(), args, 0.0, path=path)
+        self.assertGreater(report["rows"], 0)
+        self.assertEqual(self.rows_after(d, cut), [])
+
+    def test_the_rust_writes_no_row_for_now_or_later(self):
+        import tempfile
+        import time
+        if not os.path.exists(self.BINARY):
+            self.skipTest("no release binary to run")
+        img = os.path.join(tempfile.mkdtemp(), "h.bin")
+        with open(img, "wb") as f:
+            f.write(self.image())
+        cut = (int(time.time()) // 30) * 30
+        d = tempfile.mkdtemp()
+        out = subprocess.run(
+            [self.BINARY, "backfill", "--logs", d, "--image", img,
+             "--serial", "FUTURE1"],
+            capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertTrue(os.listdir(d), "nothing was backfilled:\n" + out.stdout)
+        self.assertEqual(self.rows_after(d, cut), [])
+
+
+class TestThePageReadsColumnsByName(unittest.TestCase):
+    """The latest-rows table, the peak card and the chart, from a 5-window log.
+
+    The page read cells by position -- counts at 2, peak at 7, source at 10,
+    site at 11 -- which is the three-window layout. A five-window row put
+    cpm_3000 under "Peak 3s", peak_300 under "Source" and peak_3000 under
+    "Site", in both implementations, which agreed with each other perfectly.
+    """
+
+    BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
+    HEADER = ("#time\tcps\tcounts\tseconds\tcpm_3\tcpm_30\tcpm_300\tcpm_3000"
+              "\tcpm_30000\tpeak_3\tpeak_30\tpeak_300\tpeak_3000\tpeak_30000"
+              "\tsrc\tsite")
+    ROW = ("2026-09-16T18:01:46\t2.367\t71\t30\t180.0\t142.0\t101.1\t116.8"
+           "\t60.2\t420.0\t148.0\t123.6\t120.1\t60.3\tlive\tThe bench")
+    WANT = ("<tr><td>2026-09-16T18:01:46</td><td>2.367</td><td>180.0</td>"
+            "<td>142.0</td><td>101.1</td><td>420.0</td><td>live</td>"
+            "<td>The bench</td></tr>")
+
+    def page(self, argv):
+        import tempfile
+        d = tempfile.mkdtemp()
+        with open(os.path.join(d, "cpm-NAMES1-2026-09.tsv"), "w") as f:
+            f.write(self.HEADER + "\n" + self.ROW + "\n")
+        out = os.path.join(d, "index.html")
+        run = subprocess.run(argv + ["export", "--logs", d, "-o", out,
+                                     "--no-random-page"],
+                             capture_output=True, text=True, timeout=120)
+        self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+        with open(out) as f:
+            return f.read()
+
+    def test_the_python_page(self):
+        self.assertIn(self.WANT, self.page([sys.executable,
+                                            os.path.join(ROOT, "radbeeper")]))
+
+    def test_the_rust_page(self):
+        if not os.path.exists(self.BINARY):
+            self.skipTest("no release binary to run")
+        self.assertIn(self.WANT, self.page([self.BINARY]))

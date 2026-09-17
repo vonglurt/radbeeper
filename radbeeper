@@ -2668,6 +2668,12 @@ def backfill(blob, args, offset=0.0, path=None, serial=None):
     # costs nothing there; it is what makes `backfill --image` of a raw dump
     # give the same answer.
     samples = sorted(history_samples(blob, offset))
+    # NOTHING FROM THE FUTURE, AND NOT THE SLOT BEING LOGGED NOW. A wrapped
+    # ring has no byte that says where writing stopped, so up to one
+    # timestamp's worth of old samples follows the newest mark and is placed
+    # past the present. See src/history.rs :: backfill.
+    cut = slot_of(time.time(), every) * every
+    samples = [s for s in samples if s[0] < cut]
     if not samples:
         return {"samples": 0, "rows": 0, "added": 0, "clashed": 0,
                 "first": None, "last": None, "holes": 0, "files": []}
@@ -3106,16 +3112,37 @@ def log_files(directory=None):
     return out
 
 
-# PORT: replaced by src/export.rs :: read_rows() -- same name, the same positional cells; log.rs :: read_table() is the by-name reader, and the page does not use it
+# The cells the page reads, in the order it reads them: counts at 2, seconds
+# at 3, the first peak at 7, source at 10, site at 11 -- the three-window
+# header, which is what the page was written against.
+PAGE_COLUMNS = ["time", "cps", "counts", "seconds", "cpm_3", "cpm_30",
+                "cpm_300", "peak_3", "peak_30", "peak_300", "src", "site"]
+
+
+# PORT: replaced by src/export.rs :: read_rows() -- same name, the same by-name re-columning into PAGE_COLUMNS
 def read_rows(path):
-    """Yield (when, cells) for a dated log, header and blanks skipped."""
+    """Yield (when, cells) for a dated log, re-columned BY NAME.
+
+    IT WAS POSITIONAL, and every log written since the fourth window was added
+    was misread by it: cpm_3000 came out under "Peak 3s", peak_300 under
+    "Source" and peak_3000 under "Site". Each row is read under the last
+    header above it, and a file with no header is taken to be the
+    three-window layout the positions were written for.
+    """
+    names = PAGE_COLUMNS
     try:
         with open(path) as f:
             for line in f:
                 line = line.rstrip("\n")
+                if line.startswith("#"):
+                    found = log_columns(line)
+                    if found:
+                        names = found
+                    continue
                 when = row_time(line)
                 if when is not None:
-                    yield when, line.split("\t")
+                    yield when, align_row(line.split("\t"), names,
+                                          PAGE_COLUMNS)
     except IOError:
         return
 
