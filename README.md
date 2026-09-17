@@ -3,7 +3,7 @@
 **A GQ GMC-320 Plus Geiger–Müller counter on the desk, read from Alpine Linux —
 and from [Copal](https://github.com/vonglurt/copal), its distillation.**
 
-MIT · `0.2.0` · `cargo install radbeeper` · one dependency, and it is `libc`
+MIT · `0.3.0` · `cargo install radbeeper` · one dependency, and it is `libc`
 
 **You need a GQ GMC-320 Plus plugged into USB.** There is no substitute for it
 in software: RadBeeper reads a real tube over a real serial port, and every
@@ -26,45 +26,33 @@ pass-through produces no `/dev/ttyUSB0`.
 
 ![the monitor](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch.png)
 
-**The fourth minute, in four seconds.** Seconds 180 to 240 of the session
-below, a frame a second played at fifteen times speed:
+**Ten minutes of it, three ways.** One session against the counter these logs
+came from, recorded through a pty at 160 × 40 and cut into three clips: the
+first five minutes at a hundred times speed, the hundred seconds after them
+at ten, and the second the random pool delivered its first line.
 
-![the monitor, the fourth minute at 15x](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-3to4.gif)
+![the monitor: five minutes at 100x, then a hundred seconds at 10x, then the random line](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-hero.gif)
 
-A minute is how long it takes to see that this is a monitor and not a
-screenshot. The 3-second window swings between 0 and 160 CPM while the
-30-second one walks 28 up to 46 and back down to 22 — the last of the high
-readings draining out of it. Two log rows close, thirty seconds apart. The
-5-minute window counts itself down from 140 s to go to 79, the spectrum picks
-up its second window, and the counts strip slides left a bar at a time.
+**The first clip is the counts strip filling**, which is the thing to watch.
+A second a bar at the right, and each panel to its left takes a bar half as
+often: the 1-second panel is full after 42 seconds, the 2-second after 78,
+the 4-second after 156, the 8-second after 312 — so the left of the strip is
+still filling when the right has scrolled through seven times over. Ten
+minutes of history end up in one row of a terminal, at one second of
+resolution where it matters. **[The cascade strip](docs/cascade.md)** is what
+that arrangement is, how it works, and who else has built one. The five
+averaging windows arrive in the same order, 3 s and then 30 s and then 300 s,
+while the 50-minute and working-day ones count themselves down.
 
-**Four minutes of it, at forty times speed.** A whole session of the native
-build against the counter these logs came from, a frame every four seconds,
-recorded while something outside, probably construction, was
-pushing the count to three times its usual background and then stopped:
+**The second clip is a hundred seconds slow enough to read.** Individual
+counts landing as bars, the 30-second window walking while the 3-second one
+jumps around it, a log row closing every thirty seconds under the `¦` ticks,
+and the 5-minute average finally a number instead of a countdown.
 
-![the monitor, a whole 240-second session at 40x](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-fast.gif)
-
-It opens on the monitor reading the counter's history to fill the log's gaps,
-about twenty seconds of flash over the serial line. Then the windows arrive in
-order, 3 s and then 30 s, while the three long ones count down. Early on the
-30-second window sits between 84 and 124 CPM with red spikes through the
-counts; by the end it is at 22. The log table fills from the bottom: first the
-rows the backfill rebuilt, dim, then a live row every thirty seconds. The
-counts strip on the left compresses as it ages, two and then four seconds a
-bar.
-
-**Twenty seconds of it, at ten times speed.** Seconds 200 to 220 of the same
-session, one frame a second:
-
-![the monitor, twenty seconds at 10x](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-20s.gif)
-
-The 3-second window swings between 0 and 60 CPM while the 30-second one holds
-between 38 and 46, which is the whole argument for keeping more than one. The
-5-minute window is still filling, from 119 s to go down to 99; the 50-minute and
-working-day windows are further off. The bars recolour as individual seconds
-land, the `¦` over the fine tier marks where each log row closes, and there is
-no random line yet: the pool is still measuring the source.
+**The third is the random line.** 256 bits of hex out of the timing of decay,
+printed the moment the pool has measured enough min-entropy to justify them
+— eight minutes and forty-nine seconds into this run, and a different second
+in every other one.
 
 ## Fast track
 
@@ -82,14 +70,10 @@ optional: the serial node is `root:dialout` and RadBeeper does not want root.
 the counter over, and `start` gives it back.
 If `probe` finds nothing it says which of four things went wrong, and they have
 four different fixes — [§1](#1-what-you-need) is the list of what has to be
-true. **No counter yet?**
-`radbeeper --source sim --sim-cpm 400 watch` draws the entire monitor against a
-synthetic Poisson background, which is a real one: decay is a Poisson process.
-That verb is the Python program's — a `cargo install radbeeper` does not carry
-it. What the Rust build has instead is `tests/fake_gmc.py`, which puts a
-counter on a pseudo-terminal and exercises the serial path as well as the
-display: `python3 tests/fake_gmc.py --cpm 400`, then `radbeeper -d /dev/pts/N
-watch`.
+true. **No counter yet?** `tests/fake_gmc.py` puts a synthetic counter on a
+pseudo-terminal — a real Poisson background, because decay is a Poisson
+process — and exercises the serial path as well as the display:
+`python3 tests/fake_gmc.py --cpm 400`, then `radbeeper -d /dev/pts/N watch`.
 
 <details>
 <summary>Everything else it does</summary>
@@ -113,8 +97,8 @@ radbeeper clock --set      # set the counter's clock from this machine's
 **A GQ GMC-320 Plus, plugged into USB.** That is the hardware, and there is no
 substitute for it in software: RadBeeper reads a real tube over a real serial
 port, and every number on the screen comes off the wire. Without a counter
-plugged in there is nothing to read — though `--source sim` will draw the whole
-monitor against a synthetic Poisson background if you want to see it working
+plugged in there is nothing to read — though `tests/fake_gmc.py` will put a
+synthetic counter on a pseudo-terminal if you want to see the monitor working
 before yours arrives.
 
 | | |
@@ -172,12 +156,11 @@ point on a Pi. From a clone, `make install` is `cargo install --path .`: it
 builds the release binary and puts it in `~/.cargo/bin`, which has to be ahead
 of anything older on your `PATH` — `which -a radbeeper` shows the order.
 
-The one-file `python3` program is still in the repository beside it and still
-installs the same way — `make py-install` — because it owns the verbs the port
-has not reached yet. `probe`, `clock`, `cpm`, `watch`, `service`, `random`, `backfill`, `log`, `hotplug`
-and `export` are native; `site`, `recompute`, `--plain` and `--source sim` are
-still the Python and are the reason it is still here.
-[§10](docs/native-build.md) is that story.
+`probe`, `clock`, `cpm`, `watch`, `service`, `random`, `backfill`, `log`,
+`hotplug` and `export` are the native build. Four corners of the program —
+`site`'s write side, `recompute`, `--plain` and `--source sim` — are not
+ported yet and are marked where they appear below.
+[§10](docs/native-build.md) says where the port stands.
 
 **Add yourself to `dialout`**, or the serial node will not open:
 
@@ -342,21 +325,29 @@ Coloured by the same calm / raised / high bands as the numbers above it, so a
 spike that reads red up there reads red down here without anyone converting in
 their head.
 
-**Three tiers, finer to the right.** The right half is one second a bar, newest
-at the edge. The left half holds two more tiers, at *k* and *k²* seconds a bar,
-with *k* the smallest factor that makes the whole strip reach back as far as the
-spectrum's window — at 160 columns that is 80 s of seconds, then 40 bars of 3 s,
-then 40 bars of 9 s, 559 s in all against a 512-second spectrum. A second that
-scrolls off the fine tier lands in the newest bar of the next, which fills as
-its seconds arrive, and that bar in turn lands in the coarsest.
+**Four tiers, finer to the right, each one a doubling.** The rightmost quarter
+is one second a bar, newest at the edge. Each quarter to its left holds *k*
+times as long in a bar, with *k* the smallest factor that makes the whole
+strip reach back as far as the spectrum's window — at 160 columns and the
+usual *k* = 2 that is 42 bars of 1 s, then 39 of 2 s, 39 of 4 s and 39 of 8 s:
+**588 seconds of history in one row.** A second that scrolls off the fine tier
+lands in the newest bar of the next, which fills as its seconds arrive; that
+bar in turn lands in the next, and that one in the last.
 
 ```
-9s/bar · 6m                 F 3s/bar · 117s               F 1s/bar · 80s      ¦            ¦
+8s/bar · 5m                 F 4s/bar · 3m                F 2s/bar · 78s        F 1s/bar · 42s    ¦
 ```
 
 The `F` above each tier marks the hand-over, with how long a bar is and how far
 back the tier reaches. Over the fine tier, a `¦` marks where each log row
 closes: the frames the log is cut into, scrolling left with the counts.
+
+Each tier left takes a bar half as often and twice as long to fill, so the
+reach grows geometrically while the cost stays a quarter of a row: a fifth
+tier would reach 1212 s, a sixth 2460 s. **[The cascade strip](docs/cascade.md)**
+writes the technique up properly — the invariants, the arithmetic, the prior
+art from RRDtool's round-robin archives to exponential histograms, and what
+to call it.
 
 - **A bar is a mean, not a sum.** A nine-second bar holding nine seconds of counts
   would dwarf the fine tier, and the colours are rates. The same height is the
@@ -404,7 +395,8 @@ again and the table takes every row after 30.
 ### Line output, for a pipe or a log
 
 `--plain` gives one line per second instead of the full-screen monitor, and is
-what you get automatically when stdout is not a terminal:
+what you get automatically when stdout is not a terminal. *Not in the native
+build yet.*
 
 ```sh
 radbeeper --plain --duration 14 watch
@@ -414,15 +406,19 @@ radbeeper --plain --duration 14 watch
 
 ### No counter on the desk?
 
-The Python program runs against a built-in source, and it is a real one — decay
-is a Poisson process, so the simulator draws Poisson samples. (`--source sim`
-is not ported: the native build reads a counter or a `tests/fake_gmc.py`.) Variance equals the
-mean, which is exactly the property that makes the 3-second average jump and the
-300-second one sit still.
+`tests/fake_gmc.py` puts a counter on a pseudo-terminal and answers the real
+protocol, so the monitor is driven the way the hardware drives it — down to
+the serial reads. The counts are drawn from a Poisson process, because that
+is what decay is: variance equals the mean, which is exactly the property
+that makes the 3-second average jump while the 300-second one sits still.
 
 ```sh
-radbeeper --source sim --sim-cpm 400 watch
+python3 tests/fake_gmc.py --cpm 400      # prints the /dev/pts/N it made
+radbeeper -d /dev/pts/N watch
 ```
+
+There is also a built-in synthetic source, `--source sim --sim-cpm 400`,
+which needs no pseudo-terminal. *Not in the native build yet.*
 
 ## 5. Log it to disk
 
@@ -730,8 +726,9 @@ Options: `--source sim`, `--sim-cpm`, `--seed`, `--spans 3,30,300`,
 
 | | |
 |---|---|
+| [The cascade strip](docs/cascade.md) | the counts strip written up as a lab report: chained dyadic time compression, its invariants and arithmetic, the prior art from RRDtool to exponential histograms, and what to call it |
 | [The spectrum](docs/the-spectrum.md) | why flat is the good answer, how windows are accumulated, and why a peak is not called on sigma alone |
-| [The native build](docs/native-build.md) | the Rust crate, what is ported and what is not, and how the two implementations are held to each other |
+| [The native build](docs/native-build.md) | the Rust crate, what is ported and what is not, and how it is held to the reference implementation |
 | [Reference](docs/reference.md) | the tube factor, the counter's protocol, what it costs to run, the tests, and how the screenshots are made |
 | [Troubleshooting](docs/troubleshooting.md) | the four things it can be when `probe` finds nothing, and the four different fixes |
 | [Prior art](docs/prior-art.md) | what else reads these counters, and what this does differently |

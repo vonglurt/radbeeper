@@ -35,7 +35,7 @@ No toolchain on the machine? Take a static binary from the
 runs on Alpine, on Debian and on a Pi with no libc to match:
 
 ```sh
-v=0.2.0; t=aarch64-unknown-linux-musl        # or x86_64-…, armv7-…, arm-… for a Zero
+v=0.3.0; t=aarch64-unknown-linux-musl        # or x86_64-…, armv7-…, arm-… for a Zero
 curl -LO https://github.com/vonglurt/radbeeper/releases/download/v$v/radbeeper-$v-$t.tar.gz
 curl -LO https://github.com/vonglurt/radbeeper/releases/download/v$v/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS

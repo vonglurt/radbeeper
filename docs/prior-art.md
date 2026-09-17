@@ -10,7 +10,7 @@ on purpose, and the two places it differs by mistake.
 |---|---|---|---|
 | **GeigerLog** (ullix, v2.2pre01) | ~78,000 Python | Qt desktop app, 20+ device backends, SQLite, plotting, a web server | a lab instrument's whole workbench |
 | **gq-gmc-control** (chaim-zax) | 1,200 Python | one library + one argparse CLI, `pyserial` | a scriptable remote control for the device |
-| **radbeeper** | 1,026 Python | one stdlib file, no dependencies | what it is counting *now*, on three time constants |
+| **radbeeper** | ~7,500 Rust | one crate, one dependency (`libc`) | what it is counting *now*, on five time constants and four tiers of history |
 
 Neither flashes firmware. gq-gmc-control has the option in its CLI --
 `-F/--firmware-update` -- and the function behind it is two lines:
