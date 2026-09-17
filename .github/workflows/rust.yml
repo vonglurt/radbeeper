@@ -17,6 +17,12 @@ on:
       - 'examples/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      # The suite that holds the two implementations to each other, and the
+      # reference they are held to. Left out until a test-only fix to a red
+      # differential test pushed green and re-ran nothing, so the branch
+      # stayed red on a failure that had already been fixed.
+      - 'tests/**'
+      - 'radbeeper'
       - '.github/workflows/rust.yml'
   pull_request:
     paths:
@@ -24,6 +30,12 @@ on:
       - 'examples/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      # The suite that holds the two implementations to each other, and the
+      # reference they are held to. Left out until a test-only fix to a red
+      # differential test pushed green and re-ran nothing, so the branch
+      # stayed red on a failure that had already been fixed.
+      - 'tests/**'
+      - 'radbeeper'
       - '.github/workflows/rust.yml'
   workflow_dispatch:
 
