@@ -3,7 +3,7 @@
 **A GQ GMC-320 Plus Geiger–Müller counter on the desk, read from Alpine Linux —
 and from [Copal](https://github.com/vonglurt/copal), its distillation.**
 
-MIT · `0.1.0` · `cargo install radbeeper` · one dependency, and it is `libc`
+MIT · `0.2.0` · `cargo install radbeeper` · one dependency, and it is `libc`
 
 **You need a GQ GMC-320 Plus plugged into USB.** There is no substitute for it
 in software: RadBeeper reads a real tube over a real serial port, and every
