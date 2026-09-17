@@ -46,12 +46,12 @@
 #       runs both on the same input and compares the bytes -- not "equivalent",
 #       identical. Deleting this file deletes the only thing that can prove the
 #       Rust writes the same log format, and the format is the promise.
-#    2. It still OWNS the parts that have no Rust counterpart yet. `export`
-#       (index.html and random.html), `recompute`, the write side of `site`,
-#       `--plain` and `--source sim` are implemented here and nowhere else.
-#       Every one of them is marked NOT PORTED below. (`hotplug` was one of
-#       them until it was ported; the four functions it is made of now say
-#       which Rust replaced them.)
+#    2. It still OWNS the parts that have no Rust counterpart yet.
+#       `recompute`, the write side of `site`, `--plain` and `--source sim`
+#       are implemented here and nowhere else. Every one of them is marked
+#       NOT PORTED below. (`hotplug` and `export` were on that list until they
+#       were ported; the functions they are made of now say which Rust
+#       replaced them.)
 #    3. It runs where nothing is installed: python3 and the stdlib, no cargo,
 #       no network. That is still the fastest way onto a fresh Pi.
 #
@@ -60,7 +60,7 @@
 #  the name changed. Read it as a map, not as an apology:
 #
 #    # PORT: replaced by src/analysis.rs :: Ladder (renamed) -- ...
-#    # PORT: NOT PORTED. `export` is the largest thing still owned by this file.
+#    # PORT: NOT PORTED. `recompute` is still Python.
 #
 #  The renames are few and all in one direction, towards shorter names inside a
 #  module that already says the subject: SpectrumLadder -> analysis::Ladder,
@@ -3103,7 +3103,7 @@ def log_files(directory=None):
     return out
 
 
-# PORT: replaced by src/log.rs :: read_table() covers this
+# PORT: replaced by src/export.rs :: read_rows() -- same name, the same positional cells; log.rs :: read_table() is the by-name reader, and the page does not use it
 def read_rows(path):
     """Yield (when, cells) for a dated log, header and blanks skipped."""
     try:
@@ -3117,7 +3117,23 @@ def read_rows(path):
         return
 
 
-# PORT: NOT PORTED. The whole `export` side is still Python.
+# PORT: replaced by src/export.rs :: now() (renamed) -- same SOURCE_DATE_EPOCH, same wall-clock fallback
+def export_now():
+    """When the pages say they were generated.
+
+    ADDED FOR THE DIFFERENTIAL TEST, and the only thing that was. Both pages
+    print the time they were built, so two exports of the same logs a minute
+    apart differ -- and so would the Python's and the Rust's. SOURCE_DATE_EPOCH
+    is the reproducible-builds convention; both implementations honour it, and
+    nothing sets it unless asked.
+    """
+    try:
+        return float(os.environ["SOURCE_DATE_EPOCH"])
+    except (KeyError, ValueError):
+        return time.time()
+
+
+# PORT: replaced by src/export.rs :: summarise() -- same name, same totals, hours and days, returning Counter structs
 def summarise(directory=None, cpm_per_usvh=DEFAULT_CPM_PER_USVH):
     """Per counter: the totals, the daily rollup, and the last rows seen.
 
@@ -3183,7 +3199,7 @@ def summarise(directory=None, cpm_per_usvh=DEFAULT_CPM_PER_USVH):
     return counters
 
 
-# PORT: NOT PORTED. Part of `export`.
+# PORT: replaced by src/export.rs :: nice_ceiling() -- same name
 def nice_ceiling(value):
     """A round number at or above value, for an axis somebody can read."""
     if value <= 0:
@@ -3196,7 +3212,7 @@ def nice_ceiling(value):
     return 10 * power
 
 
-# PORT: NOT PORTED. Part of `export`.
+# PORT: replaced by src/export.rs :: hour_series() -- same name
 def hour_series(counter):
     """[(unix time, mean CPM, peak CPM or None)] per hour, in order."""
     out = []
@@ -3209,7 +3225,7 @@ def hour_series(counter):
     return out
 
 
-# PORT: NOT PORTED. Part of `export`.
+# PORT: replaced by src/export.rs :: svg_plot() -- same name, same log axis and broken line, the same coordinates to the tenth
 def svg_plot(series, width=1120, height=1200, pad_l=52, pad_b=26, pad_t=12,
              pad_r=10):
     """An inline SVG line chart. No plotting library, for the same reason
@@ -3308,13 +3324,13 @@ def svg_plot(series, width=1120, height=1200, pad_l=52, pad_b=26, pad_t=12,
     return "".join(out)
 
 
-# PORT: NOT PORTED. Part of `export`.
+# PORT: replaced by src/export.rs :: esc() -- same name
 def esc(text):
     return (str(text).replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
-# PORT: NOT PORTED. Part of `export`.
+# PORT: replaced by src/export.rs :: page_head() -- same name, the same stylesheet rule for rule
 def page_head(title, extra=()):
     """The <head> and the one stylesheet both generated pages use.
 
@@ -3412,7 +3428,7 @@ def page_head(title, extra=()):
     return out
 
 
-# PORT: NOT PORTED. Part of `export`: index.html is generated here.
+# PORT: replaced by src/export.rs :: render_html() -- same name; index.html is the same bytes from either
 def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
                 title="Radiation monitor", shots=None, random_link=None):
     """One self-contained page: no scripts, no fetches, no web fonts."""
@@ -3421,7 +3437,7 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
     a = out.append
     a("<h1>" + esc(title) + "</h1>")
     a("<p class=\"sub\">" + esc(TAGLINE) + " &middot; generated "
-      + esc(when(time.time()))
+      + esc(when(export_now()))
       + " by radbeeper " + VERSION
       + " &middot; tube factor " + ("%.1f" % cpm_per_usvh)
       + " CPM per &micro;Sv/h</p>")
@@ -3445,7 +3461,7 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
           "files beside this page and run <code>radbeeper export</code>.</p>")
     for serial in sorted(counters):
         c = counters[serial]
-        here = site_at(serial, c["last"] or time.time(), sites)
+        here = site_at(serial, c["last"] or export_now(), sites)
         a("<h2>Counter " + esc(serial) + "</h2>")
         a("<div class=\"cards\">")
 
@@ -3704,7 +3720,7 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
 RANDOM_GLOB = "random-"
 
 
-# PORT: NOT PORTED. Part of `export`.
+# PORT: replaced by src/export.rs :: random_files() -- same name
 def random_files(directory=None):
     """[(serial, path)] for every emission log in a directory."""
     d = directory or state_dir()
@@ -3721,7 +3737,7 @@ def random_files(directory=None):
     return out
 
 
-# PORT: replaced by src/entropy.rs :: read_emissions() reads the same file for `random --check`; the page-building use of it is still here
+# PORT: replaced by src/entropy.rs :: read_emissions() (renamed) -- for `random --check` and, through export.rs, for the page
 def read_random(path):
     """Emissions, oldest first, each with the counts that produced it."""
     rows = []
@@ -3748,7 +3764,7 @@ def read_random(path):
     return rows
 
 
-# PORT: NOT PORTED. Part of `export`.
+# PORT: replaced by src/export.rs :: entropy_budget() -- same name, returning a Budget struct; the sum() is CPython's compensated one
 def entropy_budget(samples):
     """Everything the page says about a set of per-second counts.
 
@@ -3776,12 +3792,12 @@ def entropy_budget(samples):
     }
 
 
-# PORT: NOT PORTED. Part of `export`.
+# PORT: replaced by src/export.rs :: poisson_pmf() -- same name, over libm pow as `**` is
 def poisson_pmf(lam, k):
     return math.exp(-lam) * lam ** k / math.factorial(k)
 
 
-# PORT: NOT PORTED. Part of `export`.
+# PORT: replaced by src/export.rs :: svg_hist() -- same name
 def svg_hist(freq, lam, width=1120, height=340, pad_l=54, pad_b=34, pad_t=14,
              pad_r=12):
     """Observed counts against the Poisson the model assumed, side by side.
@@ -3840,7 +3856,7 @@ def svg_hist(freq, lam, width=1120, height=340, pad_l=54, pad_b=34, pad_t=14,
     return "".join(out)
 
 
-# PORT: NOT PORTED. Part of `export`.
+# PORT: replaced by src/export.rs :: svg_bits() -- same name
 def svg_bits(samples, want=ENTROPY_BITS, width=1120, height=320, pad_l=54,
              pad_b=34, pad_t=14, pad_r=12):
     """Bits accumulating against seconds: measured, and what was claimed.
@@ -3915,7 +3931,7 @@ RANDOM_CSS = (
 )
 
 
-# PORT: NOT PORTED. Part of `export`: random.html is generated here.
+# PORT: replaced by src/export.rs :: render_random_html() -- same name; random.html is the same bytes from either
 def render_random_html(serial, pools, title="Where the random comes from",
                        index="index.html"):
     """The audit page: what the source is, what it is worth, and every line.
@@ -3935,7 +3951,8 @@ def render_random_html(serial, pools, title="Where the random comes from",
       + esc(serial) + " &middot; " + str(len(pools))
       + (" emission" if len(pools) == 1 else " emissions")
       + " &middot; generated "
-      + esc(time.strftime("%Y-%m-%d %H:%M")) + "</p>")
+      + esc(time.strftime("%Y-%m-%d %H:%M", time.localtime(export_now())))
+      + "</p>")
     a('<p class="lede">The moment a nucleus decays is not determined by '
       "anything, which makes a Geiger&ndash;M&uuml;ller counter the textbook "
       "hardware entropy source. What is <em>not</em> textbook is how much "
@@ -4128,7 +4145,7 @@ def render_random_html(serial, pools, title="Where the random comes from",
     return "\n".join(out)
 
 
-# PORT: NOT PORTED. `export` is the largest thing still owned by this file.
+# PORT: replaced by src/export.rs :: export() and run(), reached from the `export` arm of main() -- the same options and the same two lines printed
 def cmd_export(args):
     directory = args.logs or state_dir()
     counters = summarise(directory, args.cpm_per_usvh)

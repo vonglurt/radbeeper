@@ -850,7 +850,7 @@ class TestTheMonitorLogsWhileItIsOpen(unittest.TestCase):
         if not os.path.exists(cls.BINARY):
             raise unittest.SkipTest("no release binary to run")
 
-    def run_monitor(self, *extra, rows=46, seconds=30):
+    def run_monitor(self, *extra, rows=46, seconds=45):
         import tempfile
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from fake_gmc import FakeGMC, build_history
@@ -866,7 +866,7 @@ class TestTheMonitorLogsWhileItIsOpen(unittest.TestCase):
                 [sys.executable, self.RECORD, "capture", cast,
                  "--cols", "160", "--rows", str(rows), "--seconds", str(seconds),
                  "--", self.BINARY, "-d", dev.path, "--logs", logs,
-                 "--log-every", "2", "--backfill-bytes", "8192"]
+                 "--log-every", "2", "--backfill-bytes", "2048"]
                 + list(extra) + ["watch"],
                 cwd=ROOT, capture_output=True, timeout=seconds + 120)
         finally:
@@ -918,3 +918,228 @@ class TestTheMonitorLogsWhileItIsOpen(unittest.TestCase):
         logs, screen = self.run_monitor("--no-log")
         self.assertFalse(os.path.exists(logs) and os.listdir(logs))
         self.assertFalse([l for l in screen if l.startswith("#time")])
+
+
+def build_binary():
+    """The release binary, rebuilt whenever there is a cargo to rebuild it.
+
+    For the oracle's reason: a stale binary passes, silently, against a Rust
+    that has since changed.
+    """
+    binary = os.path.join(ROOT, "target", "release", "radbeeper")
+    if any(os.access(os.path.join(p, "cargo"), os.X_OK)
+           for p in os.environ.get("PATH", "").split(os.pathsep)):
+        try:
+            subprocess.run(["cargo", "build", "--release"], cwd=ROOT,
+                           check=True, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=300)
+        except (subprocess.SubprocessError, OSError):
+            return None
+    return binary if os.path.exists(binary) else None
+
+
+class TestTheTwoExportsWriteTheSamePages(unittest.TestCase):
+    """index.html and random.html, from both, compared byte for byte.
+
+    The pages are what a fork publishes and what the workflow commits back on
+    every push, so a page that depends on which binary built it is a diff in
+    every one of those commits. Both are run on the same logs, each into its
+    own directory, and the files -- and the lines printed about them -- must
+    be the same characters.
+
+    THE ONE HOOK. Both pages print when they were generated, so both
+    implementations honour SOURCE_DATE_EPOCH, and this sets it. TZ is set too,
+    to a zone with summer time, so the day boundaries and the midnight ticks
+    are worked out in local time across a clock change rather than in UTC,
+    where a mistake in the conversion would hide.
+    """
+
+    EPOCH = "1789000000"
+    TZ = "EST5EDT,M3.2.0,M11.1.0"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.BINARY = build_binary()
+        if cls.BINARY is None:
+            raise unittest.SkipTest("no release binary to compare against")
+
+    def tempdir(self):
+        import shutil
+        import tempfile
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        return d
+
+    def run_both(self, logs, before=(), after=(), output="index.html",
+                 shots=()):
+        """[(directory, stdout)] for the Python, then the Rust.
+
+        `before` goes ahead of the verb and `after` behind it, which is where
+        the Python's argparse wants its global and its export options.
+        """
+        env = dict(os.environ, SOURCE_DATE_EPOCH=self.EPOCH, TZ=self.TZ)
+        results = []
+        for argv in ([sys.executable, os.path.join(ROOT, "radbeeper")],
+                     [self.BINARY]):
+            d = self.tempdir()
+            page_dir = os.path.join(d, os.path.dirname(output))
+            os.makedirs(page_dir, exist_ok=True)
+            # Screenshots are linked only when they exist beside the page.
+            for name in shots:
+                path = os.path.join(page_dir, "docs", "screenshots", name)
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                open(path, "w").close()
+            out = subprocess.run(
+                list(argv) + list(before)
+                + ["export", "--logs", logs, "-o", output] + list(after),
+                cwd=d, env=env, capture_output=True, text=True, timeout=120)
+            self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+            # The audit page is printed as an absolute path, and each run has
+            # its own directory; that directory is the only difference allowed.
+            printed = out.stdout.replace(os.path.realpath(d), "<dir>")
+            results.append((d, printed.replace(d, "<dir>")))
+        return results
+
+    def same_files(self, results, names):
+        (py, py_out), (rs, rs_out) = results
+        self.assertEqual(rs_out, py_out)
+        for name in names:
+            with open(os.path.join(py, name), "rb") as f:
+                want = f.read()
+            with open(os.path.join(rs, name), "rb") as f:
+                got = f.read()
+            self.assertTrue(want, "%s is empty" % name)
+            if got != want:
+                at = next((i for i, (a, b) in enumerate(zip(want, got))
+                           if a != b), min(len(want), len(got)))
+                self.fail("%s differs at byte %d of %d:\n  python %r\n"
+                          "  rust   %r" % (name, at, len(want),
+                                           want[max(0, at - 80):at + 80],
+                                           got[max(0, at - 80):at + 80]))
+
+    def synthetic_logs(self):
+        """Two counters, gaps, empty windows, a move, a stale emission."""
+        import time
+        d = self.tempdir()
+        saved = os.environ.get("TZ")
+        os.environ["TZ"] = self.TZ
+        time.tzset()
+        try:
+            self.write_synthetic(d)
+        finally:
+            if saved is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = saved
+            time.tzset()
+        return d
+
+    def write_synthetic(self, d):
+        import time
+
+        def stamp(t):
+            return time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t))
+
+        def row(*cells):
+            return "\t".join(cells) + "\n"
+
+        head = radbeeper.log_header((3, 30, 300, 3000)) + "\n"
+        # 2026-11-01 01:06 EDT: the night the clocks go back, so one local
+        # day is 25 hours long. Rows every 30 s with a two-hour hole in the
+        # middle, the long window empty for the first twenty minutes, a
+        # stretch with no peak at all, short rows, and a move part way.
+        t0 = 1793509560.0
+        with open(os.path.join(d, "cpm-A1B2-2026-11.tsv"), "w") as f:
+            f.write(head)
+            for i in range(700):
+                if 200 <= i < 440:
+                    continue
+                f.write(row(
+                    stamp(t0 + i * 30), "%.3f" % (0.6 + (i % 5) * 0.05),
+                    str(18 + i % 9), "27.15" if i % 11 == 0 else "30",
+                    "%.1f" % (20 + i % 60), "%.1f" % (36 + i % 4),
+                    "%.1f" % (38 + i % 3),
+                    "" if i < 40 else "%.1f" % (35 + i % 7),
+                    "" if 60 <= i < 120 else "%.1f" % (40 + (i * 37) % 900),
+                    "", "%.1f" % (52 + i % 5), "39.2",
+                    "flash" if i < 300 else "live",
+                    "" if i < 500 else "The garage & <shed>"))
+        # The same counter a month earlier: a second file to link, a line
+        # that is not a row, a blank, a row whose counts are not a number,
+        # and a short row with nothing past the first window.
+        with open(os.path.join(d, "cpm-A1B2-2026-10.tsv"), "w") as f:
+            f.write(head)
+            f.write(row(stamp(1792000000), "0.5", "15", "30", "30.0", "", "",
+                        "", "90.0", "", "", "", "live", ""))
+            f.write("not a row at all\n\n")
+            f.write(row(stamp(1792000030), "0.5", "many", "30"))
+            f.write(row(stamp(1792000060), "1.0", "30", "30.5", "60.0"))
+        # A second counter: a few rows two hours apart, so every point is
+        # its own segment, and no site recorded for it.
+        with open(os.path.join(d, "cpm-Z9-2026-11.tsv"), "w") as f:
+            f.write(head)
+            for i in range(5):
+                f.write(row(stamp(t0 + 172800 + i * 7200), "0.7", str(21 + i),
+                            "30", "", "", "", "", "", "", "", "", "live", ""))
+        with open(os.path.join(d, "sites.tsv"), "w") as f:
+            f.write("#serial\tfrom\tname\n")
+            f.write("A1B2\t%s\tThe bench\n" % stamp(1780000000))
+            f.write("A1B2\t%s\tThe garage & <shed>\n" % stamp(t0 + 15000))
+        # Emissions: a stale 1969 pool, one with a tie for the most common
+        # count, one with a tail and marked not flat; and an emission log for
+        # the second counter with nothing in it, which is not a page.
+        pools = [("1969-12-31T21:01:12", "0102" * 40),
+                 (stamp(t0), "1100" * 60 + "53"),
+                 (stamp(t0 + 900), "0" * 50 + "1" * 50 + "2" * 30 + "f7a3")]
+        with open(os.path.join(d, "random-A1B2.tsv"), "w") as f:
+            f.write("#seq\ttime\tseconds\trate\tbits\tflat\thex\tcounts\n")
+            for seq, (when, counts) in enumerate(pools):
+                rate = sum(int(c, 16) for c in counts) / float(len(counts))
+                f.write("%d\t%s\t%d\t%.4f\t256.0\t%s\t%s\t%s\n"
+                        % (seq, when, len(counts), rate,
+                           "no" if seq == 2 else "yes", "ab" * 32, counts))
+        with open(os.path.join(d, "random-Z9.tsv"), "w") as f:
+            f.write("#seq\ttime\tseconds\trate\tbits\tflat\thex\tcounts\n")
+
+    def test_the_repositorys_own_logs(self):
+        logs = os.path.join(ROOT, "logs")
+        if not os.path.exists(os.path.join(logs, "random-F48824B8207F7E.tsv")):
+            self.skipTest("no logs in the repository")
+        # With the screenshots beside the page, as at the repository root,
+        # so the figures are compared too.
+        shots = ["probe.png", "watch.png", "watch-filling.png",
+                 "watch-spectrum.png", "log-output.png", "log-tabs.png",
+                 "watch-300-320.gif"]
+        results = self.run_both(logs, shots=shots)
+        self.same_files(results, ["index.html", "random.html"])
+        with open(os.path.join(results[0][0], "index.html")) as f:
+            self.assertIn("docs/screenshots/watch-300-320.gif", f.read())
+
+    def test_a_synthetic_log_directory(self):
+        results = self.run_both(self.synthetic_logs())
+        self.same_files(results, ["index.html", "random.html"])
+        with open(os.path.join(results[0][0], "index.html")) as f:
+            page = f.read()
+        # The comparison is only worth something if the cases are on it.
+        self.assertIn("Counter Z9", page)
+        self.assertIn("The garage &amp; &lt;shed&gt;", page)
+        self.assertEqual(page.count('<path class="mean"'), 2)
+
+    def test_a_page_in_a_subdirectory_with_its_own_options(self):
+        results = self.run_both(
+            self.synthetic_logs(), before=["--cpm-per-usvh", "108"],
+            after=["--title", "Bench \"B\" & desk",
+                   "--random-output", "audit.html"],
+            output="site/page.html", shots=["probe.png"])
+        self.same_files(results, ["site/page.html", "audit.html"])
+
+    def test_no_random_page(self):
+        results = self.run_both(self.synthetic_logs(),
+                                after=["--no-random-page"])
+        self.same_files(results, ["index.html"])
+        for d, _out in results:
+            self.assertFalse(os.path.exists(os.path.join(d, "random.html")))
+
+    def test_no_logs_at_all(self):
+        results = self.run_both(self.tempdir())
+        self.same_files(results, ["index.html"])

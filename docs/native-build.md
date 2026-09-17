@@ -11,7 +11,7 @@ saying plainly that nothing has:
 
 ```
 # PORT: replaced by src/analysis.rs :: Ladder (renamed) -- new/add/best, …
-# PORT: NOT PORTED. `export` is the largest thing still owned by this file.
+# PORT: NOT PORTED. `recompute` is still Python.
 ```
 
 The renames all run one way, towards shorter names inside a module that already
@@ -71,7 +71,7 @@ A full probe against the counter takes **82 ms** and the binary is 400 KB.
 
 ## Going native, one piece at a time
 
-`service`, `backfill`, `export`, `site`, `random`, `recompute` and `hotplug`
+`service`, `backfill`, `site`, `random`, `recompute` and `hotplug`
 are still Python, and the binary says so if you ask it for one. They are being
 ported. **Two implementations of a file format is how a file format acquires
 two dialects**, so the port is arranged around one rule: nothing counts as
@@ -135,10 +135,22 @@ rounding to six significant figures. Taking it from the unrounded value prints
 column nobody reads, in a file whose one promise is that `sort` on it is
 chronological.
 
+**`export` writes the same two pages.** `index.html` and `random.html` are what
+a fork publishes and what the workflow commits back on every push, so a page
+that changed by a character depending on which binary built it would be a diff
+in every one of those commits. Both exports are run on this repository's own
+`logs/` and on a constructed directory — two counters, a two-hour hole, empty
+window columns, a site that moves, a night the clocks go back, a 1969 pool —
+and the files are compared byte for byte. Every coordinate in the charts is
+printed to a tenth, so the Rust does the arithmetic in the Python's order,
+calls libm's `pow` where Python's `**` does, and sums the variance with
+CPython's compensated `sum()`. Both honour `SOURCE_DATE_EPOCH` for the
+"generated" line, which is the one thing that would otherwise differ.
+
 | | |
 |---|---|
-| **native now** | `probe`, `clock` and `clock --set`, `cpm` (its own 30 s window, not the device's 60 s one), `watch`, `service`, `random`, `random --check`, **`backfill`** and **`log info`/`log pull`**; the log format; the entropy pool, the SP 800-90B estimator and SHA-256; the history decoder with both corrections to GQ's published format, the wrapped-ring search and the measured sample intervals; local time, which Rust's standard library does not have at all |
-| **next** | `export` — the two pages. Biggest and most mechanical, and the only one with no correctness risk beyond "the HTML differs" |
+| **native now** | `probe`, `clock` and `clock --set`, `cpm` (its own 30 s window, not the device's 60 s one), `watch`, `service`, `random`, `random --check`, **`backfill`**, **`log info`/`log pull`** and **`export`** (`index.html` and `random.html`, byte for byte the Python's); the log format; the entropy pool, the SP 800-90B estimator and SHA-256; the history decoder with both corrections to GQ's published format, the wrapped-ring search and the measured sample intervals; local time, which Rust's standard library does not have at all |
+| **still Python** | `site` (the write side), `recompute`, `--plain` and `--source sim` |
 | **the rule** | one dependency, still `libc`. It has `strftime`, `strptime` and `mktime`, so the port does not need a date crate; the one primitive that must be written out is SHA-256 |
 
 Nothing about this is a reason to hurry the Python out: it runs on a machine

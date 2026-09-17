@@ -59,6 +59,12 @@ impl Windows {
         }
     }
 
+    /// The absolute position of `samples[0]` among every sample ever added:
+    /// old samples are dropped from the front once no window needs them.
+    pub fn first_index(&self) -> usize {
+        self.base
+    }
+
     pub fn elapsed(&self) -> f64 {
         match (self.started, self.samples.last()) {
             (Some(s), Some(&(t, _))) => t - s,
@@ -385,6 +391,103 @@ pub fn bar_rows(values: &[f64], width: usize, height: usize) -> Vec<Vec<char>> {
         .collect()
 }
 
+/// One stretch of the history strip: `columns` bars, `seconds` each, oldest
+/// first. A value is the mean counts per second over the seconds its bar
+/// covers, or None where there is no sample yet.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Tier {
+    pub columns: usize,
+    pub seconds: usize,
+    pub values: Vec<Option<f64>>,
+}
+
+/// The counts, as a strip that compresses as it ages.
+///
+/// The right half is a second a bar, newest at the right edge. The left half
+/// is two more tiers, the nearer at `k` seconds a bar and the farther at
+/// `k * k`, with `k` the smallest whole factor that makes the strip reach
+/// back `span` seconds -- the spectrum's window, so the strip and the
+/// spectrum are views of the same stretch of time. A second scrolling off
+/// the left of the fine tier lands in the newest bar of the next one, which
+/// fills as its seconds arrive; that bar in turn lands in the coarsest.
+///
+/// BAR EDGES ARE FIXED TO THE SAMPLE COUNT, not to the screen: a k-second bar
+/// always covers the same k samples, so a bar does not change as the strip
+/// scrolls under it -- only the newest, still-filling one does. `first` is
+/// the absolute index of `samples[0]`.
+///
+/// Means, not sums: a 9-second bar holding nine times the counts would dwarf
+/// the fine tier, and the colour bands are rates. The same height means the
+/// same rate in every tier.
+pub fn tiers(samples: &[u32], first: usize, width: usize, span: usize) -> Vec<Tier> {
+    let right = width - width / 2;
+    let mid = (width / 2) / 2;
+    let far = width / 2 - mid;
+    let mut k = 2usize;
+    while right + mid * k + far * k * k < span && k < 60 {
+        k += 1;
+    }
+    let n = (first + samples.len()) as i64;
+    let first = first as i64;
+    let at = |a: i64| -> Option<u32> {
+        (a >= first && a < n).then(|| samples[(a - first) as usize])
+    };
+    let mean = |lo: i64, hi: i64| -> Option<f64> {
+        let (lo, hi) = (lo.max(first), hi.min(n));
+        (hi > lo).then(|| {
+            (lo..hi).map(|a| at(a).unwrap_or(0) as f64).sum::<f64>() / (hi - lo) as f64
+        })
+    };
+    let fine: Vec<Option<f64>> = (0..right as i64)
+        .map(|j| at(n - right as i64 + j).map(|c| c as f64))
+        .collect();
+    // The fine tier starts at b1; everything older is grouped.
+    let b1 = n - right as i64;
+    let ki = k as i64;
+    let top = (b1 - 1).div_euclid(ki);
+    let near: Vec<Option<f64>> = (0..mid as i64)
+        .map(|j| {
+            let g = top - mid as i64 + 1 + j;
+            mean(g * ki, (g * ki + ki).min(b1))
+        })
+        .collect();
+    let b2 = (top - mid as i64 + 1) * ki;
+    let kk = ki * ki;
+    let top2 = (b2 - 1).div_euclid(kk);
+    let old: Vec<Option<f64>> = (0..far as i64)
+        .map(|j| {
+            let g = top2 - far as i64 + 1 + j;
+            mean(g * kk, (g * kk + kk).min(b2))
+        })
+        .collect();
+    vec![
+        Tier { columns: far, seconds: k * k, values: old },
+        Tier { columns: mid, seconds: k, values: near },
+        Tier { columns: right, seconds: 1, values: fine },
+    ]
+}
+
+/// `bar_rows` against a peak given from outside, so tiers drawn side by side
+/// share one scale. None is an empty column.
+pub fn bar_rows_to(values: &[Option<f64>], height: usize, peak: f64) -> Vec<Vec<char>> {
+    let peak = peak.max(1.0);
+    (0..height)
+        .map(|r| {
+            let floor = ((height - 1 - r) * 8) as f64;
+            values
+                .iter()
+                .map(|v| match v {
+                    Some(c) => {
+                        let units = (c * height as f64 * 8.0 / peak).round();
+                        SPARK[(units - floor).clamp(0.0, 8.0) as usize]
+                    }
+                    None => ' ',
+                })
+                .collect()
+        })
+        .collect()
+}
+
 // ----------------------------------------------------------------- tests ---
 //
 // The crate had none. It shares a screen layout, a set of averaging windows
@@ -698,5 +801,58 @@ mod tests {
             l.add((i % 4) as u32);
         }
         assert!(l.best().runs > 0, "nothing has answered after 200 samples");
+    }
+
+    #[test]
+    fn the_strip_reaches_back_the_spectrum_window() {
+        let t = tiers(&[], 0, 159, 512);
+        assert_eq!(t.iter().map(|x| x.columns).collect::<Vec<_>>(), vec![40, 39, 80]);
+        assert_eq!(t.iter().map(|x| x.seconds).collect::<Vec<_>>(), vec![9, 3, 1]);
+        let reach: usize = t.iter().map(|x| x.columns * x.seconds).sum();
+        assert!(reach >= 512, "{}", reach);
+    }
+
+    #[test]
+    fn a_bar_is_the_mean_of_exactly_its_seconds() {
+        // 200 samples: the value of each is its own index, so a bar's mean
+        // says which samples it holds.
+        let s: Vec<u32> = (0..200).collect();
+        let t = tiers(&s, 0, 20, 30);
+        let (far, near, fine) = (&t[0], &t[1], &t[2]);
+        assert_eq!((far.columns, near.columns, fine.columns), (5, 5, 10));
+        // The fine tier is the newest ten, one each.
+        assert_eq!(fine.values[9], Some(199.0));
+        assert_eq!(fine.values[0], Some(190.0));
+        // k = 2 reaches 10 + 10 + 20 = 40 >= 30. The near tier's newest bar
+        // is samples 188..190, the next 186..188.
+        assert_eq!(near.seconds, 2);
+        assert_eq!(near.values[4], Some(188.5));
+        assert_eq!(near.values[3], Some(186.5));
+        // The far tier starts where the near tier's oldest bar does (180),
+        // in fours: 176..180 is 177.5.
+        assert_eq!(far.seconds, 4);
+        assert_eq!(far.values[4], Some(177.5));
+    }
+
+    #[test]
+    fn a_bar_does_not_change_as_the_strip_scrolls_under_it() {
+        let s: Vec<u32> = (0..400).map(|i| (i * 7919 % 13) as u32).collect();
+        let before = tiers(&s[..300], 0, 40, 80);
+        let after = tiers(&s[..302], 0, 40, 80);
+        // Two seconds later, with k = 2, every complete near bar has moved one
+        // column left and is otherwise the same bar.
+        let k = before[1].seconds;
+        assert_eq!(k, 2);
+        let b = &before[1].values;
+        let a = &after[1].values;
+        assert_eq!(&a[..a.len() - 2], &b[1..b.len() - 1]);
+    }
+
+    #[test]
+    fn early_on_the_old_tiers_are_empty_not_zero() {
+        let t = tiers(&[3, 4, 5], 0, 40, 512);
+        assert!(t[0].values.iter().all(|v| v.is_none()));
+        assert!(t[1].values.iter().all(|v| v.is_none()));
+        assert_eq!(t[2].values.iter().filter(|v| v.is_some()).count(), 3);
     }
 }

@@ -322,7 +322,13 @@ pub fn read_emissions(path: &Path) -> Vec<Emission> {
                 bits: c[4].parse().ok()?,
                 flat: c[5] == "yes",
                 hex: c[6].to_string(),
-                counts: unpack_counts(c[7]),
+                // A counts field with anything but hex in it is a row the
+                // Python refuses (int(ch, 16) raises), not one to read around.
+                counts: if c[7].chars().all(|ch| ch.is_ascii_hexdigit()) {
+                    unpack_counts(c[7])
+                } else {
+                    return None;
+                },
             })
         })();
         if let Some(e) = parsed {

@@ -12,7 +12,7 @@ mod serial;
 
 use radbeeper::{analysis, clock, entropy, history, log};
 use analysis::{
-    bar_rows, level, spectrum_columns, Ladder, Level, Windows,
+    bar_rows, bar_rows_to, level, spectrum_columns, tiers, Ladder, Level, Windows,
 };
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
@@ -413,24 +413,63 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         // clock's, at the bottom, and the chart still clears the digits.
         row += 2;
         let counts_rows = if hv > row + 12 { 5 } else if hv > row + 8 { 3 } else { 1 };
-        let vals: Vec<f64> = w.samples.iter().map(|&(_, c)| c as f64).collect();
-        let tail: Vec<f64> = vals.iter().rev().take(width - 1).rev().cloned().collect();
-        for (i, line) in bar_rows(&vals, width - 1, counts_rows).iter().enumerate() {
-            out.push_str(&at(row + i, 0));
-            let mut pen = "";
-            for (x, &g) in line.iter().enumerate() {
-                if g == ' ' {
-                    out.push(' ');
-                    continue;
+        // THE COUNTS, COMPRESSING AS THEY AGE. A second a bar on the right,
+        // then k seconds, then k*k, reaching back as far as the spectrum's
+        // window -- see analysis::tiers. One scale for all three, so the
+        // same height is the same rate wherever it is drawn.
+        let counts: Vec<u32> = w.samples.iter().map(|&(_, c)| c).collect();
+        let strip = tiers(&counts, w.first_index(), width - 1, spec.window);
+        let peak = strip
+            .iter()
+            .flat_map(|t| t.values.iter().flatten())
+            .cloned()
+            .fold(0.0f64, f64::max);
+        let every = logging.as_ref().map(|wl| wl.every.round().max(1.0) as i64);
+        let n = (w.first_index() + counts.len()) as i64;
+        let mut x0 = 0;
+        for (ti, tier) in strip.iter().enumerate() {
+            for (i, line) in bar_rows_to(&tier.values, counts_rows, peak).iter().enumerate() {
+                out.push_str(&at(row + i, x0));
+                let mut pen = "";
+                for (x, &g) in line.iter().enumerate() {
+                    if g == ' ' {
+                        out.push(' ');
+                        continue;
+                    }
+                    let rate = tier.values[x].unwrap_or(0.0) * 60.0;
+                    let want = colour_for(level(rate));
+                    if want != pen {
+                        out.push_str(want);
+                        pen = want;
+                    }
+                    out.push(g);
                 }
-                let want = colour_for(level(tail.get(x).cloned().unwrap_or(0.0) * 60.0));
-                if want != pen {
-                    out.push_str(want);
-                    pen = want;
-                }
-                out.push(g);
+                out.push_str(OFF);
             }
-            out.push_str(OFF);
+            // Above each tier, where it starts: F for each hand-over from a
+            // finer tier, how long a bar is, and how far back the tier reaches.
+            if row >= 1 && tier.columns > 2 {
+                let label = format!(
+                    "{}{}s/bar \u{b7} {}",
+                    if ti == 0 { "" } else { "F " },
+                    tier.seconds,
+                    span_words(tier.columns * tier.seconds)
+                );
+                let label: String = label.chars().take(tier.columns - 1).collect();
+                let used = label.chars().count();
+                out.push_str(&format!("{}{}{}{}", at(row - 1, x0), DIM, label, OFF));
+                // Over the fine tier, a tick where each log row closes: the
+                // frames the log is cut into, scrolling left with the counts.
+                if let (Some(e), 1) = (every, tier.seconds) {
+                    for j in used + 1..tier.columns {
+                        let a = n - tier.columns as i64 + j as i64;
+                        if a > 0 && a % e == 0 {
+                            out.push_str(&format!("{}{}\u{a6}{}", at(row - 1, x0 + j), DIM, OFF));
+                        }
+                    }
+                }
+            }
+            x0 += tier.columns;
         }
         row += counts_rows + 1;
 
@@ -565,6 +604,18 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         lg.finish(&averages);
     }
     c.heartbeat(false);
+}
+
+/// "79s", "6m", "1h 4m": a stretch of time in the fewest words that are
+/// still right to the unit shown.
+fn span_words(seconds: usize) -> String {
+    if seconds < 120 {
+        format!("{}s", seconds)
+    } else if seconds < 3600 {
+        format!("{}m", (seconds + 30) / 60)
+    } else {
+        format!("{}h {}m", seconds / 3600, (seconds % 3600 + 30) / 60)
+    }
 }
 
 /// Rows of log the monitor keeps for its table: more than any screen shows.
@@ -1292,6 +1343,7 @@ fn usage() {
     println!("  radbeeper random --check F recompute every line in an emission log");
     println!("  radbeeper backfill         fill the log's gaps from the counter's flash");
     println!("  radbeeper log info|pull    what history it holds, or download it");
+    println!("  radbeeper export           index.html and random.html, from the logs");
     println!("  radbeeper hotplug          sit in the session, open the monitor on plug-in");
     println!();
     println!("  -d, --device PATH          serial port (default: search /dev)");
@@ -1301,7 +1353,7 @@ fn usage() {
     println!("      --duration SECONDS     stop after this long");
     println!("      --log-every SECONDS    row spacing for service (default {})",
              log::g(log::DEFAULT_LOG_EVERY));
-    println!("      --logs DIR             where service, watch and backfill write");
+    println!("      --logs DIR             where service, watch and backfill write, and export reads");
     println!("      --no-log               watch without writing anything");
     println!("      --no-backfill          skip reading the counter's history at start");
     println!("      --image FILE           backfill from a saved .bin, no counter");
@@ -1312,8 +1364,12 @@ fn usage() {
     println!("      --settle SECONDS       hotplug: grace before a new node is opened (default 2)");
     println!("      --tries N              hotplug: attempts per plug event (default 3)");
     println!("  -o, --output STEM          where log pull writes .bin and .csv");
+    println!("  -o, --output FILE          export: where the page goes (default index.html)");
+    println!("      --title TEXT           export: the page's heading");
+    println!("      --random-output FILE   export: the audit page (default random.html beside it)");
+    println!("      --no-random-page       export: do not write the audit page");
     println!();
-    println!("export, site and recompute are in the");
+    println!("site and recompute are in the");
     println!("Python program in the same repository. They are being ported; the");
     println!("log format is here already, and tests/test_differential.py is what");
     println!("says it is the same format and not a second dialect of it.");
@@ -1346,6 +1402,9 @@ fn main() {
     let mut tries: u32 = 3;
     let mut log_action = "info".to_string();
     let mut serial: Option<String> = None;
+    let mut title = radbeeper::export::DEFAULT_TITLE.to_string();
+    let mut random_output: Option<PathBuf> = None;
+    let mut no_random_page = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -1396,8 +1455,11 @@ fn main() {
             "--poll" => poll = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(poll),
             "--settle" => settle = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(settle),
             "--tries" => tries = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(tries),
+            "--title" => title = next(&mut i).unwrap_or(title),
+            "--random-output" => random_output = next(&mut i).map(PathBuf::from),
+            "--no-random-page" => no_random_page = true,
             "info" | "pull" if command == "log" => log_action = a.to_string(),
-            "export" | "site" => {
+            "site" => {
                 eprintln!(
                     "radbeeper: `{}` is not in the Rust build -- it writes the log\n\
                      format, which the Python program owns. Use that one:\n\
@@ -1424,6 +1486,13 @@ fn main() {
             &spans, log_every, max_gap, bytes.unwrap_or(64 * 1024),
             device.as_deref(), baud, logs, image.as_deref(),
             serial.as_deref(), output.as_deref(),
+        ));
+    }
+    if command == "export" {
+        std::process::exit(radbeeper::export::run(
+            &logs.unwrap_or_else(log::state_dir),
+            Path::new(output.as_deref().unwrap_or("index.html")),
+            !no_random_page, cpm_per_usvh, &title, random_output.as_deref(),
         ));
     }
     if command == "log" {

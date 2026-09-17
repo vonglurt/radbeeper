@@ -159,8 +159,8 @@ of anything older on your `PATH` — `which -a radbeeper` shows the order.
 
 The one-file `python3` program is still in the repository beside it and still
 installs the same way — `make py-install` — because it owns the verbs the port
-has not reached yet. `probe`, `clock`, `cpm`, `watch`, `service`, `random`, `backfill`, `log` and `hotplug`
-are native; `export`, `site`, `recompute`, `--plain` and `--source sim` are
+has not reached yet. `probe`, `clock`, `cpm`, `watch`, `service`, `random`, `backfill`, `log`, `hotplug`
+and `export` are native; `site`, `recompute`, `--plain` and `--source sim` are
 still the Python and are the reason it is still here.
 [§10](docs/native-build.md) is that story.
 
@@ -588,7 +588,8 @@ To put it on the web: **fork this repository, copy your `cpm-*.tsv`,
 `.github/workflows/pages.yml` rebuilds both pages and commits them back, so
 GitHub Pages serves them with no build step. There is nothing to install in the
 workflow — the generator is this same file, which is also why the pages cannot
-drift from the log format.
+drift from the log format. The native build's `radbeeper export` writes the
+same two pages, byte for byte, and `tests/test_differential.py` is what says so.
 
 ## Reference
 

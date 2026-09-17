@@ -10,11 +10,14 @@
 # Requires: cargo, and libc's headers. Nothing else -- the one dependency in
 # Cargo.toml is libc, because a serial port is termios.
 #
-# THE PYTHON IS STILL HERE, and still a program. `export`, `site`,
-# `recompute`, `window`, `--plain` and `--source sim` have no Rust counterpart
-# yet, so the one-file `radbeeper` at the root owns them and the `py-` targets
-# below run it. It is also the oracle: `make check` puts both implementations
+# THE PYTHON IS STILL HERE, and still a program. `site`, `recompute`,
+# `window`, `--plain` and `--source sim` have no Rust counterpart yet, so the
+# one-file `radbeeper` at the root owns them and the `py-` targets below run
+# it. It is also the oracle: `make check` puts both implementations
 # on the same input and compares the bytes.
+#
+# `export` was on that list too, until it was ported; both write the same
+# index.html and random.html, byte for byte.
 #
 # `hotplug` was on that list until it was ported. It is the one the desktop's
 # autostart line runs, so a shim resolving to the Rust build made the
