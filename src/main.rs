@@ -184,11 +184,121 @@ fn cpm_cmd(c: &counter::Counter, cpm_per_usvh: f64) -> i32 {
     }
 }
 
+/// What the monitor writes while it is open. `--no-log` is None, and then it
+/// writes nothing at all.
+struct WatchLog {
+    dir: PathBuf,
+    every: f64,
+    backfill: Option<(usize, f64)>,
+}
+
+/// How many rows of log the table at the bottom gets on a screen `h` tall.
+///
+/// The charts come first. Below 36 rows they are drawn compact -- the counts
+/// in three rows, the spectrum in one -- and everything under 24 rows goes to
+/// the table; from 36 the charts are full size again and the table keeps six
+/// rows, taking every row after that.
+fn table_lines(h: usize) -> usize {
+    if h < 26 {
+        0
+    } else if h < 36 {
+        h - 24
+    } else {
+        h - 30
+    }
+}
+
+/// The table: the log's own header and its newest rows, aligned in columns
+/// as wide as their widest cell and cut at the screen's edge, oldest at the
+/// top so each new row pushes the rest up like a terminal scrolling.
+///
+/// The same cells the log is written with, so what is on screen is what is on
+/// disk. Rows the flash filled in are dim; a field with no value is a dim
+/// `-`, because a window that was not full yet is not a zero.
+fn draw_table(out: &mut String, top: usize, lines: usize, width: usize,
+              names: &[String], rows: &std::collections::VecDeque<Vec<String>>) {
+    if lines == 0 {
+        return;
+    }
+    let shown: Vec<&Vec<String>> = rows.iter().rev().take(lines - 1).rev().collect();
+    let src = names.iter().position(|n| n == "src");
+    let mut widths: Vec<usize> = names.iter().map(|n| n.len() + 1).collect();
+    for r in &shown {
+        for (i, cell) in r.iter().enumerate() {
+            if let Some(wd) = widths.get_mut(i) {
+                *wd = (*wd).max(cell.chars().count().max(1));
+            }
+        }
+    }
+    // As many columns as fit, two spaces apart, never wrapping.
+    let mut fit = 0;
+    let mut used = 0;
+    for wd in &widths {
+        if used + wd > width.saturating_sub(1) {
+            break;
+        }
+        used += wd + 2;
+        fit += 1;
+    }
+    let mut head = String::new();
+    for (i, name) in names.iter().take(fit).enumerate() {
+        let label = if i == 0 { format!("#{}", name) } else { name.clone() };
+        head.push_str(&format!("{:<w$}  ", label, w = widths[i]));
+    }
+    let head = head.trim_end().to_string();
+    out.push_str(&format!("{}{}{}{}", at(top, 0), DIM, head, OFF));
+    for (k, r) in shown.iter().enumerate() {
+        let flash = src.and_then(|i| r.get(i)).map(|v| v != log::SRC_LIVE).unwrap_or(false);
+        out.push_str(&at(top + 1 + k, 0));
+        if flash {
+            out.push_str(DIM);
+        }
+        for i in 0..fit {
+            let cell = r.get(i).map(String::as_str).unwrap_or("");
+            if cell.is_empty() {
+                out.push_str(&format!("{}{:<w$}{}  ", DIM, "-", if flash { "" } else { OFF },
+                                      w = widths[i]));
+            } else {
+                out.push_str(&format!("{:<w$}  ", cell, w = widths[i]));
+            }
+        }
+        out.push_str(OFF);
+    }
+}
+
 fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
-         duration: Option<f64>, logs: Option<std::path::PathBuf>) {
+         duration: Option<f64>, logging: Option<WatchLog>) {
     // So a `kill` stops the stream and puts the terminal back, as q does.
     install_stop_handler();
     let screen = Screen::enter();
+    let names = log::columns(&log::header(spans));
+    let mut table: std::collections::VecDeque<Vec<String>> = std::collections::VecDeque::new();
+    let mut table_note = String::new();
+    let mut logger = None;
+    if let Some(wl) = logging.as_ref() {
+        let _ = std::fs::create_dir_all(&wl.dir);
+        // THE HISTORY FIRST, and it takes a while -- fifteen or twenty seconds
+        // of flash over the serial line -- so the screen says what it is
+        // waiting for instead of sitting blank.
+        if let Some((bytes, max_gap)) = wl.backfill {
+            print!("\x1b[2J{}{}{} @ {} baud   {}   serial {}{}{}reading the counter's history \
+                    to fill the log's gaps ({} KiB)...{}",
+                   at(0, 0), DIM, c.path, c.baud, c.version, c.serial_no, OFF,
+                   at(2, 0), bytes / 1024, at(3, 0));
+            let _ = std::io::stdout().flush();
+            table_note = backfill_at_start(c, &wl.dir, spans, wl.every, bytes, max_gap, true)
+                .replace(" samples, ", " samples ")
+                .replace("backfill -- ", "backfill: ");
+        }
+        // The table opens on what is already in the log, so it is not empty
+        // for the first half-minute -- and what the backfill just wrote is
+        // the first thing in it.
+        let path = log::path(clock::now(), &wl.dir, Some(&c.serial_no));
+        for (_, cells) in log::read_table(&path, &names).into_iter().rev().take(TABLE_KEEP).rev() {
+            table.push_back(cells);
+        }
+        logger = Some(Logger::new(spans, wl.dir.clone(), &c.serial_no, wl.every));
+    }
     let mut w = Windows::new(spans);
     let mut ladder = Ladder::new();
     let mut pool = entropy::Entropy::default();
@@ -213,8 +323,25 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         ladder.add(counts);
         pool.add(counts);
         let spec = ladder.best();
+        if let Some(lg) = logger.as_mut() {
+            let averages: Vec<Option<f64>> = spans.iter().map(|s| w.average(*s)).collect();
+            match lg.add(clock::now(), counts, &averages) {
+                Ok(Some(line)) => {
+                    table.push_back(line.split('\t').map(str::to_string).collect());
+                    while table.len() > TABLE_KEEP {
+                        table.pop_front();
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => table_note = format!("NOT LOGGING: {}", e),
+            }
+        }
 
         let (h, width) = screen.size();
+        // Everything above the table lays out as though the screen ended
+        // where the table starts, and the footer stays on the last two rows.
+        let tl = if logger.is_some() { table_lines(h) } else { 0 };
+        let hv = h - tl;
         out.clear();
         out.push_str("\x1b[2J");
         // No title row: the program's name is the one thing on this screen
@@ -285,7 +412,7 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         // Two rows of air, then the counts. It was three; the third is the
         // clock's, at the bottom, and the chart still clears the digits.
         row += 2;
-        let counts_rows = if h > row + 12 { 5 } else { 1 };
+        let counts_rows = if hv > row + 12 { 5 } else if hv > row + 8 { 3 } else { 1 };
         let vals: Vec<f64> = w.samples.iter().map(|&(_, c)| c as f64).collect();
         let tail: Vec<f64> = vals.iter().rev().take(width - 1).rev().cloned().collect();
         for (i, line) in bar_rows(&vals, width - 1, counts_rows).iter().enumerate() {
@@ -315,7 +442,7 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
                 "spectrum   accumulating, {}s to the first window of {}",
                 spec.wait(), spec.window
             );
-        } else if h > row + 4 {
+        } else if hv > row + 4 {
             let cols = spectrum_columns(&rel, width - 1);
             let (top, where_) = spec.loudest();
             let luck = spec.chance_max();
@@ -330,7 +457,7 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
                     spec.period(where_), top, luck, spec.sigma(top), spec.runs
                 )
             };
-            let bars = if h > row + 9 { 5 } else { 1 };
+            let bars = if hv > row + 9 { 5 } else if hv > row + 7 { 3 } else { 1 };
             for (i, line) in bar_rows(&cols, cols.len(), bars).iter().enumerate() {
                 out.push_str(&at(row + i, 0));
                 let mut pen = "";
@@ -358,15 +485,15 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         // The rotating line: 256 bits of decay, when the pool has earned
         // them. See the entropy module for what "earned" is doing there --
         // it is measured from the samples, not modelled from their mean.
-        if h > row + 2 && width > 84 {
+        if hv > row + 2 && width > 84 {
             row += 1;
             if pool.ready() {
                 let (top, _) = spec.loudest();
                 suspect = top > 0.0 && top >= spec.chance_max() * 1.25;
                 let (text, record) = pool.draw();
                 shown = Some((text, clock::format(clock::now(), "%H:%M:%S")));
-                if let Some(d) = logs.as_ref() {
-                    let _ = entropy::write_record(d, &record, &c.serial_no, suspect);
+                if let Some(wl) = logging.as_ref() {
+                    let _ = entropy::write_record(&wl.dir, &record, &c.serial_no, suspect);
                 }
             }
             match &shown {
@@ -374,7 +501,7 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
                     out.push_str(&format!("{}{}random   {}{}",
                                           at(row, 0), CYAN,
                                           entropy::group_hex(text), OFF));
-                    if h > row + 2 {
+                    if hv > row + 2 {
                         // THE COUNTDOWN KEEPS RUNNING. The line stayed on
                         // screen with no indication of whether the next one
                         // was a minute away or eight, which is the one thing
@@ -402,12 +529,21 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
             // The time now, two rows under the random line whether or not
             // it has a note yet, so it does not jump when the first line
             // arrives -- and so a screenshot says when it was taken.
-            if row + 2 < h.saturating_sub(2) {
+            if row + 2 < hv.saturating_sub(2) {
                 out.push_str(&format!("{}{}clock{}    {}", at(row + 2, 0), DIM, OFF,
                                       clock::format(clock::now(), "%Y-%m-%d %H:%M:%S")));
+                // What the log is doing, beside it: what the backfill found,
+                // or that rows are not reaching the disk.
+                if !table_note.is_empty() && width > 40 + table_note.len() {
+                    let tint = if table_note.starts_with("NOT") { YELLOW } else { DIM };
+                    out.push_str(&format!("{}{}{}{}", at(row + 2, 32), tint, table_note, OFF));
+                }
             }
         }
 
+        if tl > 0 {
+            draw_table(&mut out, h - 2 - tl, tl, width, &names, &table);
+        }
         if h >= 2 {
             out.push_str(&format!("{}{}{}{}", at(h - 2, 0), DIM, footer, OFF));
             out.push_str(&format!("{}{}q to quit{}", at(h - 1, 0), DIM, OFF));
@@ -424,8 +560,15 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
             }
         }
     }
+    if let Some(lg) = logger.as_mut() {
+        let averages: Vec<Option<f64>> = spans.iter().map(|s| w.average(*s)).collect();
+        lg.finish(&averages);
+    }
     c.heartbeat(false);
 }
+
+/// Rows of log the monitor keeps for its table: more than any screen shows.
+const TABLE_KEEP: usize = 200;
 
 // ------------------------------------------------------------------ main ---
 
@@ -486,37 +629,16 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     let dir = logs.unwrap_or_else(log::state_dir);
     let _ = std::fs::create_dir_all(&dir);
 
-    // BEFORE ANYTHING IS APPENDED, as the Python does: backfilled rows belong
-    // in the past and the merge rewrites the file. The service starts when a
-    // counter is plugged in or the machine comes up, which is exactly when
-    // the counter has been recording somewhere this log was not. The status
-    // file says so, because reading the flash takes a while.
     if let Some((bytes, max_gap)) = backfill {
         log::write_status("backfilling from the counter's history");
-        let offset = measure_clock_offset(&c).unwrap_or(0.0);
-        let blob = read_history_tail(&c, bytes, false);
-        if blob.is_empty() {
-            println!("radbeeper: backfill skipped -- the counter returned no history");
-        } else {
-            let sites = log::read_sites(&dir);
-            let r = history::backfill(&blob, spans, every, max_gap, offset, &dir,
-                                      Some(c.serial_no.as_str()), &sites, None);
-            println!("radbeeper: backfill -- {} samples, {} rows, {} added, {} already logged",
-                     r.samples, r.rows, r.added, r.clashed);
-        }
+        println!("radbeeper: {}", backfill_at_start(&c, &dir, spans, every, bytes, max_gap, false));
     }
 
     log::write_status(&format!("monitoring {} ({})", c.path, c.version));
     let mut w = Windows::new(spans);
-    let mut iv = log::Interval::new(spans.len());
-    let mut out = log::Writer::new(spans, dir.clone(), Some(c.serial_no.clone()), every);
+    let mut logger = Logger::new(spans, dir.clone(), &c.serial_no, every);
 
-    // The site is re-read whenever sites.tsv changes, so `radbeeper site`
-    // takes effect on the next row rather than at the next restart.
-    let mut sites = log::read_sites(&dir);
-    let mut sites_mtime = mtime_of(&dir.join("sites.tsv"));
-
-    let here = log::site_at(&c.serial_no, clock::now(), &sites);
+    let here = log::site_at(&c.serial_no, clock::now(), &logger.sites);
     println!("radbeeper: monitoring {} -- {}", c.path, c.version);
     println!("radbeeper: counter {} at {}", c.serial_no,
              here.unwrap_or_else(|| "an unrecorded place".to_string()));
@@ -531,7 +653,6 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     // without its cleanup leaves the counter streaming, and the next process
     // inherits that.
     c.heartbeat(true);
-    let mut due: Option<f64> = None;
     loop {
         let counts = match c.next_sample(Duration::from_millis(2500)) {
             Some(v) => v as u32,
@@ -541,30 +662,9 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
         w.add(when, counts);
         let averages: Vec<Option<f64>> =
             spans.iter().map(|s| w.average(*s)).collect();
-        iv.add(counts, &averages, 1.0);
-        if due.is_none() {
-            due = Some(when + every);
-        }
-        // One write and one flush per interval instead of per second: at the
-        // default that is two syscalls a minute rather than a hundred and
-        // twenty, which is the whole difference on a Pi Zero logging to an SD
-        // card. Nothing is buffered up to pay for it.
-        if when >= due.unwrap() {
-            let now = clock::now();
-            let (m, s) = (mtime_of(&dir.join("sites.tsv")), &mut sites);
-            if m != sites_mtime {
-                sites_mtime = m;
-                *s = log::read_sites(&dir);
-            }
-            let site = log::site_at(&c.serial_no, now, &sites).unwrap_or_default();
-            let line = log::row(now, iv.cps(), iv.counts, iv.seconds,
-                                &averages, &iv.peaks, log::SRC_LIVE, &site);
-            if let Err(e) = out.write(now, &line) {
-                eprintln!("radbeeper: could not write the log -- {}", e);
-                break;
-            }
-            iv.reset();
-            due = Some(when + every);
+        if let Err(e) = logger.add(when, counts, &averages) {
+            eprintln!("radbeeper: could not write the log -- {}", e);
+            break;
         }
         if stopping() {
             break;
@@ -576,23 +676,112 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
             break;
         }
     }
-
-    // Whatever the last interval collected is worth keeping: a service
-    // stopped four seconds after a spike should still have the spike on
-    // disk, and the seconds column says the row is short.
-    if iv.seconds > 0.0 {
-        let now = clock::now();
-        let averages: Vec<Option<f64>> =
-            spans.iter().map(|s| w.average(*s)).collect();
-        let site = log::site_at(&c.serial_no, now, &sites).unwrap_or_default();
-        let line = log::row(now, iv.cps(), iv.counts, iv.seconds,
-                            &averages, &iv.peaks, log::SRC_LIVE, &site);
-        let _ = out.write(now, &line);
-    }
-    out.close();
+    let averages: Vec<Option<f64>> = spans.iter().map(|s| w.average(*s)).collect();
+    logger.finish(&averages);
     c.heartbeat(false);
     log::write_status("stopped");
     0
+}
+
+/// Read the tail of the counter's flash into the log, before anything live is
+/// appended: backfilled rows belong in the past and the merge rewrites the
+/// file. The service starts when a counter is plugged in or the machine comes
+/// up, and the monitor when somebody sits down at it -- which is exactly when
+/// the counter has been recording somewhere this log was not. The flash is a
+/// ring, and the gaps are wherever nothing was listening: `history::backfill`
+/// finds the newest end of the ring and fills only the slots that are empty.
+///
+/// One line saying what happened, for whoever is showing it.
+fn backfill_at_start(c: &counter::Counter, dir: &Path, spans: &[f64], every: f64,
+                     bytes: usize, max_gap: f64, quiet: bool) -> String {
+    let offset = measure_clock_offset(c).unwrap_or(0.0);
+    let blob = read_history_tail(c, bytes, quiet);
+    if blob.is_empty() {
+        return "backfill skipped -- the counter returned no history".to_string();
+    }
+    let sites = log::read_sites(dir);
+    let r = history::backfill(&blob, spans, every, max_gap, offset, dir,
+                              Some(c.serial_no.as_str()), &sites, None);
+    format!("backfill -- {} samples, {} rows, {} added, {} already logged",
+            r.samples, r.rows, r.added, r.clashed)
+}
+
+/// Rows to the dated log, one every `every` seconds.
+///
+/// What `service` writes, shared, so the monitor writing the log while it is
+/// open cannot become a second dialect of the same file.
+struct Logger {
+    dir: PathBuf,
+    serial: String,
+    every: f64,
+    out: log::Writer,
+    iv: log::Interval,
+    due: Option<f64>,
+    sites: Vec<(String, f64, String)>,
+    sites_mtime: Option<u64>,
+}
+
+impl Logger {
+    fn new(spans: &[f64], dir: PathBuf, serial: &str, every: f64) -> Logger {
+        // The site is re-read whenever sites.tsv changes, so `radbeeper site`
+        // takes effect on the next row rather than at the next restart.
+        let sites = log::read_sites(&dir);
+        let sites_mtime = mtime_of(&dir.join("sites.tsv"));
+        Logger {
+            out: log::Writer::new(spans, dir.clone(), Some(serial.to_string()), every),
+            iv: log::Interval::new(spans.len()),
+            dir,
+            serial: serial.to_string(),
+            every,
+            due: None,
+            sites,
+            sites_mtime,
+        }
+    }
+
+    /// One second. Returns the row when this second completed an interval
+    /// and the row was written -- not when its slot was already taken.
+    fn add(&mut self, when: f64, counts: u32, averages: &[Option<f64>])
+        -> std::io::Result<Option<String>>
+    {
+        self.iv.add(counts, averages, 1.0);
+        let due = *self.due.get_or_insert(when + self.every);
+        // One write and one flush per interval instead of per second: at the
+        // default that is two syscalls a minute rather than a hundred and
+        // twenty, which is the whole difference on a Pi Zero logging to an SD
+        // card. Nothing is buffered up to pay for it.
+        if when < due {
+            return Ok(None);
+        }
+        let line = self.row(averages);
+        let wrote = self.out.write(clock::now(), &line)?;
+        self.iv.reset();
+        self.due = Some(when + self.every);
+        Ok(wrote.then_some(line))
+    }
+
+    /// Whatever the last interval collected is worth keeping: stopped four
+    /// seconds after a spike, the spike should still be on disk, and the
+    /// seconds column says the row is short.
+    fn finish(&mut self, averages: &[Option<f64>]) {
+        if self.iv.seconds > 0.0 {
+            let line = self.row(averages);
+            let _ = self.out.write(clock::now(), &line);
+        }
+        self.out.close();
+    }
+
+    fn row(&mut self, averages: &[Option<f64>]) -> String {
+        let now = clock::now();
+        let m = mtime_of(&self.dir.join("sites.tsv"));
+        if m != self.sites_mtime {
+            self.sites_mtime = m;
+            self.sites = log::read_sites(&self.dir);
+        }
+        let site = log::site_at(&self.serial, now, &self.sites).unwrap_or_default();
+        log::row(now, self.iv.cps(), self.iv.counts, self.iv.seconds,
+                 averages, &self.iv.peaks, log::SRC_LIVE, &site)
+    }
 }
 
 fn mtime_of(path: &std::path::Path) -> Option<u64> {
@@ -1097,7 +1286,7 @@ fn usage() {
     println!("  radbeeper probe            find the counter and say what it is");
     println!("  radbeeper cpm              the counter's own CPM, once");
     println!("  radbeeper clock [--set]    its clock against this machine's, or correct it");
-    println!("  radbeeper watch            the monitor");
+    println!("  radbeeper watch            the monitor, logging while it is open");
     println!("  radbeeper service          log to disk, a row every 30 seconds");
     println!("  radbeeper random           256 bits of hex, out of decay timing");
     println!("  radbeeper random --check F recompute every line in an emission log");
@@ -1112,7 +1301,9 @@ fn usage() {
     println!("      --duration SECONDS     stop after this long");
     println!("      --log-every SECONDS    row spacing for service (default {})",
              log::g(log::DEFAULT_LOG_EVERY));
-    println!("      --logs DIR             where service and backfill write");
+    println!("      --logs DIR             where service, watch and backfill write");
+    println!("      --no-log               watch without writing anything");
+    println!("      --no-backfill          skip reading the counter's history at start");
     println!("      --image FILE           backfill from a saved .bin, no counter");
     println!("      --serial SERIAL        which counter an image came from");
     println!("      --bytes N              how much flash to read");
@@ -1143,6 +1334,7 @@ fn main() {
     let mut bytes: Option<usize> = None;
     let mut max_gap = 300.0f64;
     let mut no_backfill = false;
+    let mut no_log = false;
     let mut set_clock = false;
     let mut output: Option<String> = None;
     // hotplug's three. Four seconds is a read of /dev fifteen times a minute,
@@ -1195,6 +1387,7 @@ fn main() {
             "--serial" => serial = next(&mut i),
             "--bytes" | "--backfill-bytes" => bytes = next(&mut i).and_then(|v| v.parse().ok()),
             "--no-backfill" => no_backfill = true,
+            "--no-log" => no_log = true,
             "--set" => set_clock = true,
             "--max-gap" => {
                 max_gap = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(max_gap)
@@ -1293,7 +1486,14 @@ fn main() {
         }
         "cpm" => std::process::exit(cpm_cmd(&c, cpm_per_usvh)),
         "clock" => std::process::exit(clock_cmd(&c, set_clock)),
-        "watch" => watch(&c, &spans, cpm_per_usvh, duration, logs),
+        "watch" => {
+            let logging = (!no_log).then(|| WatchLog {
+                dir: logs.clone().unwrap_or_else(log::state_dir),
+                every: log_every,
+                backfill: (!no_backfill).then(|| (bytes.unwrap_or(64 * 1024), max_gap)),
+            });
+            watch(&c, &spans, cpm_per_usvh, duration, logging)
+        }
         other => {
             eprintln!("radbeeper: unknown command {}", other);
             std::process::exit(2);

@@ -669,7 +669,10 @@ class TestTheTwoMonitorsDrawTheSameScreen(unittest.TestCase):
     def test_every_row_of_the_panel_is_in_the_same_place(self):
         mine = self.rows_of(self.screen([sys.executable,
                                          os.path.join(ROOT, "radbeeper")]))
-        theirs = self.rows_of(self.screen([self.BINARY]))
+        # --no-log: the table of log rows and the logging behind it are the
+        # native monitor's alone, and without them it draws the Python's
+        # screen exactly -- which is the thing this compares.
+        theirs = self.rows_of(self.screen([self.BINARY, "--no-log"]))
         if not mine or not theirs:
             self.skipTest("neither monitor drew anything")
         # Both have to have drawn the whole panel, or the comparison passes
@@ -827,3 +830,91 @@ class TestTheCountersClock(unittest.TestCase):
                                    delta=0.1)
         finally:
             c.close()
+
+
+class TestTheMonitorLogsWhileItIsOpen(unittest.TestCase):
+    """`watch` is the service with a screen: backfill, rows, random, a table.
+
+    The monitor and the logger cannot both hold the port, so while the
+    monitor was open nothing was written at all -- the log had a hole exactly
+    where somebody was watching. Now the monitor backfills at connect, writes
+    the same rows the service does, appends every random line, and shows the
+    log's newest rows scrolling up at the bottom of the screen.
+    """
+
+    BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
+    RECORD = os.path.join(ROOT, "tools", "record.py")
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(cls.BINARY):
+            raise unittest.SkipTest("no release binary to run")
+
+    def run_monitor(self, *extra, rows=46, seconds=30):
+        import tempfile
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fake_gmc import FakeGMC, build_history
+        tmp = tempfile.mkdtemp()
+        logs = os.path.join(tmp, "logs")
+        cast = os.path.join(tmp, "m.cast")
+        dev = FakeGMC(cpm=600.0, seed=5, tick=0.2,
+                      history=build_history(seconds=600, cpm=200.0,
+                                            size=64 * 1024))
+        dev.start()
+        try:
+            subprocess.run(
+                [sys.executable, self.RECORD, "capture", cast,
+                 "--cols", "160", "--rows", str(rows), "--seconds", str(seconds),
+                 "--", self.BINARY, "-d", dev.path, "--logs", logs,
+                 "--log-every", "2", "--backfill-bytes", "8192"]
+                + list(extra) + ["watch"],
+                cwd=ROOT, capture_output=True, timeout=seconds + 120)
+        finally:
+            dev.stop()
+        text = subprocess.run(
+            [sys.executable, self.RECORD, "text", cast, "--at", str(seconds - 1)],
+            cwd=ROOT, capture_output=True, text=True, timeout=60).stdout
+        return logs, text.splitlines()
+
+    def test_backfill_rows_and_the_table(self):
+        logs, screen = self.run_monitor()
+        names = sorted(os.listdir(logs))
+        tsv = [n for n in names if n.startswith("cpm-")]
+        self.assertEqual(len(tsv), 1, names)
+        with open(os.path.join(logs, tsv[0])) as f:
+            body = [l.split("\t") for l in f.read().splitlines()
+                    if l and not l.startswith("#")]
+        self.assertTrue([r for r in body if r[-2] == "flash"],
+                        "the backfill at connect wrote nothing")
+        live = [r for r in body if r[-2] == "live"]
+        self.assertTrue(live, "the monitor logged no rows")
+        heads = [i for i, l in enumerate(screen) if l.startswith("#time")]
+        self.assertEqual(len(heads), 1, "\n".join(screen))
+        table = [l for l in screen[heads[0] + 1:]
+                 if l[:4].isdigit()]
+        # Every row on screen is a row on disk -- the table is the log, not
+        # a second opinion of it -- and the live ones are among them. Not
+        # "the newest row on disk is on screen": the frame and the write
+        # are a beat apart, and which lands first is not the point.
+        on_disk = {r[0] for r in body}
+        self.assertTrue(table, "\n".join(screen))
+        self.assertTrue(all(l.split()[0] in on_disk for l in table),
+                        "\n".join(screen))
+        self.assertTrue(any(l.split()[0] in {r[0] for r in live} for l in table),
+                        "\n".join(screen))
+        self.assertTrue(screen[-1].startswith("q to quit"))
+        self.assertTrue(screen[-2].startswith("spectrum"))
+
+    def test_the_table_fits_a_thirty_row_screen_under_the_clock(self):
+        _logs, screen = self.run_monitor(rows=30)
+        self.assertEqual(len(screen), 30, "\n".join(screen))
+        clock = [i for i, l in enumerate(screen) if l.startswith("clock")]
+        head = [i for i, l in enumerate(screen) if l.startswith("#time")]
+        self.assertEqual((len(clock), len(head)), (1, 1), "\n".join(screen))
+        self.assertEqual(head[0], clock[0] + 1)
+        self.assertEqual(head[0], 30 - 2 - 6)
+
+    def test_no_log_writes_nothing_and_draws_no_table(self):
+        logs, screen = self.run_monitor("--no-log")
+        self.assertFalse(os.path.exists(logs) and os.listdir(logs))
+        self.assertFalse([l for l in screen if l.startswith("#time")])

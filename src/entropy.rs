@@ -266,6 +266,24 @@ pub fn write_record(dir: &Path, record: &Record, serial: &str, suspect: bool)
         record.hex,
         record.counts
     )?;
+    write_hex(dir, &record.hex, serial)?;
+    Ok(path)
+}
+
+/// Append the digits alone to `random-<serial>.hex`: the time it was drawn,
+/// two spaces, sixty-four hex digits, one line per emission.
+///
+/// The .tsv is the audit trail and carries the counts; this is the stream,
+/// for anything that just wants the numbers -- `tail -f` it, or cut the
+/// second field and feed it on.
+pub fn write_hex(dir: &Path, hex: &str, serial: &str) -> std::io::Result<PathBuf> {
+    let path = dir.join(format!("random-{}.hex", if serial.is_empty() {
+        "unknown"
+    } else {
+        serial
+    }));
+    let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
+    writeln!(f, "{}  {}", clock::stamp(clock::now()), hex)?;
     Ok(path)
 }
 
