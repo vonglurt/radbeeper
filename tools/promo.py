@@ -114,6 +114,11 @@ def shquote(s):
     return "'" + s.replace("'", "'\\''") + "'"
 
 
+# THE SHOTS CARRY THE VERSION THAT DREW THEM, which is the whole point of the
+# nameplate in the monitor's corner -- not the version the README happens to
+# be published as. A patch release does not re-record eleven minutes of a
+# counter to advance a string in the corner of a picture; a release that
+# changes what the screen looks like does, and `make promo` is how.
 def when(name, match, after=0):
     """The second a recording first shows something, or None.
 
