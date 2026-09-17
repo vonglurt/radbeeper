@@ -220,7 +220,10 @@ TERMINALS = (("foot", "-e"), ("alacritty", "-e"), ("urxvt", "-e"),
 # to run unprivileged is a service nobody runs.
 # PORT: replaced by src/log.rs :: state_dir() -- same name, same $XDG_STATE_HOME rules
 def state_dir():
-    for d in ("/var/log/radbeeper", os.path.expanduser("~/.local/share/radbeeper")):
+    # /var/lib first: a measurement record is state, and /var/log is a tmpfs
+    # on plenty of Alpine desktops. See src/log.rs :: state_dir.
+    for d in ("/var/lib/radbeeper", "/var/log/radbeeper",
+              os.path.expanduser("~/.local/share/radbeeper")):
         try:
             os.makedirs(d, exist_ok=True)
             probe = os.path.join(d, ".writable")

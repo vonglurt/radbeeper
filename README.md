@@ -439,10 +439,40 @@ zero** — it is a window that was not full yet:
 
 ![the log with its tabs shown](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/log-tabs.png)
 
-State lives in `/var/log/radbeeper` when that is writable and
-`~/.local/share/radbeeper` when it is not. Files rotate by month and by counter
-(`cpm-<serial>-YYYY-MM.tsv`), which needs no cron entry and nothing that renames
-a file while a service is appending to it.
+State lives in `/var/lib/radbeeper` when that is writable, `/var/log/radbeeper`
+when only that is, and `~/.local/share/radbeeper` otherwise. Files rotate by
+month and by counter (`cpm-<serial>-YYYY-MM.tsv`), which needs no cron entry and
+nothing that renames a file while a service is appending to it.
+
+**`/var/lib`, not `/var/log`, because `/var/log` is often in RAM.** On Alpine
+desktops it is commonly a tmpfs — it was on the machine these logs came from —
+and every reboot emptied the log, leaving only what the counter's flash still
+held to backfill from. A measurement record is state, not a log to rotate away.
+
+### One log for the service and the monitor
+
+The boot service runs as root and `watch` runs as you, and they should write the
+same files. Make the directory the `dialout` group's, which you are already in
+for the serial port, and have the service create files the group can write:
+
+```sh
+doas rc-service radbeeper stop
+doas mkdir -p /var/lib/radbeeper
+doas sh -c 'cp -p /var/log/radbeeper/*.tsv /var/log/radbeeper/*.hex /var/lib/radbeeper/ 2>/dev/null; true'
+doas chown -R root:dialout /var/lib/radbeeper
+doas chmod 2775 /var/lib/radbeeper
+doas sh -c 'chmod g+w /var/lib/radbeeper/* 2>/dev/null; true'
+# the service script: make the directory at start, files group-writable, status in the new place
+doas sed -i -e 's|^\tcheckpath -d -m 0755 /var/log/radbeeper$|&\n\tcheckpath -d -m 2775 -o root:dialout /var/lib/radbeeper|' \
+            -e 's|^command_background=true$|&\numask=002|' \
+            -e 's|/var/log/radbeeper/status|/var/lib/radbeeper/status|g' /etc/init.d/radbeeper
+doas rc-service radbeeper start
+```
+
+The setgid bit (the `2` in `2775`) makes every file created in the directory
+belong to `dialout`, whoever creates it; `umask=002` makes the service's files
+group-writable. `service.log` stays in `/var/log` — it is the service's own
+output, and losing it at a reboot is what a log is for.
 
 ### As a boot service
 
@@ -454,7 +484,7 @@ the first place. **Dormant is the normal state**: with no counter plugged in the
 
 ```sh
 rc-service radbeeper start        # or just plug the counter in
-cat /var/log/radbeeper/status     # what it is doing, and why
+cat /var/lib/radbeeper/status     # what it is doing, and why
 ```
 
 **The service runs `/usr/local/bin/radbeeper`, not the one `make install` put
@@ -493,7 +523,7 @@ b17c9c60 d5deeb7b 4b102dfc bec14efc b523818b 18d3ada0 582bd912 e61ff856
   256 bits, min-entropy 258 measured, from 448 seconds at 0.68 counts/s
   440 bits is what a Poisson model would have claimed for the same 448 seconds
   spectrum flat -- the source looks like decay
-  recorded in /var/log/radbeeper/random-F48824B8207F7E.tsv
+  recorded in /var/lib/radbeeper/random-F48824B8207F7E.tsv
 ```
 
 That second line is the point: on this run the model would have handed over the
@@ -579,7 +609,7 @@ decays that have not happened yet.
 digits — by `random` and by `watch` alike:
 
 ```sh
-tail -f ~/.local/share/radbeeper/random-F48824B8207F7E.hex | cut -c22-
+tail -f /var/lib/radbeeper/random-F48824B8207F7E.hex | cut -c22-
 ```
 
 > Treat this as a good physical entropy source, not a certified one. It has not

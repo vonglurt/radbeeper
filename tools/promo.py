@@ -226,12 +226,12 @@ def main():
     # ------------------------------------------------------------- logs ---
     if want("log-output"):
         session("log-output", [
-            "ls /var/log/radbeeper",
+            "ls /var/lib/radbeeper",
             "",
-            "{ head -1; tail -3; } < /var/log/radbeeper/"
+            "{ head -1; tail -3; } < /var/lib/radbeeper/"
             "cpm-F48824B8207F7E-2026-09.tsv | cut -f1-8 | column -t",
             "",
-            "wc -l /var/log/radbeeper/cpm-*.tsv",
+            "wc -l /var/lib/radbeeper/cpm-*.tsv",
         ], cols=104, rows=24, seconds=20)
         still("log-output", 19, cursor=True)
 

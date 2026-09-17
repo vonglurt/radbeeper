@@ -442,10 +442,18 @@ mod tests {
 /// written to, the user's own when it cannot.
 ///
 /// Probed rather than assumed, and in that order, because the service runs as
-/// root at boot and a person running `radbeeper service` by hand does not.
+/// root at boot and a person running `radbeeper watch` does not -- and when
+/// /var/lib/radbeeper is root:dialout with group write, both land in it.
+///
+/// /VAR/LIB, NOT /VAR/LOG. On Alpine desktops /var/log is commonly a tmpfs,
+/// and it was on the machine these logs come from: every reboot emptied the
+/// log, and only as much as the counter's flash still held came back. A
+/// measurement record is state, not a log to be rotated away. /var/log is
+/// still tried second, so an install that has only that keeps working.
 pub fn state_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
     let candidates = [
+        PathBuf::from("/var/lib/radbeeper"),
         PathBuf::from("/var/log/radbeeper"),
         PathBuf::from(home).join(".local/share/radbeeper"),
     ];
