@@ -40,10 +40,15 @@ PYTHON_PROGRAM = os.path.join(ROOT, "radbeeper")
 # screenshot that quietly stops showing a feature is worse than no screenshot.
 # 560 s clears all three with room to animate.
 #
+# 620 s, because the counts strip is four tiers deep now and the leftmost of
+# them takes 588 s to fill at 160 columns -- a shot taken before that shows a
+# display that is still arriving, which is a different picture from the one
+# the program settles into. It is also past the 450 s the random pool needs.
+#
 # `--monitor-seconds` runs it longer. 3300 s is the one worth knowing: the
 # 50-minute window fills at 3000 s, so the hero shot has four of the five
 # windows with a number in them instead of two still counting down.
-MONITOR_SECONDS = 240
+MONITOR_SECONDS = 620
 # Forty rows, not thirty: the monitor's log table takes the rows after 30, and
 # under 36 it squeezes the charts to make room -- the shot should show both
 # at full size.
@@ -109,6 +114,24 @@ def shquote(s):
     return "'" + s.replace("'", "'\\''") + "'"
 
 
+def when(name, match, after=0):
+    """The second a recording first shows something, or None.
+
+    A moment worth animating is a property of the run, not of the clock: the
+    random pool delivers its first line when it has measured enough
+    min-entropy to justify one, which is a different second in every session.
+    Found, therefore, rather than written down.
+    """
+    out = subprocess.run(
+        [sys.executable, RECORD, "when", cast(name), "--match", match,
+         "--after", str(after)],
+        cwd=ROOT, capture_output=True, text=True)
+    if out.returncode != 0:
+        print("  (no frame matches %s -- clip skipped)" % match)
+        return None
+    return float(out.stdout.strip())
+
+
 def still(name, at, size=17, rows=0, cursor=False, source=None, top=0):
     argv = [sys.executable, RECORD, "still", cast(source or name),
             "-o", png(name), "--at", at, "--size", size]
@@ -146,7 +169,7 @@ def main():
 
     # ---------------------------------------------------------- monitor ---
     if any(want(n) for n in ("watch", "watch-filling", "watch-spectrum",
-                             "watch-20s", "watch-fast", "watch-3to4")):
+                             "watch-hero")):
         if not (a.keep and os.path.exists(cast("watch-long"))):
             print("recording %d s of the monitor -- this takes that long"
                   % seconds)
@@ -175,45 +198,44 @@ def main():
             # the counts moved up one when the clock took a row of air.
             still("watch-spectrum", late, size=15, rows=6, top=19,
                   source="watch-long")
-        if want("watch-20s"):
-            # Twenty seconds at ten times speed, ending twenty seconds before
-            # the recording does: late enough that the short windows are full
-            # and the table has rows, and clear of the monitor's exit.
-            start = max(0, min(300, seconds - 40))
-            run(sys.executable, RECORD, "gif", cast("watch-long"),
-                "-o", os.path.join(SHOTS, "watch-20s.gif"),
-                "--from", start, "--to", start + 20, "--step", 1, "--speed", 10,
-                "--rows", MONITOR_ROWS, "--size", 13)
-        if want("watch-fast"):
-            # The whole session at a tenth of a second a frame, about 140
-            # frames whatever its length: a frame every four seconds of a
-            # 560 s run is 40x, of a 3300 s run every 24 s is 240x. What
-            # 300-320 cannot show -- the windows arriving one after another,
-            # the spectrum building, the random line appearing.
-            step = max(4, round(seconds / 140))
-            run(sys.executable, RECORD, "gif", cast("watch-long"),
-                "-o", os.path.join(SHOTS, "watch-fast.gif"),
-                "--from", step, "--to", seconds, "--step", step,
-                "--speed", step * 10, "--rows", MONITOR_ROWS, "--size", 11)
-
-        if want("watch-3to4"):
-            # The README's first moving picture: the fourth minute, 180 s to
-            # 240 s, a frame a second played at fifteen times speed -- sixty
-            # seconds in four. A minute is what it takes for the monitor to
-            # show it is a monitor and not a screenshot: two log rows close,
-            # the 30 s window walks, the countdowns count and the strip ages
-            # a bar to the left. Short enough that a reader watches all of it
-            # before deciding whether to read on.
+        if want("watch-hero"):
+            # The README's moving picture, and the only one: two clips in a
+            # single file, because the display has two things to show and
+            # they want different speeds.
             #
-            # It needs four minutes of recording. A shorter --monitor-seconds
-            # takes the last minute there is instead of claiming a fourth one
-            # that was never recorded.
-            stop = min(240, seconds)
-            run(sys.executable, RECORD, "gif", cast("watch-long"),
-                "-o", os.path.join(SHOTS, "watch-3to4.gif"),
-                "--from", max(0, stop - 60), "--to", stop,
-                "--step", 1, "--speed", 15,
-                "--rows", MONITOR_ROWS, "--size", 13)
+            # First the whole five minutes at 100x, which is the one way to
+            # watch the counts strip fill -- a second a bar on the right, and
+            # then each tier to its left taking a bar half as often, so the
+            # fourth is still filling when the first has scrolled twice.
+            # Then the hundred seconds after it, at 10x: slow enough to read
+            # a window changing and a log row closing, which at 100x is a
+            # flicker.
+            #
+            # It replaced watch-fast.gif (the session at 40x) and
+            # watch-20s.gif (twenty seconds at 10x), which were these two
+            # clips as two files and two paragraphs.
+            #
+            # And then, third, the second the random pool has measured
+            # enough min-entropy and prints its first 256 bits -- found in
+            # the recording rather than timed, because it lands wherever the
+            # source puts it.
+            # Anchored on the monitor's first frame, not on the recording's:
+            # the opening backfill is a line of text and a pause of anywhere
+            # between forty seconds and two and a half minutes, depending on
+            # how much of the counter's flash is new. Timed from zero, a slow
+            # one eats a third of the fast clip and the file opens on a blank
+            # screen -- which is also the still GitHub shows before it plays.
+            start = when("watch-long", r"s/bar") or 0.0
+            clips = ["%g:%g:4:100" % (start, start + 300),
+                     "%g:%g:1:10" % (start + 300, start + 400)]
+            got = when("watch-long", r"^random   [0-9a-f]{8} ")
+            if got is not None:
+                clips.append("%g:%g:1:10" % (max(0.0, got - 12.0), got + 8.0))
+            argv = [sys.executable, RECORD, "gif", cast("watch-long"),
+                    "-o", os.path.join(SHOTS, "watch-hero.gif")]
+            for c in clips:
+                argv += ["--clip", c]
+            run(*argv, "--rows", MONITOR_ROWS, "--size", 11)
 
     # ------------------------------------------------------------ probe ---
     if want("probe"):

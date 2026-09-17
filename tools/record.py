@@ -16,6 +16,7 @@ import base64
 import json
 import os
 import pty
+import re
 import select
 import signal
 import sys
@@ -67,6 +68,10 @@ def capture(cmd, path, cols, rows, seconds, env_extra=None):
                 break
             out.write(json.dumps([round(now - started, 4),
                                   base64.b64encode(data).decode()]) + "\n")
+            # Flushed per event, not per buffer: a ten-minute recording is
+            # worth watching while it runs -- and one that is interrupted is
+            # worth what it got, rather than nothing at all.
+            out.flush()
     finally:
         out.close()
         try:
@@ -486,6 +491,30 @@ class Renderer:
         img.paste(bg, (0, 0), Image.eval(mask, lambda v: 255 - v))
 
 
+def first_match(head, events, pattern, after=0.0, step=1.0):
+    """The first second at which the screen matches `pattern`.
+
+    One pass over the stream, checking the rendered text at each second, so
+    that a moment worth animating -- the random pool delivering its first
+    line, a window filling -- can be found in a recording instead of read off
+    a clock by hand and written into a script as a number that will be wrong
+    for the next recording.
+    """
+    s = Screen(head["width"], head["height"])
+    rx = re.compile(pattern, re.M)
+    i, n = 0, len(events)
+    last = events[-1][0] if events else 0.0
+    t = 0.0
+    while t <= last:
+        while i < n and events[i][0] <= t:
+            s.feed(events[i][1])
+            i += 1
+        if t >= after and rx.search(s.text()):
+            return t
+        t += step
+    return None
+
+
 def replay(head, events, until):
     s = Screen(head["width"], head["height"])
     for t, data in events:
@@ -525,13 +554,22 @@ def main():
     g = sub.add_parser("gif", help="an animation between two moments")
     g.add_argument("cast")
     g.add_argument("-o", "--out", required=True)
-    g.add_argument("--from", dest="start", type=float, required=True)
-    g.add_argument("--to", dest="stop", type=float, required=True)
+    g.add_argument("--from", dest="start", type=float)
+    g.add_argument("--to", dest="stop", type=float)
     g.add_argument("--step", type=float, default=1.0,
                    help="seconds of session per frame")
     g.add_argument("--speed", type=float, default=10.0)
+    g.add_argument("--clip", action="append", default=[],
+                   metavar="FROM:TO:STEP:SPEED",
+                   help="one stretch of the session, at its own speed; give "
+                        "it more than once and they play in the order given")
     g.add_argument("--rows", type=int, default=0)
     g.add_argument("--size", type=int, default=16)
+
+    f = sub.add_parser("when", help="the first second the screen matches")
+    f.add_argument("cast")
+    f.add_argument("--match", required=True, help="a python regex")
+    f.add_argument("--after", type=float, default=0.0)
 
     argv_all = sys.argv[1:]
     child = []
@@ -572,6 +610,13 @@ def main():
             print("  %-16s %6d" % (repr(s), n))
         return
 
+    if a.cmd == "when":
+        t = first_match(head, ev, a.match, a.after)
+        if t is None:
+            sys.exit("no frame matches %r" % a.match)
+        print("%g" % t)
+        return
+
     if a.cmd == "text":
         print(replay(head, ev, a.at).text())
         return
@@ -586,18 +631,43 @@ def main():
         return
 
     if a.cmd == "gif":
+        # One clip or several. Several is how a recording gets shown twice
+        # over at two speeds -- the whole of it fast enough to watch the
+        # display fill, then the interesting minute slow enough to read --
+        # without asking the reader to open two files.
+        if a.clip:
+            clips = []
+            for spec in a.clip:
+                f = spec.split(":")
+                if len(f) != 4:
+                    sys.exit("--clip wants FROM:TO:STEP:SPEED, got %r" % spec)
+                clips.append(tuple(float(x) for x in f))
+        elif a.start is None or a.stop is None:
+            sys.exit("gif wants --from and --to, or --clip")
+        else:
+            clips = [(a.start, a.stop, a.step, a.speed)]
+
         r = Renderer(size=a.size)
-        frames = []
-        t = a.start
         rows = a.rows or head["height"]
-        while t <= a.stop + 1e-9:
-            frames.append(r.image(replay(head, ev, t), rows))
-            t += a.step
-        ms = int(round(a.step * 1000 / a.speed))
+        frames, delays = [], []
+        for start, stop, step, speed in clips:
+            # GIF delays are hundredths of a second, so a frame time is
+            # rounded to one and the playing speed is whatever that rounding
+            # allows -- reported below, rather than the speed that was asked
+            # for, because the file is the thing that gets published.
+            ms = max(20, int(round(step * 1000.0 / speed)))
+            t = start
+            while t <= stop + 1e-9:
+                frames.append(r.image(replay(head, ev, t), rows))
+                delays.append(ms)
+                t += step
+            print("  clip %gs-%gs  %g s/frame at %d ms  = %.1fx, %.1fs"
+                  % (start, stop, step, ms, step * 1000.0 / ms,
+                     (stop - start) / (step * 1000.0 / ms)))
         frames[0].save(a.out, save_all=True, append_images=frames[1:],
-                       duration=ms, loop=0, optimize=True)
-        print("%s  %d frames, %d ms each, %s"
-              % (a.out, len(frames), ms,
+                       duration=delays, loop=0, optimize=True)
+        print("%s  %d frames, %.1fs, %s"
+              % (a.out, len(frames), sum(delays) / 1000.0,
                  "x".join(map(str, frames[0].size))))
         return
 
