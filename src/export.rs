@@ -39,7 +39,7 @@ const ENTROPY_BITS: i64 = entropy::ENTROPY_BITS as i64;
 /// The screenshots the index links, when they are beside it.
 const SHOTS: [&str; 9] = [
     "probe", "watch", "watch-filling", "watch-spectrum", "watch-plain",
-    "log-output", "log-tabs", "commands", "watch-300-320",
+    "log-output", "log-tabs", "commands", "watch-20s",
 ];
 
 // ------------------------------------------------------- python's numbers ---
@@ -834,8 +834,7 @@ pub fn render_html(
     a!("<pre>radbeeper watch</pre>");
     shot(&mut out, "watch", "the monitor: five time constants, the counts, the \
         spectrum and a line of decay-derived random");
-    shot(&mut out, "watch-300-320", "seconds 300 to 320 of a real session, at ten times \
-        speed");
+    shot(&mut out, "watch-20s", "twenty seconds of a real session, at ten times speed");
     a!("<p>The counter's own reading is a rolling 60-second count &mdash; one \
         number with one time constant. RadBeeper counts the blips itself and \
         keeps five windows at once, each a factor of ten apart.</p>");
@@ -1511,7 +1510,7 @@ pub fn export(
     let sites = log::read_sites(logs);
     let mut shots = BTreeMap::new();
     for name in SHOTS {
-        let ext = if name.ends_with("320") { ".gif" } else { ".png" };
+        let ext = if name == "watch-20s" { ".gif" } else { ".png" };
         let rel = format!("docs/screenshots/{}{}", name, ext);
         if Path::new(&join(&out_dir, &rel)).exists() {
             shots.insert(name.to_string(), rel);

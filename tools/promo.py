@@ -39,8 +39,15 @@ PYTHON_PROGRAM = os.path.join(ROOT, "radbeeper")
 # more: the shot at 340 s used to catch a random line and now would not, and a
 # screenshot that quietly stops showing a feature is worse than no screenshot.
 # 560 s clears all three with room to animate.
-MONITOR_SECONDS = 560
-MONITOR_COLS, MONITOR_ROWS = 160, 30
+#
+# `--monitor-seconds` runs it longer. 3300 s is the one worth knowing: the
+# 50-minute window fills at 3000 s, so the hero shot has four of the five
+# windows with a number in them instead of two still counting down.
+MONITOR_SECONDS = 240
+# Forty rows, not thirty: the monitor's log table takes the rows after 30, and
+# under 36 it squeezes the charts to make room -- the shot should show both
+# at full size.
+MONITOR_COLS, MONITOR_ROWS = 160, 40
 
 ARROW = "\u21e5"          # U+21E5, what a tab is drawn as in the log shot
 
@@ -121,10 +128,14 @@ def main():
     ap.add_argument("--casts", default=os.path.join(ROOT, ".casts"))
     ap.add_argument("--keep", action="store_true",
                     help="reuse an existing monitor recording")
+    ap.add_argument("--monitor-seconds", type=int, default=MONITOR_SECONDS,
+                    help="how long to record the monitor (default %(default)s)")
     ap.add_argument("--only", default="",
                     help="comma-separated shot names")
     a = ap.parse_args()
     CASTS = a.casts
+    seconds = a.monitor_seconds
+    late = seconds - 5          # the hero and the spectrum: as late as it gets
     os.makedirs(CASTS, exist_ok=True)
     os.makedirs(SHOTS, exist_ok=True)
     only = set(x for x in a.only.split(",") if x)
@@ -135,47 +146,55 @@ def main():
 
     # ---------------------------------------------------------- monitor ---
     if any(want(n) for n in ("watch", "watch-filling", "watch-spectrum",
-                             "watch-300-320", "watch-fast")):
+                             "watch-20s", "watch-fast")):
         if not (a.keep and os.path.exists(cast("watch-long"))):
             print("recording %d s of the monitor -- this takes that long"
-                  % MONITOR_SECONDS)
+                  % seconds)
             run(sys.executable, RECORD, "capture", cast("watch-long"),
                 "--cols", MONITOR_COLS, "--rows", MONITOR_ROWS,
-                "--seconds", MONITOR_SECONDS, "--", NATIVE, "watch")
+                "--seconds", seconds, "--", NATIVE, "watch")
 
         if want("watch"):
             # Late enough that the 3 s, 30 s and 300 s windows are full, the
             # spectrum has accumulated and the random pool has earned a line.
             # The 3000 s and 30000 s windows are still counting down, and say
             # so, which is half the point of the panel.
-            still("watch", 520, size=17, rows=MONITOR_ROWS,
+            still("watch", late, size=17, rows=MONITOR_ROWS,
                   source="watch-long")
         if want("watch-filling"):
             # Early, and saying so: three of the five still counting down.
             # Far enough in that two windows have a number and three are
             # still counting: the point of the shot is the pair side by side.
             # 14 rows, not 13 -- the fifth window pushed everything down one.
-            still("watch-filling", 200, size=17, rows=14, source="watch-long")
+            # Twelve rows now: the tier labels sit on the thirteenth.
+            still("watch-filling", min(200, seconds // 2), size=17, rows=12,
+                  source="watch-long")
         if want("watch-spectrum"):
             # Just the spectrum band and its axis, cut out of the same frame
-            # as the hero shot: five rows of power against period. Row 20,
-            # not 19, for the same reason watch-filling grew a row.
-            still("watch-spectrum", 520, size=15, rows=6, top=20,
+            # as the hero shot: five rows of power against period. Row 19:
+            # the counts moved up one when the clock took a row of air.
+            still("watch-spectrum", late, size=15, rows=6, top=19,
                   source="watch-long")
-        if want("watch-300-320"):
+        if want("watch-20s"):
+            # Twenty seconds at ten times speed, ending twenty seconds before
+            # the recording does: late enough that the short windows are full
+            # and the table has rows, and clear of the monitor's exit.
+            start = max(0, min(300, seconds - 40))
             run(sys.executable, RECORD, "gif", cast("watch-long"),
-                "-o", os.path.join(SHOTS, "watch-300-320.gif"),
-                "--from", 300, "--to", 320, "--step", 1, "--speed", 10,
+                "-o", os.path.join(SHOTS, "watch-20s.gif"),
+                "--from", start, "--to", start + 20, "--step", 1, "--speed", 10,
                 "--rows", MONITOR_ROWS, "--size", 13)
         if want("watch-fast"):
-            # The whole session, forty times over: a frame every four seconds
-            # of it, a tenth of a second each, so nine minutes plays in
-            # fourteen. What 300-320 cannot show -- the windows arriving one
-            # after another, the spectrum building, the random line appearing.
+            # The whole session at a tenth of a second a frame, about 140
+            # frames whatever its length: a frame every four seconds of a
+            # 560 s run is 40x, of a 3300 s run every 24 s is 240x. What
+            # 300-320 cannot show -- the windows arriving one after another,
+            # the spectrum building, the random line appearing.
+            step = max(4, round(seconds / 140))
             run(sys.executable, RECORD, "gif", cast("watch-long"),
                 "-o", os.path.join(SHOTS, "watch-fast.gif"),
-                "--from", 4, "--to", MONITOR_SECONDS, "--step", 4,
-                "--speed", 40, "--rows", MONITOR_ROWS, "--size", 11)
+                "--from", step, "--to", seconds, "--step", step,
+                "--speed", step * 10, "--rows", MONITOR_ROWS, "--size", 11)
 
     # ------------------------------------------------------------ probe ---
     if want("probe"):

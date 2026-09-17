@@ -1111,11 +1111,11 @@ class TestTheTwoExportsWriteTheSamePages(unittest.TestCase):
         # so the figures are compared too.
         shots = ["probe.png", "watch.png", "watch-filling.png",
                  "watch-spectrum.png", "log-output.png", "log-tabs.png",
-                 "watch-300-320.gif"]
+                 "watch-20s.gif"]
         results = self.run_both(logs, shots=shots)
         self.same_files(results, ["index.html", "random.html"])
         with open(os.path.join(results[0][0], "index.html")) as f:
-            self.assertIn("docs/screenshots/watch-300-320.gif", f.read())
+            self.assertIn("docs/screenshots/watch-20s.gif", f.read())
 
     def test_a_synthetic_log_directory(self):
         results = self.run_both(self.synthetic_logs())
