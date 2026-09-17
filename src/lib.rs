@@ -13,6 +13,7 @@
 pub mod analysis;
 pub mod clock;
 pub mod entropy;
+pub mod export;
 pub mod history;
 pub mod log;
 pub mod sha256;

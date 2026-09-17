@@ -1103,6 +1103,7 @@ fn usage() {
     println!("  radbeeper random --check F recompute every line in an emission log");
     println!("  radbeeper backfill         fill the log's gaps from the counter's flash");
     println!("  radbeeper log info|pull    what history it holds, or download it");
+    println!("  radbeeper export           index.html and random.html, from the logs");
     println!("  radbeeper hotplug          sit in the session, open the monitor on plug-in");
     println!();
     println!("  -d, --device PATH          serial port (default: search /dev)");
@@ -1112,7 +1113,7 @@ fn usage() {
     println!("      --duration SECONDS     stop after this long");
     println!("      --log-every SECONDS    row spacing for service (default {})",
              log::g(log::DEFAULT_LOG_EVERY));
-    println!("      --logs DIR             where service and backfill write");
+    println!("      --logs DIR             where service and backfill write, and export reads");
     println!("      --image FILE           backfill from a saved .bin, no counter");
     println!("      --serial SERIAL        which counter an image came from");
     println!("      --bytes N              how much flash to read");
@@ -1121,8 +1122,12 @@ fn usage() {
     println!("      --settle SECONDS       hotplug: grace before a new node is opened (default 2)");
     println!("      --tries N              hotplug: attempts per plug event (default 3)");
     println!("  -o, --output STEM          where log pull writes .bin and .csv");
+    println!("  -o, --output FILE          export: where the page goes (default index.html)");
+    println!("      --title TEXT           export: the page's heading");
+    println!("      --random-output FILE   export: the audit page (default random.html beside it)");
+    println!("      --no-random-page       export: do not write the audit page");
     println!();
-    println!("export, site and recompute are in the");
+    println!("site and recompute are in the");
     println!("Python program in the same repository. They are being ported; the");
     println!("log format is here already, and tests/test_differential.py is what");
     println!("says it is the same format and not a second dialect of it.");
@@ -1154,6 +1159,9 @@ fn main() {
     let mut tries: u32 = 3;
     let mut log_action = "info".to_string();
     let mut serial: Option<String> = None;
+    let mut title = radbeeper::export::DEFAULT_TITLE.to_string();
+    let mut random_output: Option<PathBuf> = None;
+    let mut no_random_page = false;
 
     let mut i = 0;
     while i < args.len() {
@@ -1203,8 +1211,11 @@ fn main() {
             "--poll" => poll = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(poll),
             "--settle" => settle = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(settle),
             "--tries" => tries = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(tries),
+            "--title" => title = next(&mut i).unwrap_or(title),
+            "--random-output" => random_output = next(&mut i).map(PathBuf::from),
+            "--no-random-page" => no_random_page = true,
             "info" | "pull" if command == "log" => log_action = a.to_string(),
-            "export" | "site" => {
+            "site" => {
                 eprintln!(
                     "radbeeper: `{}` is not in the Rust build -- it writes the log\n\
                      format, which the Python program owns. Use that one:\n\
@@ -1231,6 +1242,13 @@ fn main() {
             &spans, log_every, max_gap, bytes.unwrap_or(64 * 1024),
             device.as_deref(), baud, logs, image.as_deref(),
             serial.as_deref(), output.as_deref(),
+        ));
+    }
+    if command == "export" {
+        std::process::exit(radbeeper::export::run(
+            &logs.unwrap_or_else(log::state_dir),
+            Path::new(output.as_deref().unwrap_or("index.html")),
+            !no_random_page, cpm_per_usvh, &title, random_output.as_deref(),
         ));
     }
     if command == "log" {
