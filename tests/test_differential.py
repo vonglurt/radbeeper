@@ -497,10 +497,15 @@ class TestTheRustServiceWritesAReadableLog(unittest.TestCase):
     def test_the_python_reads_what_the_rust_wrote(self):
         d, files, out = self.run_service()
         if not files:
-            # No counter on this machine: the service says dormant and stops,
-            # which is the correct behaviour and not a test failure.
-            self.assertIn("dormant", out.stdout + out.stderr)
-            self.skipTest("no counter attached")
+            # Two ways to write no rows, and neither is this test failing:
+            # no counter on the machine, which is dormant and stops, or a
+            # counter somebody already holds -- a monitor open in the next
+            # terminal -- which is waiting. Silence is still not accepted on
+            # trust: the service has to say which of the two it was.
+            said = out.stdout + out.stderr
+            self.assertTrue("dormant" in said or "waiting" in said, said)
+            self.skipTest("no counter attached" if "dormant" in said
+                          else "the port is held by another radbeeper")
         self.assertEqual(len(files), 1, "one file per counter per month")
         path = files[0]
 
