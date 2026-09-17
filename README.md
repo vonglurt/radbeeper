@@ -26,30 +26,33 @@ pass-through produces no `/dev/ttyUSB0`.
 
 ![the monitor](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch.png)
 
-**Nine minutes of it, at forty times speed.** A whole session of the native
-build against the counter these logs came from, a frame every four seconds:
+**Four minutes of it, at forty times speed.** A whole session of the native
+build against the counter these logs came from, a frame every four seconds,
+recorded while something outside, probably construction, was
+pushing the count to three times its usual background and then stopped:
 
-![the monitor, a whole 560-second session at 40x](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-fast.gif)
+![the monitor, a whole 240-second session at 40x](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-fast.gif)
 
-The windows arrive in order — 3 s, then 30 s, then five minutes at 302 s —
-while the two long ones count down the whole way. The spectrum starts
-accumulating at once and has its first window at 128 s, and the random line
-turns up only after the pool has measured enough of the source to put 256 bits
-behind it.
+It opens on the monitor reading the counter's history to fill the log's gaps,
+about twenty seconds of flash over the serial line. Then the windows arrive in
+order, 3 s and then 30 s, while the three long ones count down. Early on the
+30-second window sits between 84 and 124 CPM with red spikes through the
+counts; by the end it is at 22. The log table fills from the bottom: first the
+rows the backfill rebuilt, dim, then a live row every thirty seconds. The
+counts strip on the left compresses as it ages, two and then four seconds a
+bar.
 
-**Twenty seconds of it, at ten times speed.** Seconds 300 to 320 of the same
+**Twenty seconds of it, at ten times speed.** Seconds 200 to 220 of the same
 session, one frame a second:
 
-![the monitor, seconds 300-320 at 10x](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-300-320.gif)
+![the monitor, twenty seconds at 10x](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-20s.gif)
 
-The 3-second window swings between 0 and 60 CPM while the 5-minute one moves
-between 44.6 and 45.8 — which is the whole argument for keeping five of them.
-The 5-minute window **arrives two seconds in**, at 302 s, having had nothing to
-say until then; the 50-minute one is still counting down and will be for
-another forty-five minutes, and the working-day window will be for another
-eight hours. The bars recolour as individual seconds land, the spectrum stays
-flat, and there is no random line yet — the pool is still measuring the source,
-and its countdown ticks from 93 s to 77 s across these twenty seconds.
+The 3-second window swings between 0 and 60 CPM while the 30-second one holds
+between 38 and 46, which is the whole argument for keeping more than one. The
+5-minute window is still filling, from 119 s to go down to 99; the 50-minute and
+working-day windows are further off. The bars recolour as individual seconds
+land, the `¦` over the fine tier marks where each log row closes, and there is
+no random line yet: the pool is still measuring the source.
 
 ## Fast track
 
@@ -309,7 +312,7 @@ counting for 30s...
 `--spans` takes the list, so `--spans 1,10,60` is a different set of three
 questions. Every window is a column in the log, whatever you choose. The
 [animation at the top](#radbeeper) is twenty seconds of exactly this: the
-3-second window swinging 0 to 60 while the 300-second one holds 45.
+3-second window swinging 0 to 60 while the 30-second one holds between 38 and 46.
 
 **A window shows nothing until it is full**, and says how long it still needs:
 
