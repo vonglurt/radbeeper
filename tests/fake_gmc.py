@@ -81,6 +81,9 @@ def build_history(seconds=120, cpm=30.0, seed=5, size=4096,
     return bytes(out[:size])
 
 
+FLASH_SIZE = 0x100000     # a GMC-320's history flash
+
+
 class FakeGMC(threading.Thread):
     daemon = True
 
@@ -194,7 +197,12 @@ class FakeGMC(threading.Thread):
             if len(args) == 5:
                 addr = (args[0] << 16) | (args[1] << 8) | args[2]
                 length = (args[3] << 8) | args[4]
+                # A real 320 answers every address in its megabyte of flash,
+                # and unwritten flash reads as 0xFF: a reply is only short
+                # when the link loses bytes, never because the history ends.
                 reply = self.history[addr:addr + length]
+                if addr + length <= FLASH_SIZE:
+                    reply = reply + b"\xff" * (length - len(reply))
                 if self.short_spir > 0:
                     self.short_spir -= 1
                     reply = reply[:len(reply) // 3]
