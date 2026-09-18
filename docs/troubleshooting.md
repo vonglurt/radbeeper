@@ -35,6 +35,25 @@ port. `doas rc-service radbeeper stop` hands it over. The service waits on the
 lock rather than giving up, so the log picks up again by itself when you close
 the monitor.
 
+The lock is an `flock`, which is the kernel's and belongs to a *process*: no
+terminal multiplexer, no session and no desktop changes it, and the answer is
+the same in `tmux`, in `screen` and on a bare console. There is no handover
+request to send either — the holder has to let go. What the native build does
+have is `--wait`, which waits for the port instead of giving up:
+
+```sh
+radbeeper --wait watch          # take the port the moment it is free
+radbeeper --wait 30 watch       # or give up after thirty seconds
+```
+
+Run it, then stop the service in the other window; the monitor catches the port
+within half a second of it coming free, and Ctrl-C stops the waiting. Only a
+*busy* port is waited on — an unplugged counter or a misspelt `--device` still
+fails at once, because no amount of waiting fixes either. And if the service is
+`restart`ed rather than stopped, both are asking for the same port: whichever
+gets there first wins, so stop it, start the monitor, and start the service
+again after.
+
 ---
 
 [← back to the README](../README.md)

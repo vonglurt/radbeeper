@@ -25,6 +25,16 @@ use std::time::{Duration, Instant};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BIG_ROWS: usize = 12;
 const SERVICE_WAIT: f64 = 10.0;
+/// How often `--wait` looks at a busy port again.
+///
+/// Half a second, where the service takes ten. The service is waiting for a
+/// person to finish watching and can afford to be slow about it; `--wait` is a
+/// person at a second window who has just run the command that frees the port,
+/// and a wait that visibly lags the handover reads as a wait that did not
+/// work. Polling this fast is safe because an open that fails at the flock
+/// never reaches termios and never writes a byte -- see serial::Serial::open,
+/// where the lock is taken before configure -- so the holder cannot tell.
+const WAIT_POLL: f64 = 0.5;
 
 // A twelve-row digit, six columns wide, with the three horizontal bars drawn
 // TWO rows thick -- a one-row bar between three-row uprights reads as a
@@ -947,6 +957,125 @@ fn stopping() -> bool {
     STOP.load(Ordering::Relaxed)
 }
 
+/// What a failed find means to `--wait`.
+enum Verdict {
+    /// Look again. The port is busy, and busy is the whole point of waiting.
+    Retry,
+    /// Stop, and let the find's own message stand -- this is not a wait
+    /// problem and a wait will not fix it.
+    Give,
+    /// Stop, with a line to add: the wait itself ran out.
+    Expired(String),
+}
+
+/// Whether a busy port is worth asking about again.
+///
+/// WHY ONLY BUSY IS WAITED ON. "No counter" is not a condition that clears by
+/// standing still: an unplugged counter, a kernel with no ch341, a typo in
+/// --device -- none of them are fixed by asking a second time, and a `watch`
+/// that sat there on a misspelt device would be indistinguishable from one
+/// that had hung. A locked port is the one failure that somebody in another
+/// window is about to fix, so it is the one that is waited on.
+///
+/// Split from the loop because a decision is testable and a loop with a sleep
+/// in it is not: this is what says the timeout message gets written.
+fn wait_verdict(e: &counter::NotFound, waited: f64, limit: f64) -> Verdict {
+    if !e.busy {
+        return Verdict::Give;
+    }
+    if waited >= limit {
+        return Verdict::Expired(format!(
+            "Waited {}s for the port and it never came free.",
+            log::g(limit)));
+    }
+    Verdict::Retry
+}
+
+/// Put SIGINT and SIGTERM back the way they were found.
+///
+/// `--wait` installs the stop handler so that Ctrl-C answers the wait. The
+/// commands the wait runs *before* are not all written to read that flag --
+/// `cpm` sits on the counter for thirty seconds and never looks at it -- and a
+/// Ctrl-C swallowed for thirty seconds is worse than no handler at all. So the
+/// handler lives exactly as long as the waiting does, and whatever runs next
+/// installs its own if it wants one. `watch` does.
+fn restore_stop_default() {
+    unsafe {
+        libc::signal(libc::SIGTERM, libc::SIG_DFL);
+        libc::signal(libc::SIGINT, libc::SIG_DFL);
+    }
+}
+
+/// `counter::find`, but a busy port is waited on instead of refused.
+///
+/// WHY THIS IS NOT THE DEFAULT. The error it replaces names the command that
+/// hands the counter over, and a person who has not read that yet is better
+/// served by reading it than by watching a program sit still. Waiting is what
+/// you want in the one case where you already know -- the service is logging,
+/// you are about to stop it, and you would rather not race it to the port.
+///
+/// The race is real, and it is not with the service: `service` polls the same
+/// port every SERVICE_WAIT seconds and takes it back the moment it is free. A
+/// stopped service is not in the running, but a RESTARTED one is, and then the
+/// two are simply both asking. Whoever asks first wins.
+fn find_waiting(device: Option<&str>, baud: Option<u32>, limit: f64)
+                -> Result<counter::Counter, counter::NotFound> {
+    // So Ctrl-C during the wait is an answer and not a kill: the flag is read
+    // between polls, which is also where the process is doing nothing.
+    install_stop_handler();
+    let started = clock::now();
+    let mut said = false;
+    loop {
+        let e = match counter::find(device, baud) {
+            Ok(c) => {
+                restore_stop_default();
+                // A Ctrl-C that landed between the last check and the port
+                // coming free is still a Ctrl-C, and it still means stop.
+                if stopping() {
+                    println!("radbeeper: stopped waiting.");
+                    std::process::exit(1);
+                }
+                if said {
+                    println!("radbeeper: the port came free.");
+                }
+                return Ok(c);
+            }
+            Err(e) => e,
+        };
+        match wait_verdict(&e, clock::now() - started, limit) {
+            Verdict::Give => {
+                restore_stop_default();
+                return Err(e);
+            }
+            Verdict::Expired(note) => {
+                // Appended rather than substituted: the detail is the part
+                // that names `doas rc-service radbeeper stop`, and a wait that
+                // timed out is exactly when that is worth reading.
+                restore_stop_default();
+                let mut e = e;
+                e.detail = format!("{}\n{}", e.detail, note);
+                return Err(e);
+            }
+            Verdict::Retry => {}
+        }
+        if !said {
+            said = true;
+            let how_long = if limit.is_finite() {
+                format!(" up to {}s", log::g(limit))
+            } else {
+                String::new()
+            };
+            println!("radbeeper: the port is busy -- waiting{} for it. \
+                      Ctrl-C to stop.", how_long);
+        }
+        if stopping() {
+            println!("radbeeper: stopped waiting -- the port is still busy.");
+            std::process::exit(1);
+        }
+        std::thread::sleep(Duration::from_secs_f64(WAIT_POLL));
+    }
+}
+
 
 /// Collect until the pool has earned the bits, then print one line.
 fn random(spans: &[f64], duration: Option<f64>, device: Option<&str>,
@@ -1435,6 +1564,7 @@ fn usage() {
     println!("      --spans 3,30,300,3000,30000  averaging windows, seconds");
     println!("      --cpm-per-usvh N       tube factor (default {})", counter::DEFAULT_CPM_PER_USVH);
     println!("      --duration SECONDS     stop after this long");
+    println!("      --wait [SECONDS]       a busy port: wait for it, not give up");
     println!("      --log-every SECONDS    row spacing for service (default {})",
              log::g(log::DEFAULT_LOG_EVERY));
     println!("      --logs DIR             where service, watch and backfill write, and export reads");
@@ -1477,6 +1607,7 @@ fn main() {
     let mut no_backfill = false;
     let mut no_log = false;
     let mut no_export = false;
+    let mut wait: Option<f64> = None;
     let mut set_clock = false;
     let mut output: Option<String> = None;
     // hotplug's three. Four seconds is a read of /dev fifteen times a minute,
@@ -1523,6 +1654,21 @@ fn main() {
                 cpm_per_usvh = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(cpm_per_usvh)
             }
             "--duration" => duration = next(&mut i).and_then(|v| v.parse().ok()),
+            "--wait" => {
+                // AN OPTIONAL VALUE, which is a thing this parser does
+                // nowhere else: `--wait` on its own waits for as long as it
+                // takes, `--wait 30` gives up after thirty seconds. Peeking at
+                // the next argument is unambiguous only because no command
+                // this program has is a number, and none can become one --
+                // `--wait watch` and `--wait 30 watch` both read correctly.
+                wait = Some(match args.get(i + 1).and_then(|v| v.parse::<f64>().ok()) {
+                    Some(secs) => {
+                        i += 1;
+                        secs
+                    }
+                    None => f64::INFINITY,
+                });
+            }
             "--logs" => logs = next(&mut i).map(std::path::PathBuf::from),
             "--log-every" => {
                 log_every = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(log_every)
@@ -1605,7 +1751,10 @@ fn main() {
         ));
     }
 
-    let found = counter::find(device.as_deref(), baud);
+    let found = match wait {
+        Some(limit) => find_waiting(device.as_deref(), baud, limit),
+        None => counter::find(device.as_deref(), baud),
+    };
     let c = match found {
         Ok(c) => c,
         Err(e) => {
@@ -2108,5 +2257,45 @@ mod tests {
     fn the_bands_colour_the_number_the_same_way_they_colour_the_bars() {
         assert_ne!(colour_for(Level::Calm), colour_for(Level::Raised));
         assert_ne!(colour_for(Level::Raised), colour_for(Level::High));
+    }
+
+    /// `--wait`, which is one decision taken over and over: is this failure
+    /// one that standing still will fix?
+    fn failure(busy: bool) -> counter::NotFound {
+        counter::NotFound {
+            reason: "r".into(),
+            detail: "d".into(),
+            busy,
+        }
+    }
+
+    #[test]
+    fn a_busy_port_is_waited_on() {
+        assert!(matches!(wait_verdict(&failure(true), 0.0, 30.0), Verdict::Retry));
+        assert!(matches!(wait_verdict(&failure(true), 29.9, 30.0), Verdict::Retry));
+    }
+
+    /// The case that would otherwise turn a typo into a hang: nothing about an
+    /// absent counter changes because a program asked twice.
+    #[test]
+    fn a_missing_counter_is_not_waited_on_at_all() {
+        assert!(matches!(wait_verdict(&failure(false), 0.0, 30.0), Verdict::Give));
+        assert!(matches!(wait_verdict(&failure(false), 0.0, f64::INFINITY), Verdict::Give));
+    }
+
+    #[test]
+    fn the_limit_ends_the_wait_and_says_how_long_it_was() {
+        match wait_verdict(&failure(true), 30.0, 30.0) {
+            Verdict::Expired(note) => assert!(note.contains("30s"), "got {}", note),
+            _ => panic!("30s of a 30s wait is the end of it"),
+        }
+    }
+
+    /// `--wait` with no number is a wait with no end, and an hour in it is
+    /// still waiting -- that is the whole difference from `--wait 3600`.
+    #[test]
+    fn an_unbounded_wait_does_not_expire() {
+        assert!(matches!(wait_verdict(&failure(true), 3600.0, f64::INFINITY),
+                         Verdict::Retry));
     }
 }

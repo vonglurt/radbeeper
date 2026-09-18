@@ -67,7 +67,9 @@ That is the whole of it. The `dialout` line in the install above is not
 optional: the serial node is `root:dialout` and RadBeeper does not want root.
 **Only one program can hold the port**, so if the boot service is logging,
 `probe` says `port busy` and names it — `doas rc-service radbeeper stop` hands
-the counter over, and `start` gives it back.
+the counter over, and `start` gives it back. `radbeeper --wait watch` waits for
+the port rather than giving up on it, so the two need not be raced; it is the
+native build's, and [troubleshooting](docs/troubleshooting.md) has the rest.
 If `probe` finds nothing it says which of four things went wrong, and they have
 four different fixes — [§1](#1-what-you-need) is the list of what has to be
 true. **No counter yet?** `tests/fake_gmc.py` puts a synthetic counter on a

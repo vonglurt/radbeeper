@@ -761,6 +761,81 @@ class TestTheRustProbeAfterAKilledSession(unittest.TestCase):
         self.assertIn("reading    600 CPM", out.stdout)
 
 
+class TestTheRustWaitsForABusyPort(unittest.TestCase):
+    """`--wait` is for the handover: stop the logger, and the monitor takes it.
+
+    The lock is an flock, and an flock belongs to a process -- so no terminal
+    multiplexer, no GUI session and no fresh login gets a second reader onto
+    the port, and there is no handover request to send either. The holder has
+    to let go. `--wait` is what stands there until it does, instead of making
+    a person race `rc-service radbeeper stop` from a second window.
+    """
+
+    BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
+
+    @classmethod
+    def setUpClass(cls):
+        if not os.path.exists(cls.BINARY):
+            raise unittest.SkipTest("no release binary to run")
+
+    def held_counter(self):
+        """A fake counter whose port is already locked, as the service holds it."""
+        import fcntl
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from fake_gmc import FakeGMC
+        dev = FakeGMC(cpm=600.0, seed=13, tick=0.05)
+        dev.start()
+        time.sleep(0.2)
+        fd = os.open(dev.path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return dev, fd
+
+    def test_it_takes_the_port_when_the_holder_lets_go(self):
+        import threading
+        dev, fd = self.held_counter()
+        threading.Timer(2.0, lambda: os.close(fd)).start()
+        started = time.time()
+        try:
+            out = subprocess.run(
+                [self.BINARY, "-d", dev.path, "--wait", "30", "probe"],
+                capture_output=True, text=True, timeout=90)
+        finally:
+            dev.stop()
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("waiting", out.stdout)
+        self.assertIn("GMC-320", out.stdout)
+        # It waited rather than failing, and it did not somehow succeed
+        # before the lock was let go.
+        self.assertGreaterEqual(time.time() - started, 2.0)
+
+    def test_a_wait_that_runs_out_still_names_the_command_that_frees_it(self):
+        # The detail is the part that says `doas rc-service radbeeper stop`,
+        # and a wait that just timed out is exactly when it is worth reading.
+        dev, fd = self.held_counter()
+        try:
+            out = subprocess.run(
+                [self.BINARY, "-d", dev.path, "--wait", "2", "probe"],
+                capture_output=True, text=True, timeout=90)
+        finally:
+            os.close(fd)
+            dev.stop()
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("Waited 2s", out.stderr)
+        self.assertIn("rc-service radbeeper stop", out.stderr)
+
+    def test_a_missing_device_is_not_waited_on(self):
+        # Waiting fixes a locked port and nothing else. A counter that is not
+        # there will not turn up because a program asked a second time, and a
+        # --wait that sat on a misspelt device would look exactly like a hang.
+        started = time.time()
+        out = subprocess.run(
+            [self.BINARY, "-d", "/dev/definitely-not-here", "--wait", "60",
+             "probe"], capture_output=True, text=True, timeout=30)
+        self.assertEqual(out.returncode, 1)
+        self.assertLess(time.time() - started, 10.0)
+        self.assertNotIn("waiting", out.stdout)
+
+
 class TestTheRustServiceBackfillsAtStart(unittest.TestCase):
     """The boot service reads the counter's flash before it logs anything.
 

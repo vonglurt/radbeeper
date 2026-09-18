@@ -151,6 +151,7 @@ CPython's compensated `sum()`. Both honour `SOURCE_DATE_EPOCH` for the
 |---|---|
 | **native now** | `probe`, `clock` and `clock --set`, `cpm` (its own 30 s window, not the device's 60 s one), `watch`, `service`, `random`, `random --check`, **`backfill`**, **`log info`/`log pull`** and **`export`** (`index.html` and `random.html`, byte for byte the Python's); the log format; the entropy pool, the SP 800-90B estimator and SHA-256; the history decoder with both corrections to GQ's published format, the wrapped-ring search and the measured sample intervals; local time, which Rust's standard library does not have at all |
 | **still Python** | `site` (the write side), `recompute`, `--plain` and `--source sim` |
+| **native only** | `--wait`, which waits out a busy port rather than refusing it. It is the one place the two programs differ on purpose in the other direction — nothing in the log format turns on it, so the differential tests cannot see it, and this row is what records it |
 | **the rule** | one dependency, still `libc`. It has `strftime`, `strptime` and `mktime`, so the port does not need a date crate; the one primitive that must be written out is SHA-256 |
 
 Nothing about this is a reason to hurry the Python out: it runs on a machine
