@@ -397,7 +397,12 @@ pub fn bar_rows(values: &[f64], width: usize, height: usize) -> Vec<Vec<char>> {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Tier {
     pub columns: usize,
-    pub seconds: usize,
+    /// How long one bar covers. SECONDS AS A FLOAT, because a second is no
+    /// longer the finest a bar can be: two counters reporting out of phase
+    /// give a sample every half second, and the strip grows a 0.5s tier to
+    /// show it. One counter still produces whole numbers and prints them as
+    /// whole numbers.
+    pub seconds: f64,
     pub values: Vec<Option<f64>>,
 }
 
@@ -434,19 +439,42 @@ pub const TIERS: usize = 4;
 /// the fine tier, and the colour bands are rates. The same height means the
 /// same rate in every tier.
 pub fn tiers(samples: &[u32], first: usize, width: usize, span: usize) -> Vec<Tier> {
-    // Equal quarters, and what does not divide goes to the fine tier, which
-    // is the one whose rightmost bar is the second happening now.
-    let q = width / TIERS;
-    let fine_cols = width - q * (TIERS - 1);
-    // The smallest k whose four tiers reach back as far as the spectrum
-    // looks. Each tier left multiplies by k again, so the reach grows as
-    // k*k*k and the answer is nearly always 2.
+    let v: Vec<f64> = samples.iter().map(|&c| c as f64).collect();
+    tiers_with(&v, first, width, span, TIERS, 1.0)
+}
+
+/// The cascade, generalised: any number of tiers, over samples of any length.
+///
+/// `unit` is how many seconds one SAMPLE covers, and `span` is the reach
+/// wanted in samples. With one counter both are the obvious thing -- a sample
+/// is a second -- and `tiers` above passes them. With two counters reporting
+/// out of phase the caller bins to half-seconds and passes `unit = 0.5` and
+/// one more tier, so the fine end of the strip resolves twice as finely and
+/// everything coarser than it is unchanged.
+pub fn tiers_with(
+    samples: &[f64],
+    first: usize,
+    width: usize,
+    span: usize,
+    count: usize,
+    unit: f64,
+) -> Vec<Tier> {
+    if count == 0 || width == 0 {
+        return Vec::new();
+    }
+    // Equal shares, and what does not divide goes to the fine tier, which is
+    // the one whose rightmost bar is the moment happening now.
+    let q = width / count;
+    let fine_cols = width - q * (count - 1);
+    // The smallest k whose tiers reach back as far as was asked. Each tier
+    // left multiplies by k again, so the reach grows as k^(count-1) and the
+    // answer is nearly always 2.
     let reach = |k: usize| -> usize {
-        let mut unit = 1usize;
+        let mut u = 1usize;
         let mut total = fine_cols;
-        for _ in 1..TIERS {
-            unit *= k;
-            total += q * unit;
+        for _ in 1..count {
+            u *= k;
+            total += q * u;
         }
         total
     };
@@ -456,41 +484,66 @@ pub fn tiers(samples: &[u32], first: usize, width: usize, span: usize) -> Vec<Ti
     }
     let n = (first + samples.len()) as i64;
     let first = first as i64;
-    let at = |a: i64| -> Option<u32> {
+    let at = |a: i64| -> Option<f64> {
         (a >= first && a < n).then(|| samples[(a - first) as usize])
     };
     let mean = |lo: i64, hi: i64| -> Option<f64> {
         let (lo, hi) = (lo.max(first), hi.min(n));
         (hi > lo).then(|| {
-            (lo..hi).map(|a| at(a).unwrap_or(0) as f64).sum::<f64>() / (hi - lo) as f64
+            (lo..hi).map(|a| at(a).unwrap_or(0.0)).sum::<f64>() / (hi - lo) as f64
         })
     };
     let fine: Vec<Option<f64>> = (0..fine_cols as i64)
-        .map(|j| at(n - fine_cols as i64 + j).map(|c| c as f64))
+        .map(|j| at(n - fine_cols as i64 + j))
         .collect();
-    let mut out = vec![Tier { columns: fine_cols, seconds: 1, values: fine }];
+    let mut out = vec![Tier { columns: fine_cols, seconds: unit, values: fine }];
     // Walk left a tier at a time. `b` is where the tier to the right begins:
     // everything older than it is this tier's to group, and the group it
     // starts on becomes the boundary for the next one out.
     let mut b = n - fine_cols as i64;
-    let mut unit = 1i64;
-    for _ in 1..TIERS {
-        unit *= k as i64;
+    let mut step = 1i64;
+    for _ in 1..count {
+        step *= k as i64;
         let c = q as i64;
-        let top = (b - 1).div_euclid(unit);
+        let top = (b - 1).div_euclid(step);
         let values: Vec<Option<f64>> = (0..c)
             .map(|j| {
                 let g = top - c + 1 + j;
-                mean(g * unit, (g * unit + unit).min(b))
+                mean(g * step, (g * step + step).min(b))
             })
             .collect();
-        b = (top - c + 1) * unit;
-        out.push(Tier { columns: q, seconds: unit as usize, values });
+        b = (top - c + 1) * step;
+        out.push(Tier { columns: q, seconds: step as f64 * unit, values });
     }
     // Coarsest first: the strip is drawn left to right, and time runs that
     // way too.
     out.reverse();
     out
+}
+
+/// How long a bar covers, as a label: "1", "0.5", "8".
+pub fn bar_seconds(seconds: f64) -> String {
+    if (seconds - seconds.round()).abs() < 1e-9 {
+        format!("{}", seconds.round() as i64)
+    } else {
+        format!("{}", seconds)
+    }
+}
+
+/// "79s", "6m", "1h 4m": a stretch of time in the fewest words that are still
+/// right to the unit shown.
+///
+/// HERE RATHER THAN IN EITHER FRONT END, because both draw the same strip and
+/// a caption that disagreed between them would be the exact class of bug the
+/// differential suite exists to catch.
+pub fn span_words(seconds: f64) -> String {
+    let s = seconds.round().max(0.0) as usize;
+    match s {
+        s if s < 120 => format!("{}s", s),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s % 3600 == 0 => format!("{}h", s / 3600),
+        s => format!("{}h {}m", s / 3600, (s % 3600) / 60),
+    }
 }
 
 /// `bar_rows` against a peak given from outside, so tiers drawn side by side
@@ -836,9 +889,9 @@ mod tests {
         // Four quarters, the odd three columns to the fine tier, and k = 2:
         // 39*8 + 39*4 + 39*2 + 42 = 588 seconds in 159 columns.
         assert_eq!(t.iter().map(|x| x.columns).collect::<Vec<_>>(), vec![39, 39, 39, 42]);
-        assert_eq!(t.iter().map(|x| x.seconds).collect::<Vec<_>>(), vec![8, 4, 2, 1]);
-        let reach: usize = t.iter().map(|x| x.columns * x.seconds).sum();
-        assert!(reach >= 512, "{}", reach);
+        assert_eq!(t.iter().map(|x| x.seconds).collect::<Vec<_>>(), vec![8.0, 4.0, 2.0, 1.0]);
+        let reach: f64 = t.iter().map(|x| x.columns as f64 * x.seconds).sum();
+        assert!(reach >= 512.0, "{}", reach);
     }
 
     #[test]
@@ -850,9 +903,9 @@ mod tests {
         let t = tiers(&[], 0, 160, 512);
         for w in t.windows(2) {
             let (left, right) = (&w[0], &w[1]);
-            assert_eq!(left.seconds, right.seconds * 2,
+            assert_eq!(left.seconds, right.seconds * 2.0,
                        "a bar left is not two bars right");
-            assert_eq!(left.columns * left.seconds, right.columns * right.seconds * 2,
+            assert_eq!(left.columns as f64 * left.seconds, right.columns as f64 * right.seconds * 2.0,
                        "a tier left does not take twice as long to fill");
         }
     }
@@ -874,17 +927,17 @@ mod tests {
         // k = 2 reaches 5 + 10 + 20 + 40 = 75 >= 30. The near tier's newest
         // bar is the one sample 194 that is not in the fine tier yet; the
         // next holds 192 and 193.
-        assert_eq!(near.seconds, 2);
+        assert_eq!(near.seconds, 2.0);
         assert_eq!(near.values[4], Some(194.0));
         assert_eq!(near.values[3], Some(192.5));
         // The far tier starts where the near tier's oldest bar does (186),
         // in fours: 184..186 is 184.5, and the four before it 180..184.
-        assert_eq!(far.seconds, 4);
+        assert_eq!(far.seconds, 4.0);
         assert_eq!(far.values[4], Some(184.5));
         assert_eq!(far.values[3], Some(181.5));
         // And the new one, in eights, from where the far tier began (168):
         // 160..168 is 163.5.
-        assert_eq!(oldest.seconds, 8);
+        assert_eq!(oldest.seconds, 8.0);
         assert_eq!(oldest.values[4], Some(163.5));
         assert_eq!(oldest.values[3], Some(155.5));
     }
@@ -896,7 +949,7 @@ mod tests {
         let after = tiers(&s[..302], 0, 40, 80);
         // Two seconds later, with k = 2, every complete near bar has moved one
         // column left and is otherwise the same bar.
-        let k = before[2].seconds;
+        let k = before[2].seconds as usize;
         assert_eq!(k, 2);
         let b = &before[2].values;
         let a = &after[2].values;

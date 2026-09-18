@@ -10,9 +10,9 @@
 mod counter;
 mod serial;
 
-use radbeeper::{analysis, clock, entropy, history, log};
+use radbeeper::{analysis, broker, clock, entropy, history, log};
 use analysis::{
-    bar_rows, bar_rows_to, level, spectrum_columns, tiers, Ladder, Level, Windows,
+    bar_rows, bar_rows_to, level, spectrum_columns, Ladder, Level, Windows,
 };
 use std::collections::BTreeSet;
 use std::io::{Read, Write};
@@ -25,6 +25,10 @@ use std::time::{Duration, Instant};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BIG_ROWS: usize = 12;
 const SERVICE_WAIT: f64 = 10.0;
+/// Samples kept for the cascade strip. Four tiers of doubling reach back
+/// about a quarter of an hour at any width a terminal has; the rest is the
+/// windows' business, not the strip's.
+const STRIP_KEEP: usize = 4096;
 /// How often `--wait` looks at a busy port again.
 ///
 /// Half a second, where the service takes ten. The service is waiting for a
@@ -324,80 +328,507 @@ fn draw_table(out: &mut String, top: usize, lines: usize, width: usize,
     }
 }
 
-fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
+/// Several counters, read at once.
+///
+/// A THREAD EACH, AND A CHANNEL OUT. Two tubes are two file descriptors that
+/// go quiet independently, and reading them in turn on one thread means a
+/// counter that has been unplugged costs the other one a 2.5-second timeout
+/// every second. A thread per counter costs a few kilobytes of stack and
+/// makes the quiet case free; the channel puts the samples back in arrival
+/// order, which is exactly the order the display wants them in.
+///
+/// WHY ARRIVAL ORDER IS THE INTERESTING ORDER. Two counters do not agree on
+/// when a second starts -- each has its own clock and its own phase -- so
+/// their samples interleave. That interleaving is the whole benefit: the same
+/// tube watching the same room twice a second, at some offset, is a finer grid
+/// in time than either counter can produce alone.
+struct Bank {
+    counters: Vec<std::sync::Arc<counter::Counter>>,
+    rx: std::sync::mpsc::Receiver<(usize, f64, u32)>,
+    /// Held until `start`, and dropped by it. While it exists the channel
+    /// cannot report that every reader has finished, which is what stops a
+    /// bank that has not been started yet from looking like one that is over.
+    tx: Option<std::sync::mpsc::Sender<(usize, f64, u32)>>,
+}
+
+impl Bank {
+    /// Take the counters. DOES NOT START READING -- see `start`.
+    fn open(found: Vec<counter::Counter>) -> Bank {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Bank {
+            counters: found.into_iter().map(std::sync::Arc::new).collect(),
+            rx,
+            tx: Some(tx),
+        }
+    }
+
+    /// Turn the stream on and start reading it.
+    ///
+    /// SEPARATE FROM `open`, AND THE SEPARATION IS LOAD-BEARING. Before the
+    /// samples start there is a conversation to have with each counter --
+    /// reading the tail of its flash to fill the log's gaps, which is a
+    /// request and a reply over the same file descriptor. A reader thread
+    /// running during that conversation eats the flash as though it were
+    /// counts and hands the backfill the counts as though they were flash:
+    /// the monitor showed `16383 counts this second` -- which is the count
+    /// mask, every bit set -- and a run of a quarter of a million counts in
+    /// one second. Nothing about it looked like a race; it looked like a
+    /// broken counter. So the port conversations happen first and this is
+    /// called when they are done.
+    fn start(&mut self) {
+        let Some(tx) = self.tx.take() else {
+            return;
+        };
+        for (i, c) in self.counters.iter().enumerate() {
+            // THE COUNTER HAS TO BE ASKED TO TALK, and each one separately.
+            c.heartbeat(true);
+            let c = c.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || loop {
+                match c.next_sample(Duration::from_millis(2500)) {
+                    Some(v) => {
+                        if tx.send((i, clock::now(), v as u32)).is_err() {
+                            return;
+                        }
+                    }
+                    // This counter has gone quiet. Its thread ends; the
+                    // others carry on, and the bank is only finished when
+                    // every sender has been dropped.
+                    None => return,
+                }
+            });
+        }
+    }
+
+    fn identity(&self, spans: &[f64]) -> broker::Identity {
+        broker::Identity {
+            counters: self
+                .counters
+                .iter()
+                .map(|c| broker::CounterId {
+                    path: c.path.clone(),
+                    baud: c.baud,
+                    version: c.version.clone(),
+                    serial_no: c.serial_no.clone(),
+                })
+                .collect(),
+            spans: spans.to_vec(),
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.counters.len()
+    }
+
+    fn next(&self, timeout: Duration) -> Option<(usize, f64, u32)> {
+        self.rx.recv_timeout(timeout).ok()
+    }
+
+    fn stop(&self) {
+        for c in &self.counters {
+            c.heartbeat(false);
+        }
+    }
+}
+
+/// The mean rate across every tube, over `span` seconds.
+///
+/// TWO COUNTERS SEE TWICE THE COUNTS AND NOT TWICE THE DOSE. The combined
+/// windows hold every sample from every tube, so their sum is `tubes` times
+/// the rate the room is actually at; dividing gives the mean of the tubes,
+/// which is the same number one tube would report and is measured from twice
+/// as many arrivals. That is the entire bargain: identical accuracy, better
+/// precision, in proportion to the square root of the counts behind it.
+fn mean_cpm(w: &Windows, span: f64, tubes: usize) -> Option<f64> {
+    w.average(span).map(|v| v / tubes.max(1) as f64)
+}
+
+/// Where a monitor's samples come from.
+///
+/// TWO WAYS TO HAVE A COUNTER, AND THE DIFFERENCE IS ONE flock. `Own` holds
+/// the port, and therefore owes everybody else a fan-out: it logs, it draws
+/// the entropy, it writes the emissions, and it publishes all three. `Attached`
+/// holds nothing, opens nothing and writes nothing -- it is handed the same
+/// samples a moment later and draws exactly the same screen from them.
+///
+/// The drawing code cannot tell which of the two it has, and that is the test
+/// of whether this abstraction is in the right place. Everything below
+/// next_sample() is arithmetic; the port is not part of it.
+enum Feed {
+    Own {
+        bank: Bank,
+        /// None when the socket could not be bound -- an unwritable log
+        /// directory, or another server already there. The monitor still
+        /// draws; it just cannot be attached to, and says so.
+        srv: Option<broker::Server>,
+    },
+    Attached(broker::Client),
+}
+
+/// One thing that happened, whichever end it came from.
+enum Tick {
+    Sample { who: usize, when: f64, counts: u32 },
+    /// A row the server wrote. WHICH counter it came from is carried on the
+    /// wire and dropped here: this monitor draws one table and the rows are
+    /// already stamped with their own serial. The window reads the tag.
+    Row { row: String },
+    Random { who: usize, hex: String, at: String, suspect: bool },
+    /// The replayed history is over. Only an attached feed sends it.
+    Live,
+}
+
+impl Feed {
+    /// Attach to whoever holds the port, or take it.
+    ///
+    /// THE ORDER IS THE WHOLE FIX. Ask the socket first: if a service is
+    /// logging, it is already reading the counter and there is nothing to
+    /// negotiate -- attaching costs it one write a second and costs the
+    /// person nothing at all. Only when nobody is serving does this open the
+    /// port, and then it serves in turn, so the next window attaches to this
+    /// one instead of printing `port busy`.
+    fn open(dir: &Path, devices: &[String], baud: Option<u32>, spans: &[f64],
+            wait: Option<f64>) -> Result<Feed, counter::NotFound> {
+        // A NAMED DEVICE MEANS THAT DEVICE, AND THE SOCKET DOES NOT OVERRULE
+        // IT. `-d /dev/pts/7` is how the fake counter is driven and how a
+        // second counter is picked out on a machine with two; attaching to
+        // whatever a service happens to be serving instead would answer a
+        // question nobody asked. The differential suite caught this the hour
+        // it was written: every `-d <pty> watch` in it silently drew the REAL
+        // counter, because a service was running and the socket was tried
+        // first. So attach only when the stream carries every counter that
+        // was asked for -- which it does, when nothing was asked for.
+        if let Some(c) = broker::Client::attach(dir) {
+            if devices.iter().all(|d| c.identity().serves(d)) {
+                return Ok(Feed::Attached(c));
+            }
+        }
+        let one = devices.len() == 1;
+        let found = match (wait, one) {
+            (Some(limit), _) => vec![find_waiting(devices.first().map(|s| s.as_str()),
+                                                  baud, limit)?],
+            _ => {
+                let (found, why) = counter::find_all(devices, baud);
+                match why {
+                    Some(e) => return Err(e),
+                    None => found,
+                }
+            }
+        };
+        let bank = Bank::open(found);
+        let srv = broker::Server::start(dir, &bank.identity(spans)).ok();
+        Ok(Feed::Own { bank, srv })
+    }
+
+    fn identity(&self) -> broker::Identity {
+        match self {
+            // Spans are left empty for an owned feed: the monitor already has
+            // its own and uses them, and the table it draws is its own file.
+            Feed::Own { bank, .. } => bank.identity(&[]),
+            Feed::Attached(c) => c.identity().clone(),
+        }
+    }
+
+    /// The ports, for the things that genuinely need to talk to a counter --
+    /// reading its flash, setting its clock. An attached feed has none, and
+    /// the caller must have something sensible to do about that.
+    fn counters(&self) -> &[std::sync::Arc<counter::Counter>] {
+        match self {
+            Feed::Own { bank, .. } => &bank.counters,
+            Feed::Attached(_) => &[],
+        }
+    }
+
+    fn owns_the_port(&self) -> bool {
+        matches!(self, Feed::Own { .. })
+    }
+
+    /// How many other windows are reading this one's stream.
+    fn watchers(&self) -> usize {
+        match self {
+            Feed::Own { srv, .. } => srv.as_ref().map(|s| s.clients()).unwrap_or(0),
+            Feed::Attached(_) => 0,
+        }
+    }
+
+    /// Begin reading. Nothing arrives before this, and it must not be called
+    /// until every port conversation -- the backfill above all -- is over.
+    fn start(&mut self) {
+        if let Feed::Own { bank, .. } = self {
+            bank.start();
+        }
+    }
+
+    /// How many counters are behind this feed.
+    fn width(&self) -> usize {
+        match self {
+            Feed::Own { bank, .. } => bank.len(),
+            Feed::Attached(c) => c.identity().len(),
+        }
+    }
+
+    /// Stop the stream -- but ONLY if this end started it. An attached
+    /// monitor closing must not silence the counter for the service that is
+    /// still logging it, which is the one way a client could do real damage.
+    fn stop(&mut self) {
+        if let Feed::Own { bank, .. } = self {
+            bank.stop();
+        }
+    }
+
+    fn next(&mut self, timeout: Duration) -> Option<Tick> {
+        match self {
+            Feed::Own { bank, srv } => {
+                // Let in whoever turned up while we were waiting for this
+                // second. Before the publish, so a client that has just been
+                // greeted with the history gets this sample live rather than
+                // twice.
+                if let Some(s) = srv.as_mut() {
+                    s.accept_pending();
+                }
+                // WALL CLOCK, NOT A MONOTONIC STAMP. A sample that is going
+                // to be replayed to a process which was not running when it
+                // was taken has to mean something to it, and "412.7 seconds
+                // after some other program started" does not. It is also the
+                // only clock two counters can be placed on together.
+                let (who, when, counts) = bank.next(timeout)?;
+                if let Some(s) = srv.as_mut() {
+                    s.publish_sample(who, when, counts);
+                }
+                Some(Tick::Sample { who, when, counts })
+            }
+            Feed::Attached(c) => match c.next(timeout)? {
+                broker::Event::Sample { who, when, counts } => {
+                    Some(Tick::Sample { who, when, counts })
+                }
+                broker::Event::Row { row, .. } => Some(Tick::Row { row }),
+                broker::Event::Random { who, hex, at, suspect } => {
+                    Some(Tick::Random { who, hex, at, suspect })
+                }
+                broker::Event::Live => Some(Tick::Live),
+            },
+        }
+    }
+
+    fn publish_row(&mut self, who: usize, row: &str) {
+        if let Feed::Own { srv: Some(s), .. } = self {
+            s.publish_row(who, row);
+        }
+    }
+
+    fn publish_random(&mut self, who: usize, hex: &str, at: &str, suspect: bool) {
+        if let Feed::Own { srv: Some(s), .. } = self {
+            s.publish_random(who, hex, at, suspect);
+        }
+    }
+}
+
+fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
          duration: Option<f64>, logging: Option<WatchLog>) {
     // So a `kill` stops the stream and puts the terminal back, as q does.
     install_stop_handler();
+    let id = feed.identity();
+    // THE TABLE IS SOMEBODY ELSE'S FILE, SO IT IS DRAWN WITH THEIR COLUMNS.
+    // An attached monitor may have been given different --spans on the
+    // command line, and its own averages panel honours them -- that is
+    // arithmetic over samples it holds, and needs nobody's permission. The
+    // rows at the bottom came off the server's disk and their columns are not
+    // ours to choose. An owned feed leaves spans empty and uses its own.
+    let table_spans: Vec<f64> =
+        if id.spans.is_empty() { spans.to_vec() } else { id.spans.clone() };
     let screen = Screen::enter();
-    let names = log::columns(&log::header(spans));
+    let names = log::columns(&log::header(&table_spans));
     let mut table: std::collections::VecDeque<Vec<String>> = std::collections::VecDeque::new();
     let mut table_note = String::new();
-    let mut logger = None;
+    // A CLIENT WRITES NOTHING, AND THE RULE HAS NO EXCEPTIONS. The process
+    // holding the port is already logging, backfilling and exporting this
+    // counter; a second writer would race it for the same rows in the same
+    // file, and the flock that stops two readers halving a count does nothing
+    // at all about two writers interleaving a line. The rows still appear in
+    // the table below -- they come down the socket as the server writes them,
+    // which is a truer picture than this process's own guess would be.
+    // WHETHER A TABLE WAS ASKED FOR, decided before the writing is taken
+    // away. An attached monitor still shows the rows -- they arrive down the
+    // socket as the server writes them -- and `--no-log` still means a clean
+    // screen. Keying the table off `logger.is_some()` instead left an
+    // attached window collecting rows it never drew.
+    let wants_table = logging.is_some();
+    let logging = logging.filter(|_| feed.owns_the_port());
+    let mut loggers: Vec<Logger> = Vec::new();
     if let Some(wl) = logging.as_ref() {
         let _ = std::fs::create_dir_all(&wl.dir);
         // THE HISTORY FIRST, and it takes a while -- fifteen or twenty seconds
         // of flash over the serial line -- so the screen says what it is
         // waiting for instead of sitting blank.
-        if let Some((bytes, max_gap)) = wl.backfill {
-            print!("\x1b[2J{}{}{} @ {} baud   {}   serial {}{}{}reading the counter's history \
-                    to fill the log's gaps ({} KiB)...{}",
-                   at(0, 0), DIM, c.path, c.baud, c.version, c.serial_no, OFF,
-                   at(2, 0), bytes / 1024, at(3, 0));
-            let _ = std::io::stdout().flush();
-            table_note = backfill_at_start(c, &wl.dir, spans, wl.every, bytes, max_gap, true)
-                .replace(" samples, ", " samples ")
-                .replace("backfill -- ", "backfill: ");
+        // EACH COUNTER'S OWN FLASH, EACH COUNTER'S OWN LOG. They are separate
+        // instruments that were in the room at the same time; merging their
+        // records would throw away the one thing a second tube is for, which
+        // is being able to ask whether the two agree.
+        for (k, c) in feed.counters().iter().enumerate() {
+            if let Some((bytes, max_gap)) = wl.backfill {
+                print!("\x1b[2J{}{}{} @ {} baud   {}   serial {}{}{}reading the counter's history \
+                        to fill the log's gaps ({} KiB)...{}",
+                       at(0, 0), DIM, c.path, c.baud, c.version, c.serial_no, OFF,
+                       at(2, 0), bytes / 1024, at(3, 0));
+                let _ = std::io::stdout().flush();
+                let note = backfill_at_start(c, &wl.dir, spans, wl.every, bytes, max_gap, true)
+                    .replace(" samples, ", " samples ")
+                    .replace("backfill -- ", "backfill: ");
+                table_note = if k == 0 { note } else { format!("{}   {}", table_note, note) };
+            }
+            // The table opens on what is already in the log, so it is not
+            // empty for the first half-minute -- and what the backfill just
+            // wrote is the first thing in it.
+            let path = log::path(clock::now(), &wl.dir, Some(&c.serial_no));
+            for (_, cells) in
+                log::read_table(&path, &names).into_iter().rev().take(TABLE_KEEP).rev()
+            {
+                table.push_back(cells);
+            }
+            loggers.push(Logger::new(spans, wl.dir.clone(), &c.serial_no, wl.every));
         }
-        // The table opens on what is already in the log, so it is not empty
-        // for the first half-minute -- and what the backfill just wrote is
-        // the first thing in it.
-        let path = log::path(clock::now(), &wl.dir, Some(&c.serial_no));
-        for (_, cells) in log::read_table(&path, &names).into_iter().rev().take(TABLE_KEEP).rev() {
-            table.push_back(cells);
-        }
-        logger = Some(Logger::new(spans, wl.dir.clone(), &c.serial_no, wl.every));
         if wl.export_every.is_some() {
             let done = export_pages(&wl.dir, cpm_per_usvh);
             table_note = if table_note.is_empty() { done } else { format!("{}   {}", table_note, done) };
         }
     }
     let mut exported = Instant::now();
+    // HOW MANY TUBES ARE WATCHING THE SAME ROOM. Every combined figure below
+    // is divided by it, because two counters see twice the counts and NOT
+    // twice the dose -- what doubles is the evidence, not the radiation. The
+    // precision that buys is the whole reason for a second tube, and it is
+    // reported beside the number rather than left to be inferred.
+    let tubes = feed.width().max(1);
+    // One per counter, and one across all of them. The combined windows hold
+    // every sample from every tube, so their sums are `tubes` times the rate:
+    // see `mean_cpm`.
+    let mut each: Vec<Windows> = (0..tubes).map(|_| Windows::new(spans)).collect();
     let mut w = Windows::new(spans);
     let mut ladder = Ladder::new();
-    let mut pool = entropy::Entropy::default();
+    let mut pools: Vec<entropy::Entropy> =
+        (0..tubes).map(|_| entropy::Entropy::default()).collect();
+    // The samples in ARRIVAL order, as rates, which is what the cascade is
+    // cut from. With one counter that is one bar a second; with two it is a
+    // bar every half second on average, because two tubes on their own clocks
+    // interleave. See analysis::tiers_with.
+    let mut merged: std::collections::VecDeque<f64> = std::collections::VecDeque::new();
+    let mut dropped = 0usize;
+    // Whole seconds, summed across the tubes, for the spectrum: a period is a
+    // property of the room and both counters are looking at it, so adding
+    // them is simply twice the signal on one time base.
+    let mut sec_bin: Option<i64> = None;
+    let mut sec_sum: u32 = 0;
     // The drawn line and the moment it was drawn, kept across frames: a line
     // stays on screen until the pool has earned the next one.
     let mut shown: Option<(String, String)> = None;
     let mut suspect = false;
-    c.heartbeat(true);
-    let start = Instant::now();
+    // An attached feed opens with everything the server has: up to eight
+    // hours of it, as fast as the socket can carry it. Those samples go into
+    // the windows and the spectrum but are NOT drawn one frame each -- eight
+    // hours of history, drawn a second at a time, takes eight hours.
+    let mut replaying = !feed.owns_the_port();
+    if replaying {
+        table_note = match id.primary() {
+            Some(c) if tubes == 1 => format!("attached to the counter on {}", c.path),
+            _ => format!("attached to {} counters", tubes),
+        };
+    }
+    // AFTER THE BACKFILL, NEVER BEFORE IT. See Bank::start.
+    feed.start();
+    let watching = Instant::now();
     let mut out = String::with_capacity(16384);
+    // Rows written this second, held only until the logger's borrow ends.
+    let mut rows: Vec<(usize, String)> = Vec::new();
 
     loop {
-        let counts = match c.next_sample(Duration::from_millis(2500)) {
-            Some(v) => v as u32,
+        let (who, when, counts) = match feed.next(Duration::from_millis(2500)) {
+            Some(Tick::Sample { who, when, counts }) => (who, when, counts),
+            // A row the server has just written. The client shows what went
+            // to disk rather than deciding for itself what should have.
+            Some(Tick::Row { row }) => {
+                table.push_back(row.split('\t').map(str::to_string).collect());
+                while table.len() > TABLE_KEEP {
+                    table.pop_front();
+                }
+                continue;
+            }
+            // The hex on a client's screen is always the server's. Two
+            // processes deriving their own from the same counts would print
+            // two different lines and only one of them would be in the audit
+            // log, which is worse than useless.
+            Some(Tick::Random { who, hex, at, suspect: s }) => {
+                shown = Some((hex, at));
+                suspect = s;
+                if let Some(p) = pools.get_mut(who) {
+                    p.reset();
+                }
+                continue;
+            }
+            Some(Tick::Live) => {
+                replaying = false;
+                continue;
+            }
             None => break,
         };
         if stopping() {
             break;
         }
-        let when = start.elapsed().as_secs_f64();
+        let who = who.min(tubes - 1);
         w.add(when, counts);
-        ladder.add(counts);
-        pool.add(counts);
+        each[who].add(when, counts);
+        if merged.len() >= STRIP_KEEP {
+            merged.pop_front();
+            dropped += 1;
+        }
+        merged.push_back(counts as f64);
+        // The spectrum's second closes when the wall clock's does, and takes
+        // whatever every tube put in it.
+        let this = when.floor() as i64;
+        match sec_bin {
+            Some(b) if b == this => sec_sum += counts,
+            Some(_) => {
+                ladder.add(sec_sum);
+                sec_bin = Some(this);
+                sec_sum = counts;
+            }
+            None => {
+                sec_bin = Some(this);
+                sec_sum = counts;
+            }
+        }
+        // NOT DURING THE REPLAY. The server's pool holds the counts since its
+        // last draw; a client that poured eight hours of history into its own
+        // would think it had earned a line the moment it opened. Starting at
+        // the live edge makes the countdown pessimistic until the first
+        // emission arrives, and exact from then on.
+        if !replaying {
+            if let Some(p) = pools.get_mut(who) {
+                p.add(counts);
+            }
+        }
+        if replaying {
+            continue;
+        }
         let spec = ladder.best();
-        if let Some(lg) = logger.as_mut() {
-            let averages: Vec<Option<f64>> = spans.iter().map(|s| w.average(*s)).collect();
+        // EACH TUBE'S OWN ROW IN ITS OWN FILE, from its own windows. A row
+        // that averaged two counters would be a reading no instrument took.
+        if let Some(lg) = loggers.get_mut(who) {
+            let averages: Vec<Option<f64>> =
+                spans.iter().map(|s| each[who].average(*s)).collect();
             match lg.add(clock::now(), counts, &averages) {
                 Ok(Some(line)) => {
                     table.push_back(line.split('\t').map(str::to_string).collect());
                     while table.len() > TABLE_KEEP {
                         table.pop_front();
                     }
+                    rows.push((who, line));
                 }
                 Ok(None) => {}
                 Err(e) => table_note = format!("NOT LOGGING: {}", e),
             }
+        }
+        // Out to whoever is attached, after the borrow of the logger ends.
+        for (k, line) in rows.drain(..) {
+            feed.publish_row(k, &line);
         }
         if let Some(wl) = logging.as_ref() {
             if let Some(e) = wl.export_every {
@@ -411,7 +842,7 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         let (h, width) = screen.size();
         // Everything above the table lays out as though the screen ended
         // where the table starts, and the footer stays on the last two rows.
-        let tl = if logger.is_some() { table_lines(h) } else { 0 };
+        let tl = if wants_table { table_lines(h) } else { 0 };
         let hv = h - tl;
         out.clear();
         out.push_str("\x1b[2J");
@@ -419,10 +850,17 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         // name is not here: it goes in the top right corner, out of the way
         // of the readout, because a header that grows pushes the big number
         // right and the number is what people are looking at.
-        let head = format!(
-            "{} @ {} baud   {}   serial {}",
-            c.path, c.baud, c.version, c.serial_no
-        );
+        let head = match (id.primary(), tubes) {
+            (Some(c), 1) => format!(
+                "{} @ {} baud   {}   serial {}",
+                c.path, c.baud, c.version, c.serial_no
+            ),
+            (Some(c), n) => format!(
+                "{} and {} more   {}   {} tubes averaged",
+                c.path, n - 1, c.version, n
+            ),
+            (None, _) => "no counter".to_string(),
+        };
         out.push_str(&format!(
             "{}{}{}{}",
             at(0, 0), DIM, head, OFF
@@ -430,7 +868,7 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
 
         let mut row = 2usize;
         for &span in spans {
-            match w.average(span) {
+            match mean_cpm(&w, span, tubes) {
                 None => {
                     let left = (span - w.elapsed()).max(0.0).round() as i64;
                     out.push_str(&format!(
@@ -463,7 +901,8 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         row += 3;
 
         // The number, big, to the right of everything above.
-        let headline = w.average(30.0).or_else(|| w.average(*spans.last().unwrap()));
+        let headline = mean_cpm(&w, 30.0, tubes)
+            .or_else(|| mean_cpm(&w, *spans.last().unwrap(), tubes));
         let digits = big_number(&match headline {
             Some(v) => format!("{:.0}", v),
             None => "--".to_string(),
@@ -506,15 +945,20 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         // width, so each one leftwards is another doubling and the strip
         // holds ten minutes where three tiers held five. One scale for all
         // four, so the same height is the same rate wherever it is drawn.
-        let counts: Vec<u32> = w.samples.iter().map(|&(_, c)| c).collect();
-        let strip = tiers(&counts, w.first_index(), width - 1, spec.window);
+        let series: Vec<f64> = merged.iter().copied().collect();
+        let strip = analysis::tiers_with(
+            &series, dropped, width - 1,
+            spec.window * tubes,
+            analysis::TIERS + if tubes > 1 { 1 } else { 0 },
+            1.0 / tubes as f64,
+        );
         let peak = strip
             .iter()
             .flat_map(|t| t.values.iter().flatten())
             .cloned()
             .fold(0.0f64, f64::max);
         let every = logging.as_ref().map(|wl| wl.every.round().max(1.0) as i64);
-        let n = (w.first_index() + counts.len()) as i64;
+        let n = (dropped + series.len()) as i64;
         let mut x0 = 0;
         for (ti, tier) in strip.iter().enumerate() {
             for (i, line) in bar_rows_to(&tier.values, counts_rows, peak).iter().enumerate() {
@@ -541,15 +985,15 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
                 let label = format!(
                     "{}{}s/bar \u{b7} {}",
                     if ti == 0 { "" } else { "F " },
-                    tier.seconds,
-                    span_words(tier.columns * tier.seconds)
+                    analysis::bar_seconds(tier.seconds),
+                    analysis::span_words(tier.columns as f64 * tier.seconds)
                 );
                 let label: String = label.chars().take(tier.columns - 1).collect();
                 let used = label.chars().count();
                 out.push_str(&format!("{}{}{}{}", at(row - 1, x0), DIM, label, OFF));
                 // Over the fine tier, a tick where each log row closes: the
                 // frames the log is cut into, scrolling left with the counts.
-                if let (Some(e), 1) = (every, tier.seconds) {
+                if let (Some(e), true) = (every, tier.seconds == 1.0) {
                     for j in used + 1..tier.columns {
                         let a = n - tier.columns as i64 + j as i64;
                         if a > 0 && a % e == 0 {
@@ -615,14 +1059,25 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
         // it is measured from the samples, not modelled from their mean.
         if hv > row + 2 && width > 84 {
             row += 1;
-            if pool.ready() {
+            // ONLY THE PORT-HOLDER DRAWS. A client's pool is here for the
+            // countdown and nothing else; its line arrives as an event, from
+            // the one process that also wrote it to the emission log.
+            let ready = if feed.owns_the_port() {
+                pools.iter().position(|p| p.ready())
+            } else {
+                None
+            };
+            if let Some(k) = ready {
                 let (top, _) = spec.loudest();
                 suspect = top > 0.0 && top >= spec.chance_max() * 1.25;
-                let (text, record) = pool.draw();
-                shown = Some((text, clock::format(clock::now(), "%H:%M:%S")));
+                let (text, record) = pools[k].draw();
+                let at_time = clock::format(clock::now(), "%H:%M:%S");
+                let serial = id.counters.get(k).map(|c| c.serial_no.as_str()).unwrap_or("");
                 if let Some(wl) = logging.as_ref() {
-                    let _ = entropy::write_record(&wl.dir, &record, &c.serial_no, suspect);
+                    let _ = entropy::write_record(&wl.dir, &record, serial, suspect);
                 }
+                feed.publish_random(k, &text, &at_time, suspect);
+                shown = Some((text.clone(), at_time));
             }
             match &shown {
                 Some((text, at_time)) => {
@@ -637,7 +1092,7 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
                         let note = format!(
                             "{} bits from decay at {}   {}{}",
                             entropy::ENTROPY_BITS as i64, at_time,
-                            entropy::pool_status(&pool, "next in "),
+                            entropy::pool_status(&pools[0], "next in "),
                             if suspect {
                                 "  -- SPECTRUM NOT FLAT, treat as suspect"
                             } else {
@@ -651,7 +1106,7 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
                 }
                 None => out.push_str(&format!(
                     "{}{}random   {}{}", at(row, 0), DIM,
-                    entropy::pool_status(&pool, "next in "), OFF
+                    entropy::pool_status(&pools[0], "next in "), OFF
                 )),
             }
             // The time now, two rows under the random line whether or not
@@ -660,6 +1115,14 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
             if row + 2 < hv.saturating_sub(2) {
                 out.push_str(&format!("{}{}clock{}    {}", at(row + 2, 0), DIM, OFF,
                                       clock::format(clock::now(), "%Y-%m-%d %H:%M:%S")));
+                // Who else is reading this counter through us. Worth a word
+                // because the whole point of the socket is invisible
+                // otherwise -- a GUI attaching shows up here and nowhere else.
+                match feed.watchers() {
+                    0 => {}
+                    1 => out.push_str(&format!("{}{}1 attached{}", at(row + 2, 24), DIM, OFF)),
+                    n => out.push_str(&format!("{}{}{} attached{}", at(row + 2, 24), DIM, n, OFF)),
+                }
                 // What the log is doing, beside it: what the backfill found,
                 // or that rows are not reaching the disk.
                 if !table_note.is_empty() && width > 40 + table_note.len() {
@@ -683,13 +1146,18 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
             break;
         }
         if let Some(d) = duration {
-            if w.elapsed() >= d {
+            // HOW LONG THIS HAS BEEN WATCHING, not how much counter it holds.
+            // The two were the same number until a monitor could be handed
+            // eight hours of history on the way in, at which point
+            // `--duration 10` stopped after the replay and before the first
+            // live sample.
+            if watching.elapsed().as_secs_f64() >= d {
                 break;
             }
         }
     }
-    if let Some(lg) = logger.as_mut() {
-        let averages: Vec<Option<f64>> = spans.iter().map(|s| w.average(*s)).collect();
+    for (k, lg) in loggers.iter_mut().enumerate() {
+        let averages: Vec<Option<f64>> = spans.iter().map(|s| each[k].average(*s)).collect();
         lg.finish(&averages);
     }
     if let Some(wl) = logging.as_ref() {
@@ -697,19 +1165,9 @@ fn watch(c: &counter::Counter, spans: &[f64], cpm_per_usvh: f64,
             export_pages(&wl.dir, cpm_per_usvh);
         }
     }
-    c.heartbeat(false);
-}
-
-/// "79s", "6m", "1h 4m": a stretch of time in the fewest words that are
-/// still right to the unit shown.
-fn span_words(seconds: usize) -> String {
-    if seconds < 120 {
-        format!("{}s", seconds)
-    } else if seconds < 3600 {
-        format!("{}m", (seconds + 30) / 60)
-    } else {
-        format!("{}h {}m", seconds / 3600, (seconds % 3600 + 30) / 60)
-    }
+    // Only if this end started it: a monitor closing must not silence the
+    // counter for a service that is still logging it.
+    feed.stop();
 }
 
 /// Rows of log the monitor keeps for its table: more than any screen shows.
@@ -726,17 +1184,18 @@ const TABLE_KEEP: usize = 200;
 /// somebody is watching it in a monitor, and they will close it. One open()
 /// every ten seconds picks the log back up the moment they do.
 fn service(spans: &[f64], every: f64, duration: Option<f64>,
-           device: Option<&str>, baud: Option<u32>,
+           devices: &[String], baud: Option<u32>,
            logs: Option<std::path::PathBuf>,
            backfill: Option<(usize, f64)>) -> i32 {
     install_stop_handler();
 
     let started = clock::now();
     let mut waiting = false;
-    let c = loop {
-        match counter::find(device, baud) {
-            Ok(c) => break c,
-            Err(e) => {
+    let found = loop {
+        let (found, why) = counter::find_all(devices, baud);
+        match why {
+            None => break found,
+            Some(e) => {
                 if !e.busy {
                     let path = log::write_status(&format!("dormant: {}", e.reason));
                     println!("radbeeper: dormant -- {}", e.reason);
@@ -774,42 +1233,166 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     let dir = logs.unwrap_or_else(log::state_dir);
     let _ = std::fs::create_dir_all(&dir);
 
+    // EVERY COUNTER BACKFILLED FROM ITS OWN FLASH, into its own file. Two
+    // tubes were both in the room while nobody was listening and both wrote
+    // down what they saw; the records stay apart, because the only way to ask
+    // whether two instruments agree is to have kept both their answers.
     if let Some((bytes, max_gap)) = backfill {
-        log::write_status("backfilling from the counter's history");
-        println!("radbeeper: {}", backfill_at_start(&c, &dir, spans, every, bytes, max_gap, false));
+        log::write_status("backfilling from the counters' history");
+        for c in &found {
+            println!("radbeeper: {}",
+                     backfill_at_start(c, &dir, spans, every, bytes, max_gap, false));
+        }
     }
 
-    log::write_status(&format!("monitoring {} ({})", c.path, c.version));
-    let mut w = Windows::new(spans);
-    let mut logger = Logger::new(spans, dir.clone(), &c.serial_no, every);
+    let tubes = found.len();
+    log::write_status(&format!(
+        "monitoring {} ({})",
+        found.iter().map(|c| c.path.as_str()).collect::<Vec<_>>().join(", "),
+        found.iter().map(|c| c.version.as_str()).collect::<Vec<_>>().join(", ")
+    ));
+    let mut bank = Bank::open(found);
+    let id = bank.identity(spans);
+    // ONE SET OF WINDOWS AND ONE LOG PER TUBE. The service records; it does
+    // not average. Averaging is a question about a display, and every display
+    // that asks it can do so from the stream -- but a row that blended two
+    // instruments would be a reading neither of them took, and no later
+    // analysis could unpick it.
+    let mut each: Vec<Windows> = (0..tubes).map(|_| Windows::new(spans)).collect();
+    let mut loggers: Vec<Logger> = id
+        .counters
+        .iter()
+        .map(|c| Logger::new(spans, dir.clone(), &c.serial_no, every))
+        .collect();
+    // THE FAN-OUT. This process holds the flocks, so it owes the stream to
+    // everybody who wants a counter and cannot have the port: a monitor, a
+    // second monitor, a GUI. A socket that will not bind is not fatal -- the
+    // logging is the job, and it carries on -- but it is worth saying,
+    // because the symptom otherwise is a window printing `port busy` with no
+    // explanation of why the stream it expected was not there.
+    let mut srv = match broker::Server::start(&dir, &id) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            eprintln!("radbeeper: not serving the stream -- {}", e);
+            eprintln!("    the log is unaffected; a monitor will need the port itself");
+            None
+        }
+    };
+    // THE POOLS BELONG TO WHOEVER HOLDS THE PORTS, and until now nothing held
+    // them for long: the pool lived in the monitor, so closing the window
+    // threw away however many minutes of measured entropy it had gathered.
+    // Here one fills per tube for as long as that tube is plugged in, and the
+    // line it draws is written once, by this process, and published to every
+    // window watching. Per tube and never merged: an emission is an audit
+    // record of ONE source, and `radbeeper random --check` recomputes it from
+    // that source's own counts.
+    let mut pools: Vec<entropy::Entropy> =
+        (0..tubes).map(|_| entropy::Entropy::default()).collect();
+    // The ladder is fed the whole-second SUM across the tubes: a period is a
+    // property of the room, both counters are looking at the same room, and
+    // adding them is twice the signal on one time base. `suspect` is an
+    // annotation on the emission record, and one written without it would be
+    // quietly claiming a flat spectrum nobody checked.
+    let mut ladder = Ladder::new();
+    let mut sec_bin: Option<i64> = None;
+    let mut sec_sum: u32 = 0;
 
-    let here = log::site_at(&c.serial_no, clock::now(), &logger.sites);
-    println!("radbeeper: monitoring {} -- {}", c.path, c.version);
-    println!("radbeeper: counter {} at {}", c.serial_no,
+    if let Some(s) = srv.as_mut() {
+        let names = log::columns(&log::header(spans));
+        let mut seed: Vec<(usize, String)> = Vec::new();
+        for (k, c) in id.counters.iter().enumerate() {
+            let path = log::path(clock::now(), &dir, Some(&c.serial_no));
+            for (_, cells) in
+                log::read_table(&path, &names).into_iter().rev().take(TABLE_KEEP).rev()
+            {
+                seed.push((k, cells.join("\t")));
+            }
+        }
+        s.seed_rows(seed.into_iter());
+    }
+
+    let here = log::site_at(
+        id.counters.first().map(|c| c.serial_no.as_str()).unwrap_or(""),
+        clock::now(),
+        &loggers.first().map(|l| l.sites.clone()).unwrap_or_default(),
+    );
+    for c in &id.counters {
+        println!("radbeeper: monitoring {} -- {}", c.path, c.version);
+        println!("radbeeper: counter {} logging to {}", c.serial_no,
+                 log::path(clock::now(), &dir, Some(&c.serial_no)).display());
+    }
+    println!("radbeeper: {} at {}", if tubes == 1 { "counter" } else { "counters" },
              here.unwrap_or_else(|| "an unrecorded place".to_string()));
-    println!("radbeeper: logging to {}, a row every {}s",
-             log::path(clock::now(), &dir, Some(&c.serial_no)).display(),
-             log::g(every));
+    println!("radbeeper: a row every {}s", log::g(every));
+    if let Some(s) = srv.as_ref() {
+        println!("radbeeper: serving the stream on {}", s.socket().display());
+        println!("radbeeper: a monitor attaches to it -- the ports stay here");
+    }
 
-    // THE COUNTER HAS TO BE ASKED TO TALK. Without this the first read times
-    // out, the loop breaks on the spot and the service exits 0 having written
-    // nothing -- which is what it did, silently, until a test asked for the
-    // file afterwards. It appeared to work only because a `watch` killed
-    // without its cleanup leaves the counter streaming, and the next process
-    // inherits that.
-    c.heartbeat(true);
+    // Every port conversation is over -- the backfill above ran before the
+    // bank existed -- so the counters can start streaming.
+    bank.start();
     loop {
-        let counts = match c.next_sample(Duration::from_millis(2500)) {
-            Some(v) => v as u32,
+        // Whoever turned up while we were waiting for this second. Before the
+        // read, so a window that has just opened is greeted within a second
+        // rather than after the next sample.
+        if let Some(s) = srv.as_mut() {
+            s.accept_pending();
+        }
+        // EVERY SENDER GONE MEANS EVERY COUNTER GONE. One tube unplugged ends
+        // its thread and nothing else; the bank is finished only when the
+        // last one has stopped talking.
+        let (who, when, counts) = match bank.next(Duration::from_millis(2500)) {
+            Some(v) => v,
             None => break,
         };
-        let when = clock::now();
-        w.add(when, counts);
+        each[who].add(when, counts);
+        if let Some(s) = srv.as_mut() {
+            s.publish_sample(who, when, counts);
+        }
+        // The spectrum's second closes when the wall clock's does, and takes
+        // whatever every tube put in it.
+        let this = when.floor() as i64;
+        match sec_bin {
+            Some(b) if b == this => sec_sum += counts,
+            Some(_) => {
+                ladder.add(sec_sum);
+                sec_bin = Some(this);
+                sec_sum = counts;
+            }
+            None => {
+                sec_bin = Some(this);
+                sec_sum = counts;
+            }
+        }
+        pools[who].add(counts);
+        // The line, when a pool has earned it: written once, here, against the
+        // tube that earned it, and sent to every window so they all show the
+        // same hex.
+        if pools[who].ready() {
+            let spec = ladder.best();
+            let (top, _) = spec.loudest();
+            let suspect = top > 0.0 && top >= spec.chance_max() * 1.25;
+            let (text, record) = pools[who].draw();
+            let at_time = clock::format(clock::now(), "%H:%M:%S");
+            let _ = entropy::write_record(&dir, &record, &id.counters[who].serial_no, suspect);
+            if let Some(s) = srv.as_mut() {
+                s.publish_random(who, &text, &at_time, suspect);
+            }
+        }
         let averages: Vec<Option<f64>> =
-            spans.iter().map(|s| w.average(*s)).collect();
-        if let Err(e) = logger.add(when, counts, &averages) {
-            eprintln!("radbeeper: could not write the log -- {}", e);
-            break;
+            spans.iter().map(|s| each[who].average(*s)).collect();
+        match loggers[who].add(when, counts, &averages) {
+            Ok(Some(line)) => {
+                if let Some(s) = srv.as_mut() {
+                    s.publish_row(who, &line);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("radbeeper: could not write the log -- {}", e);
+                break;
+            }
         }
         if stopping() {
             break;
@@ -817,13 +1400,15 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
         // --duration is what makes this path testable at all: without it the
         // only way to exercise the logger is to start a daemon and kill it,
         // which is not something a test suite should do.
-        if duration.map(|d| w.elapsed() >= d).unwrap_or(false) {
+        if duration.map(|d| each[who].elapsed() >= d).unwrap_or(false) {
             break;
         }
     }
-    let averages: Vec<Option<f64>> = spans.iter().map(|s| w.average(*s)).collect();
-    logger.finish(&averages);
-    c.heartbeat(false);
+    for (k, lg) in loggers.iter_mut().enumerate() {
+        let averages: Vec<Option<f64>> = spans.iter().map(|s| each[k].average(*s)).collect();
+        lg.finish(&averages);
+    }
+    bank.stop();
     log::write_status("stopped");
     0
 }
@@ -1551,7 +2136,7 @@ fn usage() {
     println!("  radbeeper cpm              the counter's own CPM, once");
     println!("  radbeeper clock [--set]    its clock against this machine's, or correct it");
     println!("  radbeeper watch            the monitor, logging while it is open");
-    println!("  radbeeper service          log to disk, a row every 30 seconds");
+    println!("  radbeeper service          log every counter found, and serve the stream");
     println!("  radbeeper random           256 bits of hex, out of decay timing");
     println!("  radbeeper random --check F recompute every line in an emission log");
     println!("  radbeeper backfill         fill the log's gaps from the counter's flash");
@@ -1559,7 +2144,7 @@ fn usage() {
     println!("  radbeeper export           index.html and random.html, from the logs");
     println!("  radbeeper hotplug          sit in the session, open the monitor on plug-in");
     println!();
-    println!("  -d, --device PATH          serial port (default: search /dev)");
+    println!("  -d, --device PATH          serial port; repeat it for a second counter");
     println!("  -b, --baud RATE            baud (default: try 115200 then 57600)");
     println!("      --spans 3,30,300,3000,30000  averaging windows, seconds");
     println!("      --cpm-per-usvh N       tube factor (default {})", counter::DEFAULT_CPM_PER_USVH);
@@ -1578,6 +2163,7 @@ fn usage() {
     println!("      --poll SECONDS         hotplug: how often /dev is read (default 4)");
     println!("      --settle SECONDS       hotplug: grace before a new node is opened (default 2)");
     println!("      --tries N              hotplug: attempts per plug event (default 3)");
+    println!("      --tui                  hotplug: a terminal, even where radbeeper-gui is installed");
     println!("  -o, --output STEM          where log pull writes .bin and .csv");
     println!("  -o, --output FILE          export: where the page goes (default index.html)");
     println!("      --title TEXT           export: the page's heading");
@@ -1593,7 +2179,10 @@ fn usage() {
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut command = String::new();
-    let mut device: Option<String> = None;
+    // REPEATABLE, BECAUSE TWO TUBES ARE A SUPPORTED ARRANGEMENT. `-d A -d B`
+    // names both; no `-d` at all searches /dev and takes everything that
+    // answers. One `-d` behaves exactly as it always did.
+    let mut devices: Vec<String> = Vec::new();
     let mut baud: Option<u32> = None;
     let mut spans = vec![3.0, 30.0, 300.0, 3000.0, 30000.0];
     let mut cpm_per_usvh = counter::DEFAULT_CPM_PER_USVH;
@@ -1617,6 +2206,7 @@ fn main() {
     let mut poll: f64 = 4.0;
     let mut settle: f64 = 2.0;
     let mut tries: u32 = 3;
+    let mut tui = false;
     let mut log_action = "info".to_string();
     let mut serial: Option<String> = None;
     let mut title = radbeeper::export::DEFAULT_TITLE.to_string();
@@ -1639,7 +2229,7 @@ fn main() {
                 println!("radbeeper {}", VERSION);
                 return;
             }
-            "-d" | "--device" => device = next(&mut i),
+            "-d" | "--device" => devices.extend(next(&mut i)),
             "-b" | "--baud" => baud = next(&mut i).and_then(|v| v.parse().ok()),
             "--spans" => {
                 spans = match next(&mut i).as_deref().and_then(parse_spans) {
@@ -1688,6 +2278,7 @@ fn main() {
             "--poll" => poll = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(poll),
             "--settle" => settle = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(settle),
             "--tries" => tries = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(tries),
+            "--tui" => tui = true,
             "--title" => title = next(&mut i).unwrap_or(title),
             "--random-output" => random_output = next(&mut i).map(PathBuf::from),
             "--no-random-page" => no_random_page = true,
@@ -1717,7 +2308,7 @@ fn main() {
     if command == "backfill" {
         std::process::exit(backfill_cmd(
             &spans, log_every, max_gap, bytes.unwrap_or(64 * 1024),
-            device.as_deref(), baud, logs, image.as_deref(),
+            devices.first().map(|s| s.as_str()), baud, logs, image.as_deref(),
             serial.as_deref(), output.as_deref(),
         ));
     }
@@ -1730,7 +2321,7 @@ fn main() {
     }
     if command == "log" {
         std::process::exit(log_cmd(&log_action, bytes, output.as_deref(),
-                                   device.as_deref(), baud));
+                                   devices.first().map(|s| s.as_str()), baud));
     }
     if command == "random" {
         // --check needs no hardware, so it runs before anything looks for a
@@ -1739,25 +2330,84 @@ fn main() {
         if let Some(p) = check {
             std::process::exit(check_random(&p));
         }
-        std::process::exit(random(&spans, duration, device.as_deref(), baud, logs));
+        std::process::exit(random(&spans, duration, devices.first().map(|s| s.as_str()), baud, logs));
     }
     if command == "hotplug" {
-        std::process::exit(hotplug(device.as_deref(), baud, poll, settle, tries, duration));
+        let dir = logs.clone().unwrap_or_else(log::state_dir);
+        std::process::exit(hotplug(&dir, devices.first().map(|s| s.as_str()), baud, poll, settle, tries,
+                                   duration, tui));
     }
     if command == "service" {
         let backfill = (!no_backfill).then(|| (bytes.unwrap_or(64 * 1024), max_gap));
         std::process::exit(service(
-            &spans, log_every, duration, device.as_deref(), baud, logs, backfill,
+            &spans, log_every, duration, &devices, baud, logs, backfill,
         ));
     }
 
+    // WATCH ASKS THE SOCKET BEFORE IT ASKS /dev, so it is settled here rather
+    // than after a port has been opened. If a service is logging this counter
+    // the monitor attaches to it and the port is never touched; if nobody is,
+    // the monitor takes the port and serves it in turn, and the next window
+    // attaches to this one.
+    if command == "watch" {
+        let dir = logs.clone().unwrap_or_else(log::state_dir);
+        let logging = (!no_log).then(|| WatchLog {
+            dir: dir.clone(),
+            every: log_every,
+            backfill: (!no_backfill).then(|| (bytes.unwrap_or(64 * 1024), max_gap)),
+            export_every: (!no_export).then_some(3600.0),
+        });
+        let mut feed = match Feed::open(&dir, &devices, baud, &spans, wait) {
+            Ok(f) => f,
+            Err(e) => {
+                eprintln!("{}: {}", if e.busy { "port busy" } else { "no counter" }, e.reason);
+                for line in e.detail.lines() {
+                    eprintln!("    {}", line);
+                }
+                std::process::exit(1);
+            }
+        };
+        watch(&mut feed, &spans, cpm_per_usvh, duration, logging);
+        return;
+    }
+
     let found = match wait {
-        Some(limit) => find_waiting(device.as_deref(), baud, limit),
-        None => counter::find(device.as_deref(), baud),
+        Some(limit) => find_waiting(devices.first().map(|s| s.as_str()), baud, limit),
+        None => counter::find(devices.first().map(|s| s.as_str()), baud),
     };
     let c = match found {
         Ok(c) => c,
         Err(e) => {
+            // A BUSY PORT IS NOT A DEAD END FOR `probe` ANY MORE. The service
+            // holding the counter introduced itself the moment we connected,
+            // and its greeting is most of what probe prints. What is missing
+            // is the battery and the clock, which are questions for the
+            // counter -- and interrupting a stream mid-second to ask one
+            // costs the log a sample, which a status command has no business
+            // doing to a logger.
+            if e.busy && command == "probe" {
+                let dir = logs.clone().unwrap_or_else(log::state_dir);
+                if let Some(client) = broker::Client::attach(&dir)
+                    .filter(|c| devices.iter().all(|d| c.identity().serves(d)))
+                {
+                    let id = client.identity();
+                    for (k, c) in id.counters.iter().enumerate() {
+                        if k > 0 {
+                            println!();
+                        }
+                        println!("counter    {}", c.version);
+                        println!("model      {}", counter::model_of(&c.version));
+                        println!("serial     {}", c.serial_no);
+                        println!("port       {} @ {} baud", c.path, c.baud);
+                    }
+                    println!("held by    the radbeeper serving {}",
+                             broker::socket_path(&dir).display());
+                    println!("           battery and clock need the port itself:");
+                    println!("           doas rc-service radbeeper stop");
+                    println!("reading    radbeeper watch  attaches to it -- no handover needed");
+                    return;
+                }
+            }
             eprintln!("{}: {}", if e.busy { "port busy" } else { "no counter" }, e.reason);
             for line in e.detail.lines() {
                 eprintln!("    {}", line);
@@ -1791,15 +2441,6 @@ fn main() {
         }
         "cpm" => std::process::exit(cpm_cmd(&c, cpm_per_usvh)),
         "clock" => std::process::exit(clock_cmd(&c, set_clock)),
-        "watch" => {
-            let logging = (!no_log).then(|| WatchLog {
-                dir: logs.clone().unwrap_or_else(log::state_dir),
-                every: log_every,
-                backfill: (!no_backfill).then(|| (bytes.unwrap_or(64 * 1024), max_gap)),
-                export_every: (!no_export).then_some(3600.0),
-            });
-            watch(&c, &spans, cpm_per_usvh, duration, logging)
-        }
         other => {
             eprintln!("radbeeper: unknown command {}", other);
             std::process::exit(2);
@@ -1925,14 +2566,48 @@ impl Watcher {
 /// being read, by the service or by a monitor this session opened earlier, and
 /// neither wants a second window -- the status file belongs to whoever holds
 /// the port.
-fn open_window(device: Option<&str>, baud: Option<u32>) -> Option<Child> {
+/// Is there a counter here worth opening a window for?
+///
+/// A COUNTER THAT IS BEING SERVED COUNTS, and this is the line that used to
+/// make the two halves of the design deadlock. udev starts the service, the
+/// service takes the port, and this then asked the PORT whether there was a
+/// counter -- got `busy`, and gave up. On a machine where the logger works,
+/// which is every machine it was designed for, the window could therefore
+/// never open at all.
+///
+/// The existence of the socket is enough and a connection is not attempted:
+/// greeting a client costs the server its whole history, which is not a price
+/// to pay fifteen times a minute for a yes/no. A STALE node gives a false yes,
+/// and that is harmless -- the monitor it opens tries the socket, finds
+/// nothing behind it and takes the port itself, which is what should happen.
+fn worth_a_window(dir: &Path, device: Option<&str>, baud: Option<u32>) -> bool {
+    if broker::socket_path(dir).exists() {
+        return true;
+    }
     match counter::find(device, baud) {
-        Ok(_) => {}
+        Ok(_) => true,
         Err(e) => {
             if !e.busy {
                 log::write_status(&format!("dormant: {}", e.reason));
             }
-            return None;
+            false
+        }
+    }
+}
+
+fn open_window(dir: &Path, device: Option<&str>, baud: Option<u32>, tui: bool) -> Option<Child> {
+    if !worth_a_window(dir, device, baud) {
+        return None;
+    }
+    // THE WINDOW A PERSON WOULD HAVE OPENED THEMSELVES. If radbeeper-gui is
+    // installed, that is a window on its own and needs no terminal wrapped
+    // round it; if it is not, a terminal running the monitor is the window,
+    // and that is what this did before the GUI existed. Both attach to
+    // whatever is serving the stream, so the choice is cosmetic and `--tui`
+    // takes it back.
+    if !tui {
+        if let Some(g) = find_gui() {
+            return spawn_window(Command::new(g));
         }
     }
     let (term, flag) = match find_terminal() {
@@ -1962,6 +2637,11 @@ fn open_window(device: Option<&str>, baud: Option<u32>) -> Option<Child> {
         cmd.arg("--baud").arg(b.to_string());
     }
     cmd.arg("watch");
+    spawn_window(cmd)
+}
+
+/// Start a window and let go of it.
+fn spawn_window(mut cmd: Command) -> Option<Child> {
     // setsid, so the window outlives the watcher that opened it.
     //
     // SAFETY: setsid is async-signal-safe and touches nothing this process
@@ -1975,21 +2655,43 @@ fn open_window(device: Option<&str>, baud: Option<u32>) -> Option<Child> {
     match cmd.spawn() {
         Ok(child) => Some(child),
         Err(e) => {
-            eprintln!("radbeeper: could not open {}: {}", term.display(), e);
+            eprintln!("radbeeper: could not open a window: {}", e);
             None
         }
     }
 }
 
+/// radbeeper-gui, if it is installed.
+///
+/// BESIDE US FIRST, then PATH. The two are built from one checkout and land in
+/// the same directory; a session that has an old radbeeper-gui somewhere on
+/// PATH and a new pair in ~/.local/bin should get the pair.
+fn find_gui() -> Option<PathBuf> {
+    if let Ok(me) = std::env::current_exe() {
+        if let Some(dir) = me.parent() {
+            let beside = dir.join("radbeeper-gui");
+            if beside.is_file() && is_executable(&beside) {
+                return Some(beside);
+            }
+        }
+    }
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join("radbeeper-gui"))
+        .find(|p| p.is_file() && is_executable(p))
+}
+
 /// `radbeeper hotplug`: open the monitor when a counter appears -- now, or in
 /// an hour's time.
 fn hotplug(
+    dir: &Path,
     device: Option<&str>,
     baud: Option<u32>,
     poll: f64,
     settle: f64,
     tries: u32,
     duration: Option<f64>,
+    tui: bool,
 ) -> i32 {
     let mut seen: BTreeSet<String> = counter::candidate_ports().into_iter().collect();
     let started = Instant::now();
@@ -2007,7 +2709,7 @@ fn hotplug(
             }
         }
         if w.should_open(now(), child.is_some()) {
-            child = open_window(device, baud);
+            child = open_window(dir, device, baud, tui);
         }
         if duration.map_or(false, |d| now() >= d) {
             return 0;
@@ -2093,6 +2795,24 @@ mod tests {
 
     /// The terminals are tried in order, and the list is the one the desktop
     /// actually installs. foot is the Wayland session's.
+    /// THE BUG THIS RELEASE EXISTS FOR, pinned: a counter held by a service
+    /// that is serving the stream is worth a window. The port is busy, there
+    /// is no device to find -- and it must still say yes, because the monitor
+    /// it opens will attach rather than ask for the port.
+    #[test]
+    fn a_counter_being_served_is_worth_a_window_though_the_port_is_busy() {
+        let dir = std::env::temp_dir().join(format!("radbeeper-window-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let sock = broker::socket_path(&dir);
+        let _ = std::fs::remove_file(&sock);
+        // No socket and a device that cannot exist: nothing to open.
+        assert!(!worth_a_window(&dir, Some("/dev/null-no-counter-here"), None));
+        // A server on the socket, and the same impossible device: still yes.
+        std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        assert!(worth_a_window(&dir, Some("/dev/null-no-counter-here"), None));
+        let _ = std::fs::remove_file(&sock);
+    }
+
     #[test]
     fn the_terminals_are_tried_best_first() {
         assert_eq!(TERMINALS[0].0, "foot");

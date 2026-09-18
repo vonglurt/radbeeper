@@ -65,11 +65,13 @@ radbeeper watch      # the monitor — q to quit
 
 That is the whole of it. The `dialout` line in the install above is not
 optional: the serial node is `root:dialout` and RadBeeper does not want root.
-**Only one program can hold the port**, so if the boot service is logging,
-`probe` says `port busy` and names it — `doas rc-service radbeeper stop` hands
-the counter over, and `start` gives it back. `radbeeper --wait watch` waits for
-the port rather than giving up on it, so the two need not be raced; it is the
-native build's, and [troubleshooting](docs/troubleshooting.md) has the rest.
+**Only one program can hold the port — but only one needs to.** The process
+that has it serves what it reads on a socket beside the log, and `watch` asks
+that socket before it asks `/dev`: with the boot service logging, the monitor
+attaches to it and the port is never touched. Nothing has to be stopped, and
+the log does not skip a second while you watch. With no service running, the
+monitor takes the port itself and serves it in turn, so the second window
+attaches to the first. [The stream](#the-stream) is what that is.
 If `probe` finds nothing it says which of four things went wrong, and they have
 four different fixes — [§1](#1-what-you-need) is the list of what has to be
 true. **No counter yet?** `tests/fake_gmc.py` puts a synthetic counter on a
@@ -81,7 +83,8 @@ process — and exercises the serial path as well as the display:
 <summary>Everything else it does</summary>
 
 ```sh
-radbeeper service          # log to disk, a row every 30 seconds
+radbeeper service          # log every counter it finds, and serve them all
+radbeeper-gui              # the same counter in a window (separate crate, gui/)
 radbeeper backfill         # fill the log's gaps from the counter's own flash
 radbeeper random           # 256 bits of hex, out of decay timing
 radbeeper site             # where this counter is, and where it has been
@@ -218,8 +221,9 @@ set            2026-09-16 16:15:43
 names; the result is measured the same way, and if it landed off the timing is
 corrected and it is sent once more. Three things to know first:
 
-- **Only one program can hold the port.** Stop the service
-  (`doas rc-service radbeeper stop`), set it, start it again.
+- **Setting the clock needs the port itself**, which is the one thing the
+  stream cannot pass on: stop the service (`doas rc-service radbeeper stop`),
+  set it, start it again. Watching needs nothing stopped.
 - **Set it from a clock that is right.** `clock` asks the kernel whether NTP is
   steering this machine. A counter set from a clock nothing steers is only as
   right as that clock, and it says so rather than refusing.
@@ -486,6 +490,196 @@ The setgid bit (the `2` in `2775`) makes every file created in the directory
 belong to `dialout`, whoever creates it; `umask=002` makes the service's files
 group-writable. `service.log` stays in `/var/log` — it is the service's own
 output, and losing it at a reboot is what a log is for.
+
+### The stream
+
+**The counter sends two bytes a second, and that is the whole of the live
+data.** Five averaging windows, the cascade strip, the spectrum, the entropy
+pool, the log rows, `index.html` — every one of them is arithmetic over a
+stream of *(when, counts)*. Nothing below the read touches the port.
+
+So the lock is on the wrong thing to be a queue for. Two processes reading one
+tty do not each get the stream; they get a share of it each and neither is
+told, which is why the port is locked at all — but that is an argument for one
+*reader*, not one *consumer*. Whichever RadBeeper holds the port publishes what
+it reads on a unix socket beside the log:
+
+```
+/var/lib/radbeeper/sock      root:dialout, 0660 — the same membership that
+                             lets you read the counter lets you read this
+```
+
+`watch` asks that socket before it asks `/dev`. The rules are short:
+
+| | |
+|---|---|
+| **The port-holder serves** | `service` normally; `watch` when no service is running. Whoever has the flock owes everyone else the stream. |
+| **A client writes nothing** | No log, no emission, no `index.html`, and it never opens the port. One writer, always — a rule with no exceptions is what makes two windows and a service safe together. |
+| **Attaching gives you the history first** | Up to eight hours of it, replayed in milliseconds, so a window you just opened has its 30-second average *filled* rather than filling. The working-day window is full if the service has been up that long. |
+| **A named device is not overruled** | `-d /dev/pts/7` means that device. The socket is only used when it is serving the counter you asked for. |
+| **Closing a window costs the log nothing** | It was never what was writing it. |
+| **One socket carries every counter** | Each sample says which tube it came from, so a machine with two serves both down one stream. See [Two counters](#two-counters). |
+
+What this replaces is the handover: `doas rc-service radbeeper stop`, watch,
+start it again, and an hour of log missing for every evening spent watching.
+That is no longer how you look at your own counter. It is still how you set its
+clock or read its flash, because those are questions *for* the counter and only
+the port-holder can ask them.
+
+```sh
+radbeeper probe                 # works while the service holds the port
+radbeeper watch                 # attaches; nothing is stopped
+radbeeper-gui                   # so does the window
+```
+
+If `port busy` still appears, the holder is something that wants the port to
+itself — a `random`, a `backfill`, a `log pull` — or a build older than this
+one. `--wait` waits for it.
+
+### Two counters
+
+**Plug in a second GMC and `radbeeper service` reads both.** No flag is needed;
+with no `-d` it takes every counter that answers, and `-d A -d B` names them.
+
+Two tubes watching one room are two measurements of one number. They do **not**
+double the dose — what doubles is the evidence:
+
+| | |
+|---|---|
+| **Each keeps its own log** | Separate files, keyed by serial, as before. They are separate instruments and the record has to say which said what; a row that averaged two of them would be a reading neither took. |
+| **The display averages them** | Every combined figure is the *mean* across the tubes, which is the same number one tube would report, measured from twice the arrivals. |
+| **The precision is what improves** | Poisson error is 1/sqrt(N), so twice the counts is a factor of root two better. The window prints it: `452 CPM ±21 (4.7%)`. |
+| **The cascade grows a fifth tier** | Two counters on their own clocks interleave, so the strip runs `8s/bar · 4s · 2s · 1s · 0.5s` instead of stopping at one second. |
+| **The finest tier is coloured by tube** | Each bar in it is one tube's reading, drawn in that tube's colour, so the interleave is visible. Every tier left of it is a mean over both and takes the level colours — the two have merged into one number by then. |
+
+**The interleave is measured, not assumed.** Two counters only sharpen *time* if
+they disagree about when a second starts, and neither clock can be steered, so
+the window reports the offset it actually sees: `2 tubes · interleave 0.50s
+(100%)`. Half a second is a perfect interleave. Near zero is two tubes firing
+together — still twice the counts and still the better precision, but no extra
+resolution in time, and the display says so rather than claiming a half-second
+bar it has not earned.
+
+### Looking for a period
+
+Decay has none: the power spectrum of a Poisson process is flat, and a
+featureless strip is the useful answer. Something arriving on a schedule is
+not decay, and that is worth being able to see.
+
+A spectrum resolves periods up to its own window and no further — you cannot
+find an hourly rhythm in ten minutes of listening — so one window is always the
+wrong question for somebody hunting an unknown period. The window runs **three
+at once** (8m, 68m, 9h) and draws them over one another on a shared
+**logarithmic period axis**, long periods on the left, each in its own primary
+at partial alpha:
+
+- a real line stands at the same place in every layer that can reach it, which
+  is most of what separates it from a fluke;
+- the layers that cannot reach it simply stop short, and a period only the
+  longest window sees is exactly the one worth doubting;
+- the luck line is drawn across the panel — the height a peak has to clear
+  before it means anything, which is not a fixed multiple and gets *harder* to
+  clear the longer you watch.
+
+**Each layer is drawn only over the band it can resolve**, and says so:
+`7s–8m`, `58s–1h 8m`, `7m–9h 6m`. A window of *W* seconds has a bin at every
+*W/n*, so the bins crowd towards the short-period end — by two seconds a
+nine-hour window has sixteen thousand of them and the axis has a few hundred
+columns to put them in. Folding twenty-seven bins into one column and taking
+the loudest does not draw a line; it draws the largest of twenty-seven draws,
+which is high by construction and high *everywhere*, and the resulting wall of
+noise hides exactly what the panel is for. So a layer stops where its bins get
+closer together than a bar is wide. A long window covers the long end, a short
+one the short end, and they overlap in the middle where both are honest.
+
+**The floor is solved, not chosen.** It is wherever the *shortest* window's
+bins are still a bar apart — which depends on that window, on the longest one
+(the two set the span of the axis) and on how many columns there are. That
+makes it implicit, since the floor sets the span and the span sets the floor,
+so it is iterated to a fixed point and lands near seven seconds for this
+ladder. Change the windows and it follows. Nothing is drawn below two seconds
+whatever happens: that is the Nyquist limit of a one-second sample.
+
+With two counters both spectra are fed the whole-second sum: a period is a
+property of the room and both tubes are looking at the same room, so adding
+them is more signal on one time base.
+
+### The window
+
+`gui/` is a second crate: the same counter, in an Iced window, on Wayland.
+
+```sh
+cd gui && cargo build --release      # then ./target/release/radbeeper-gui
+```
+
+**It is a separate crate on purpose.** RadBeeper has one dependency and it is
+`libc`; Iced brings several hundred, which is the right price for a
+GPU-accelerated window and the wrong price to put on `cargo install radbeeper`.
+The GUI has no serial code at all — it cannot open a port, only attach to one
+that is being served — which is exactly what makes it safe to open and close
+all day.
+
+Two things about building it on Alpine, both of which cost an afternoon
+somewhere:
+
+- **It must be linked dynamically.** Rust on musl defaults to `+crt-static`,
+  and a static binary cannot `dlopen` anything — including `libwayland-client`,
+  which every Wayland toolkit loads at runtime. The failure reads
+  `WaylandError(Connection(NoWaylandLib))`, which sounds like a missing package
+  and is not one. `gui/.cargo/config.toml` turns the static link off, and says
+  so at length.
+- **Software rendering is expected in a VM.** With no virgl driver, `wgpu`
+  cannot start and prints `virtio_gpu: driver missing`. Both renderers are
+  compiled in, so Iced falls back to `tiny-skia` by itself and the window comes
+  up regardless.
+- **One canvas, and no text inside it.** On that software renderer only the
+  *last* canvas widget in a view is drawn, and a `fill_text` anywhere in a
+  canvas takes the rest of that frame's shapes with it. Both charts therefore
+  share a single canvas and every caption around them is a text widget. The
+  symptom is an empty box where a chart should be, which looks exactly like a
+  bug in the chart's arithmetic and is not one — `gui/src/main.rs` says so at
+  the point where it would otherwise be reintroduced.
+
+An instrument cluster: a round dial per counter with a 270-degree sweep, the
+bands painted on the face at the same thresholds everything else uses, and the
+reading in digits on the black face under the needle. Beside it the five
+averaging windows, each with the **precision** of its own figure — the long
+windows are the precise ones, and without that printed the only visible
+difference between the 3-second number and the working-day number is that one
+of them jumps about. Then the cascade, the spectrum overlay, the emission and
+its countdown, and the log rows as the server wrote them.
+
+The charts come out of the same code the terminal monitor uses —
+`analysis::tiers_with` and the same `Spectrum` — so a counter cannot look one
+way in a terminal and another way in a window.
+
+`radbeeper hotplug` opens the GUI when it is installed and a terminal running
+`watch` when it is not; `--tui` asks for the terminal either way.
+
+### The page, with two counters
+
+`radbeeper export` reads every counter's log in the directory, and with two of
+them the page opens on **Both counters** before either of them individually:
+
+| | |
+|---|---|
+| **Mean, together** | Counts-weighted across the tubes — adding the counts and adding the seconds. Averaging the two *rates* instead would give a tube that recorded for an hour the same say as one that recorded for a week. |
+| **Precision** | `±0.1 CPM (0.17% of the mean)`. All a second counter buys, and the only place the benefit is visible. |
+| **Arrivals behind it** | The count the precision comes from, and the tube-hours it took. |
+| **Do they agree?** | The widest gap between any two tubes, in sigmas. Identical tubes in one room should sit within about two; a gap that keeps growing is the tubes differing, not the room being interesting. |
+
+Under it, every counter's hourly mean on one pair of axes, a colour each. Two
+tubes watching one room draw the same shape, and where they stop being parallel
+is where something is wrong with a tube, a cable or a pass-through — which no
+table of averages shows as quickly.
+
+**Every counter gets its own audit page.** This used to write the first
+counter's emissions and silently drop every other tube's, so with two plugged in
+half the record had no page and nothing said so. The first keeps the name
+`random.html` — or whatever `--random-output` asked for — and the rest go beside
+it as `random-<serial>.html`, each linked from its own counter's section. An
+emission is an audit trail of *one* source, recomputed from that source's own
+counts, so they cannot be merged either.
 
 ### As a boot service
 

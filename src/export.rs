@@ -373,6 +373,93 @@ pub fn summarise(directory: &Path, cpm_per_usvh: f64) -> BTreeMap<String, Counte
     counters
 }
 
+
+/// What two or more tubes in one room measured, taken together.
+///
+/// COUNTS-WEIGHTED, WHICH IS THE ONLY DEFENSIBLE MEAN. Adding the counts and
+/// adding the seconds gives the rate of the pair; averaging the two rates
+/// instead would give a tube that recorded for an hour the same say as one
+/// that recorded for a week. Two counters do NOT double the dose -- what
+/// doubles is the evidence, and the whole benefit lands in `sigma`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Together {
+    pub tubes: usize,
+    pub counts: i64,
+    pub seconds: f64,
+    pub cpm: f64,
+    pub usvh: f64,
+    /// One sigma on `cpm`, in CPM. Arrivals are Poisson, so the whole of the
+    /// uncertainty is the count behind the number: N gives 1/sqrt(N).
+    pub sigma: f64,
+    /// The widest disagreement between any two tubes, in sigmas, and which
+    /// pair it was. None when there is only one tube, or no overlap to judge.
+    pub worst: Option<(f64, String, String)>,
+}
+
+/// One tube's rate and its uncertainty, in counts per second.
+fn rate_of(c: &Counter) -> Option<(f64, f64)> {
+    if c.seconds <= 0.0 || c.counts <= 0 {
+        return None;
+    }
+    let r = c.counts as f64 / c.seconds;
+    Some((r, r / (c.counts as f64).sqrt()))
+}
+
+/// The pair, taken together -- None unless at least two tubes have counts.
+pub fn together(counters: &BTreeMap<String, Counter>, cpm_per_usvh: f64) -> Option<Together> {
+    let live: Vec<(&String, &Counter)> = counters
+        .iter()
+        .filter(|(_, c)| c.seconds > 0.0 && c.counts > 0)
+        .collect();
+    if live.len() < 2 {
+        return None;
+    }
+    let counts: i64 = live.iter().map(|(_, c)| c.counts).sum();
+    let seconds: f64 = live.iter().map(|(_, c)| c.seconds).sum();
+    let cpm = counts as f64 * 60.0 / seconds;
+    // DO THEY AGREE? Two identical tubes in one room should, to within a
+    // couple of sigma; a difference that keeps growing is the tubes being
+    // different, not the room being interesting, and it is the one question
+    // a second instrument exists to answer.
+    let mut worst: Option<(f64, String, String)> = None;
+    for i in 0..live.len() {
+        for j in i + 1..live.len() {
+            let (Some((ra, sa)), Some((rb, sb))) = (rate_of(live[i].1), rate_of(live[j].1))
+            else {
+                continue;
+            };
+            let sd = (sa * sa + sb * sb).sqrt();
+            if sd <= 0.0 {
+                continue;
+            }
+            let z = ((ra - rb) / sd).abs();
+            if worst.as_ref().map_or(true, |(w, _, _)| z > *w) {
+                worst = Some((z, live[i].0.clone(), live[j].0.clone()));
+            }
+        }
+    }
+    Some(Together {
+        tubes: live.len(),
+        counts,
+        seconds,
+        cpm,
+        usvh: if cpm_per_usvh != 0.0 { cpm / cpm_per_usvh } else { 0.0 },
+        sigma: cpm / (counts as f64).sqrt(),
+        worst,
+    })
+}
+
+/// How to read a disagreement, in the words it deserves.
+pub fn agreement(z: f64) -> &'static str {
+    if z < 2.0 {
+        "they agree"
+    } else if z < 4.0 {
+        "they differ -- watch it"
+    } else {
+        "they disagree -- not the same measurement"
+    }
+}
+
 /// A round number at or above value, for an axis somebody can read.
 pub fn nice_ceiling(value: f64) -> f64 {
     if value <= 0.0 {
@@ -517,6 +604,117 @@ pub fn svg_plot(series: &[(f64, f64, Option<f64>)]) -> String {
     out.concat()
 }
 
+
+/// Every tube's hourly mean on one pair of axes, in one colour each.
+///
+/// THE POINT IS THE TRACKING, NOT THE VALUES. Two counters watching one room
+/// should draw the same shape; where they part company is where something is
+/// wrong with a tube, a cable or a pass-through, and no table of averages
+/// shows that as fast as two lines that stop being parallel.
+pub fn svg_overlay(series: &[(String, Vec<(f64, f64, Option<f64>)>)]) -> String {
+    let (width, height, pad_l, pad_b, pad_t, pad_r) = (1120i64, 560i64, 52i64, 26i64, 12i64, 10i64);
+    let live: Vec<&(String, Vec<(f64, f64, Option<f64>)>)> =
+        series.iter().filter(|(_, s)| s.len() >= 2).collect();
+    if live.len() < 2 {
+        return String::new();
+    }
+    let values: Vec<f64> = live
+        .iter()
+        .flat_map(|(_, s)| s.iter().map(|p| p.1))
+        .filter(|m| *m > 0.0)
+        .collect();
+    if values.is_empty() {
+        return String::new();
+    }
+    let vmin = values.iter().copied().fold(values[0], |a, b| if b < a { b } else { a });
+    let vmax = values.iter().copied().fold(values[0], |a, b| if b > a { b } else { a });
+    let lo = pow(10.0, vmin.log10().floor());
+    let mut hi = pow(10.0, vmax.log10().ceil());
+    if hi <= lo {
+        hi = lo * 10.0;
+    }
+    let span_y = hi.log10() - lo.log10();
+    let t0 = live.iter().map(|(_, s)| s[0].0).fold(f64::INFINITY, f64::min);
+    let t1 = live
+        .iter()
+        .map(|(_, s)| s[s.len() - 1].0)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let span = if t1 - t0 != 0.0 { t1 - t0 } else { 1.0 };
+    let iw = width - pad_l - pad_r;
+    let ih = height - pad_t - pad_b;
+    let x_of = |t: f64| pad_l as f64 + iw as f64 * (t - t0) / span;
+    let y_of = |v: f64| {
+        pad_t as f64 + ih as f64 * (1.0 - (pymax(v, lo).log10() - lo.log10()) / span_y)
+    };
+    let step = 3600.0 * 1.5;
+
+    let mut out = vec![format!(
+        "<svg class=\"plot\" viewBox=\"0 0 {} {}\" width=\"100%\" \
+         preserveAspectRatio=\"xMidYMid meet\" role=\"img\" \
+         aria-label=\"counts per minute over time, every counter\">",
+        width, height
+    )];
+    let mut decade = lo;
+    while decade <= hi * 1.0001 {
+        let y = f(1, y_of(decade));
+        out.push(format!(
+            "<line class=\"grid\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
+            pad_l, y, width - pad_r, y
+        ));
+        out.push(format!(
+            "<text class=\"ylab\" x=\"{}\" y=\"{}\">{}</text>",
+            pad_l - 8,
+            f(1, y_of(decade) + 4.0),
+            commas(decade as i64)
+        ));
+        decade *= 10.0;
+    }
+    let day = 86400.0;
+    let mut t = t0 - t0.rem_euclid(day) + day;
+    while t < t1 {
+        let x = f(1, x_of(t));
+        out.push(format!(
+            "<line class=\"grid\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
+            x, pad_t, x, pad_t + ih
+        ));
+        out.push(format!(
+            "<text class=\"xlab\" x=\"{}\" y=\"{}\">{}</text>",
+            x,
+            height - 8,
+            clock::format(t, "%b %-d")
+        ));
+        t += day;
+    }
+    for (i, (serial, points)) in live.iter().enumerate() {
+        let mut d: Vec<String> = Vec::new();
+        let mut last: Option<f64> = None;
+        for (when, mean, _) in points.iter() {
+            let letter = if last.map(|l| when - l > step).unwrap_or(true) { "M" } else { "L" };
+            d.push(format!("{}{} {}", letter, f(1, x_of(*when)), f(1, y_of(*mean))));
+            last = Some(*when);
+        }
+        out.push(format!(
+            "<path class=\"tube t{}\" d=\"{}\"/>",
+            i % 4,
+            d.join(" ")
+        ));
+        out.push(format!(
+            "<text class=\"key t{}\" x=\"{}\" y=\"{}\">{}</text>",
+            i % 4,
+            pad_l + 8,
+            pad_t + 16 + 15 * i as i64,
+            esc(serial)
+        ));
+    }
+    out.push(format!(
+        "<text class=\"ycap\" x=\"{}\" y=\"{}\">CPM, log</text>",
+        pad_l - 44,
+        pad_t + 10
+    ));
+    out.push("</svg>".to_string());
+    out.concat()
+}
+
 pub fn esc(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -589,6 +787,15 @@ const STYLE: &[&str] = &[
     ".plot .mean{fill:none;stroke:var(--accent);stroke-width:1.6;\
      stroke-linejoin:round;stroke-linecap:round}",
     ".plot .peak{fill:none;stroke:var(--warn);stroke-width:1;opacity:.55}",
+    // One colour per tube, shared by its line and its key, so the overlay is
+    // read by colour and needs no legend anywhere else.
+    ".plot .tube{fill:none;stroke-width:1.6;stroke-linejoin:round;\
+      stroke-linecap:round;opacity:.9}",
+    ".plot .key{font-size:12px;text-anchor:start}",
+    ".plot .t0{stroke:#6cc6ff;fill:#6cc6ff}",
+    ".plot .t1{stroke:#c9a0ff;fill:#c9a0ff}",
+    ".plot .t2{stroke:#7ee787;fill:#7ee787}",
+    ".plot .t3{stroke:#ffa657;fill:#ffa657}",
     ".plot text{fill:var(--dim);font-size:11px;\
      font-family:system-ui,sans-serif}",
     ".plot .ylab{text-anchor:end}",
@@ -636,8 +843,13 @@ pub fn render_html(
     cpm_per_usvh: f64,
     title: &str,
     shots: &BTreeMap<String, String>,
-    random_link: Option<&str>,
+    // `randoms`: one audit page per counter that has emissions, by serial.
+    randoms: &BTreeMap<String, String>,
 ) -> String {
+    // The lede links the first, because the paragraph is about the idea
+    // rather than about any one tube. Each counter's own section links its
+    // own page below.
+    let random_link = randoms.values().next().map(|s| s.as_str());
     let when = |t: f64| clock::format(t, "%Y-%m-%d %H:%M");
     let mut out = page_head(title, &[]);
     macro_rules! a {
@@ -674,6 +886,74 @@ pub fn render_html(
         a!("<p>No logs found. Put <code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code> \
             files beside this page and run <code>radbeeper export</code>.</p>");
     }
+    // BOTH TUBES, BEFORE EITHER OF THEM. With one counter this is not drawn
+    // at all; with two it is the first thing on the page, because the pair is
+    // the measurement and the individual tubes are how it was arrived at.
+    if let Some(t) = together(counters, cpm_per_usvh) {
+        a!("<h2>Both counters</h2>");
+        a!("<div class=\"cards\">");
+        let card = |k: &str, v: &str, n: &str| {
+            format!(
+                "<div class=\"card\"><div class=\"k\">{}</div><div class=\"v\">{}</div>{}</div>",
+                esc(k),
+                esc(v),
+                if n.is_empty() { String::new() } else { format!("<div class=\"n\">{}</div>", esc(n)) }
+            )
+        };
+        out.push(card(
+            "Mean, together",
+            &format!("{} CPM", f(1, t.cpm)),
+            &format!("{} uSv/h", f(3, t.usvh)),
+        ));
+        out.push(card(
+            "Precision",
+            // THE CHARACTER, NOT THE ENTITY. `card` escapes its value, so
+            // "&plusmn;" arrives on the page as those nine letters. The
+            // document is utf-8 and has been since the first line of it.
+            &format!("\u{b1}{} CPM", f(1, t.sigma)),
+            &format!("{}% of the mean", f(2, 100.0 * t.sigma / pymax(t.cpm, 1e-9))),
+        ));
+        out.push(card(
+            "Arrivals behind it",
+            &commas(t.counts),
+            &format!("over {} tube-hours", f(1, t.seconds / 3600.0)),
+        ));
+        out.push(match &t.worst {
+            Some((z, _, _)) => card(
+                "Do they agree?",
+                agreement(*z),
+                &format!("widest gap {} sigma", f(1, *z)),
+            ),
+            None => card("Do they agree?", "--", "not enough counts yet"),
+        });
+        a!("</div>");
+        a!(
+            "<p class=\"note\">Two tubes watching one room are two measurements of \
+             one number: they do <strong>not</strong> double the dose &mdash; what \
+             doubles is the evidence. The mean above is counts-weighted across \
+             {} tubes, and the precision is all a second counter buys: arrivals \
+             are Poisson, so N of them are known to 1/&radic;N and twice the \
+             counts is a factor of &radic;2 better. The agreement is the one \
+             question a second instrument exists to answer &mdash; identical \
+             tubes in one room should sit within about two sigma of each other, \
+             and a gap that keeps growing is the tubes differing, not the room \
+             being interesting.</p>",
+            t.tubes
+        );
+        let series: Vec<(String, Vec<(f64, f64, Option<f64>)>)> = counters
+            .iter()
+            .map(|(serial, c)| (serial.clone(), hour_series(c)))
+            .collect();
+        let plot = svg_overlay(&series);
+        if !plot.is_empty() {
+            a!("<div class=\"plotwrap\">{}</div>", plot);
+            a!("<p class=\"note\">Every counter's hourly mean, one colour each. \
+                Two tubes in one room draw the same shape; where they stop being \
+                parallel is where something is wrong with a tube, a cable or a \
+                pass-through, and no table of averages shows that as quickly.</p>");
+        }
+    }
+
     for (serial, c) in counters {
         let at = match c.last {
             Some(l) if l != 0.0 => l,
@@ -779,6 +1059,17 @@ pub fn render_html(
                 c.latest.len(),
                 commas(c.rows as i64),
                 links.join(" &middot; ")
+            );
+        }
+        // THIS TUBE'S OWN AUDIT PAGE. Each counter's emissions are recomputed
+        // from that counter's own counts and belong to it alone, so the link
+        // lives in its section rather than once at the top of the page.
+        if let Some(href) = randoms.get(serial) {
+            a!(
+                "<p class=\"more\"><a href=\"{}\">Where this counter's random \
+                 comes from</a> &mdash; every line it has emitted, with the \
+                 counts behind it.</p>",
+                esc(href)
             );
         }
     }
@@ -1502,8 +1793,9 @@ pub struct Report {
     pub index: PathBuf,
     pub counters: usize,
     pub rows: u64,
-    /// The audit page and how many emissions it accounts for, if written.
-    pub random: Option<(PathBuf, usize)>,
+    /// The audit pages and how many emissions each accounts for: one per
+    /// counter that has any, in the order the counters are listed.
+    pub randoms: Vec<(PathBuf, usize)>,
 }
 
 /// Build index.html -- and random.html beside it, when there are emissions
@@ -1546,25 +1838,44 @@ pub fn export(
         .map(|(serial, path)| (serial, entropy::read_emissions(&path)))
         .filter(|(_, pools)| !pools.is_empty())
         .collect();
-    let mut random = None;
+    // ONE AUDIT PAGE PER COUNTER, NOT ONE PER MACHINE. This used to write the
+    // first counter's emissions and silently drop every other tube's: with two
+    // counters plugged in, half the record simply had no page and nothing said
+    // so. An emission is an audit trail of ONE source and is recomputed from
+    // that source's own counts, so it cannot be merged with another's either.
+    //
+    // The first keeps the name `random.html` -- or whatever --random-output
+    // asked for -- so a page that has always been at that address still is.
+    // The rest go beside it as `random-<serial>.html`.
+    let mut random_pages: Vec<(String, String, usize)> = Vec::new();
     if random_page {
-        if let Some((serial, pools)) = randoms.first() {
-            let target = match random_output.filter(|p| !p.as_os_str().is_empty()) {
-                Some(p) => path_str(p),
-                None => join(&out_dir, "random.html"),
+        for (i, (serial, pools)) in randoms.iter().enumerate() {
+            let target = if i == 0 {
+                match random_output.filter(|p| !p.as_os_str().is_empty()) {
+                    Some(p) => path_str(p),
+                    None => join(&out_dir, "random.html"),
+                }
+            } else {
+                join(&out_dir, &format!("random-{}.html", serial))
             };
             fs::write(&target, render_random_html(serial, pools, RANDOM_TITLE, basename(&out)))?;
-            random = Some((target, pools.len()));
+            random_pages.push((serial.clone(), target, pools.len()));
         }
     }
-    let link = random.as_ref().map(|(p, _)| relpath(p, &out_dir));
-    let html = render_html(&counters, &sites, cpm_per_usvh, title, &shots, link.as_deref());
+    let links: BTreeMap<String, String> = random_pages
+        .iter()
+        .map(|(serial, p, _)| (serial.clone(), relpath(p, &out_dir)))
+        .collect();
+    let html = render_html(&counters, &sites, cpm_per_usvh, title, &shots, &links);
     fs::write(output, html)?;
     Ok(Report {
         index: output.to_path_buf(),
         counters: counters.len(),
         rows: counters.values().map(|c| c.rows).sum(),
-        random: random.map(|(p, n)| (PathBuf::from(p), n)),
+        randoms: random_pages
+            .into_iter()
+            .map(|(_, p, n)| (PathBuf::from(p), n))
+            .collect(),
     })
 }
 
@@ -1587,7 +1898,7 @@ pub fn run(
                 if r.counters == 1 { "" } else { "s" },
                 r.rows
             );
-            if let Some((p, n)) = &r.random {
+            for (p, n) in &r.randoms {
                 println!(
                     "radbeeper: {} -- {} emission{}",
                     p.display(),
@@ -1607,6 +1918,93 @@ pub fn run(
 // ----------------------------------------------------------------- tests ---
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// TWO TUBES DO NOT DOUBLE THE DOSE. Two identical counters, each a
+    /// thousand counts in a thousand seconds, read sixty CPM together and not
+    /// a hundred and twenty -- and the counts behind that number are the sum,
+    /// which is the whole of what a second tube buys.
+    #[test]
+    fn two_tubes_report_the_mean_rate_and_not_the_sum() {
+        let mut counters = BTreeMap::new();
+        for serial in ["A", "B"] {
+            counters.insert(
+                serial.to_string(),
+                Counter {
+                    serial: serial.to_string(),
+                    counts: 1000,
+                    seconds: 1000.0,
+                    ..Counter::default()
+                },
+            );
+        }
+        let t = together(&counters, 100.0).expect("two tubes with counts");
+        assert_eq!(t.tubes, 2);
+        assert!((t.cpm - 60.0).abs() < 1e-9, "the mean rate, not the sum: {}", t.cpm);
+        assert_eq!(t.counts, 2000, "both tubes' arrivals are behind it");
+        // 60 CPM from 2000 arrivals: 60/sqrt(2000).
+        assert!((t.sigma - 60.0 / 2000f64.sqrt()).abs() < 1e-9);
+        // One tube alone would have had 60/sqrt(1000) -- worse by root two.
+        let one = 60.0 / 1000f64.sqrt();
+        assert!(t.sigma < one, "the pair is the more precise");
+        assert!(((one / t.sigma) - 2f64.sqrt()).abs() < 1e-9, "by exactly root two");
+    }
+
+    /// Identical tubes agree; wildly different ones are called out. This is
+    /// the one question a second instrument exists to answer.
+    #[test]
+    fn the_pair_is_asked_whether_it_agrees_with_itself() {
+        let tube = |counts: i64| Counter { counts, seconds: 1000.0, ..Counter::default() };
+        let mut same = BTreeMap::new();
+        same.insert("A".to_string(), tube(1000));
+        same.insert("B".to_string(), tube(1000));
+        let (z, _, _) = together(&same, 100.0).unwrap().worst.unwrap();
+        assert!(z < 2.0, "identical tubes agree, got {} sigma", z);
+        assert_eq!(agreement(z), "they agree");
+
+        let mut apart = BTreeMap::new();
+        apart.insert("A".to_string(), tube(1000));
+        apart.insert("B".to_string(), tube(4000));
+        let (z, _, _) = together(&apart, 100.0).unwrap().worst.unwrap();
+        assert!(z > 4.0, "four times the rate is not the same measurement");
+        assert_eq!(agreement(z), "they disagree -- not the same measurement");
+    }
+
+    /// One counter is not a pair, and the section is not drawn for it.
+    #[test]
+    fn one_tube_is_not_asked_to_agree_with_anybody() {
+        let mut one = BTreeMap::new();
+        one.insert(
+            "A".to_string(),
+            Counter { counts: 1000, seconds: 1000.0, ..Counter::default() },
+        );
+        assert!(together(&one, 100.0).is_none());
+        // Nor is a second tube that has recorded nothing at all.
+        one.insert("B".to_string(), Counter::default());
+        assert!(together(&one, 100.0).is_none());
+    }
+
+    /// The overlay needs two tubes with a line each; anything less is no
+    /// picture and is left out rather than drawn empty.
+    #[test]
+    fn the_overlay_draws_a_line_per_tube_and_nothing_for_one() {
+        let hours = |base: f64| -> Vec<(f64, f64, Option<f64>)> {
+            (0..6).map(|i| (i as f64 * 3600.0, base + i as f64, None)).collect()
+        };
+        let pair = vec![("A".to_string(), hours(40.0)), ("B".to_string(), hours(44.0))];
+        let svg = svg_overlay(&pair);
+        assert!(svg.contains("<svg"), "a pair is a picture");
+        assert_eq!(svg.matches("class=\"tube t").count(), 2, "one line each");
+        assert!(svg.contains(">A<") && svg.contains(">B<"), "each line is named");
+
+        assert!(svg_overlay(&pair[..1]).is_empty(), "one tube overlays nothing");
+        let stub = vec![
+            ("A".to_string(), hours(40.0)),
+            ("B".to_string(), vec![(0.0, 40.0, None)]),
+        ];
+        assert!(svg_overlay(&stub).is_empty(), "a single point is not a line");
+    }
+
     use super::*;
 
     #[test]

@@ -31,9 +31,17 @@ and plenty of things that are not Geiger counters use one.
 
 **4. The port is busy.** Only one program can read a serial device sensibly — two
 readers share the bytes between them and neither is told — so RadBeeper locks the
-port. `doas rc-service radbeeper stop` hands it over. The service waits on the
-lock rather than giving up, so the log picks up again by itself when you close
-the monitor.
+port. **That is no longer a reason to stop anything.** The process holding the
+port serves what it reads on `/var/lib/radbeeper/sock`, and `watch`, `probe` and
+`radbeeper-gui` all ask that socket before they ask `/dev`: with the service
+logging, they attach to it, and the log does not skip a second.
+
+So `port busy` now means the holder is *not* sharing — a `random`, a `backfill`
+or a `log pull`, each of which wants the counter to itself, or a build older
+than the socket. Those finish on their own; `--wait` waits for them. A command
+that genuinely needs the port rather than the stream — `clock --set`, `log
+pull`, `backfill` — still needs the service stopped:
+`doas rc-service radbeeper stop`, and `start` gives it back.
 
 The lock is an `flock`, which is the kernel's and belongs to a *process*: no
 terminal multiplexer, no session and no desktop changes it, and the answer is

@@ -83,16 +83,7 @@ impl Counter {
     }
 
     pub fn model(&self) -> String {
-        for m in ["GMC-320", "GMC-300", "GMC-500", "GMC-600"] {
-            if self.version.contains(m) {
-                return m.to_string();
-            }
-        }
-        self.version
-            .split_whitespace()
-            .next()
-            .unwrap_or("unknown")
-            .to_string()
+        model_of(&self.version)
     }
 
     pub fn cpm(&self) -> Option<u16> {
@@ -313,6 +304,60 @@ fn identify(path: &str, baud: Option<u32>) -> Result<Option<Counter>, OpenError>
     Ok(None)
 }
 
+/// The model out of a firmware string.
+///
+/// A FREE FUNCTION, because `probe` can now learn what the counter is from the
+/// service holding it rather than from the port, and all it gets that way is
+/// the version string. Both paths must name the same model or the two probes
+/// disagree about one counter.
+pub fn model_of(version: &str) -> String {
+    for m in ["GMC-320", "GMC-300", "GMC-500", "GMC-600"] {
+        if version.contains(m) {
+            return m.to_string();
+        }
+    }
+    version.split_whitespace().next().unwrap_or("unknown").to_string()
+}
+
+/// Every counter on the machine, not just the first.
+///
+/// WHY THIS IS SEPARATE FROM `find`. One counter is still the ordinary case
+/// and `find` is still what `probe`, `clock` and `log pull` want: those ask a
+/// counter a question and there is no sense in which two of them answer it.
+/// Collecting is different -- two tubes watching the same room are two
+/// independent measurements of one number, and the whole point of reading both
+/// is that averaging them is more precise than either. So the collector finds
+/// all of them and everything else finds one.
+///
+/// Returns what it found, and -- only when that is nothing -- why.
+pub fn find_all(devices: &[String], baud: Option<u32>) -> (Vec<Counter>, Option<NotFound>) {
+    let ports: Vec<String> = if devices.is_empty() {
+        candidate_ports()
+    } else {
+        devices.to_vec()
+    };
+    let mut found = Vec::new();
+    let mut busy = Vec::new();
+    for p in &ports {
+        match identify(p, baud) {
+            Ok(Some(c)) => found.push(c),
+            Ok(None) => {}
+            Err(OpenError::Busy) => busy.push(p.clone()),
+            Err(_) => {}
+        }
+    }
+    if !found.is_empty() {
+        return (found, None);
+    }
+    // Nothing: say why, in the same words `find` would have used, so one
+    // failure does not have two vocabularies.
+    let why = match find_in(&ports, baud, busy) {
+        Ok(c) => return (vec![c], None),
+        Err(e) => e,
+    };
+    (Vec::new(), Some(why))
+}
+
 pub fn find(device: Option<&str>, baud: Option<u32>) -> Result<Counter, NotFound> {
     let ports: Vec<String> = match device {
         Some(d) => vec![d.to_string()],
@@ -335,22 +380,33 @@ pub fn find(device: Option<&str>, baud: Option<u32>) -> Result<Counter, NotFound
             busy: false,
         });
     }
-    let mut busy = Vec::new();
-    for p in &ports {
-        match identify(p, baud) {
-            Ok(Some(c)) => return Ok(c),
-            Ok(None) => {}
-            Err(OpenError::Busy) => busy.push(p.clone()),
-            Err(_) => {}
+    find_in(&ports, baud, Vec::new())
+}
+
+/// The diagnosis, given the ports to try and any already known to be busy.
+fn find_in(ports: &[String], baud: Option<u32>, mut busy: Vec<String>) -> Result<Counter, NotFound> {
+    if busy.is_empty() {
+        for p in ports {
+            match identify(p, baud) {
+                Ok(Some(c)) => return Ok(c),
+                Ok(None) => {}
+                Err(OpenError::Busy) => busy.push(p.clone()),
+                Err(_) => {}
+            }
         }
     }
     if !busy.is_empty() {
         return Err(NotFound {
             reason: "the port is already open by another radbeeper".into(),
             detail: format!(
-                "{} is locked by another process. Nothing is wrong with the\n\
-                 counter -- something else is reading it. Usually that is the\n\
-                 logger service:  doas rc-service radbeeper stop  hands it over.",
+                "{} is locked by another process that is not sharing it.\n\
+                 Nothing is wrong with the counter -- something else is reading\n\
+                 it. A `service` from this version hands the stream to anyone\n\
+                 who asks and never produces this message, so the holder is a\n\
+                 one-shot that wants the port to itself -- a `random`, a\n\
+                 `backfill`, a `log pull` -- or a build from before the stream\n\
+                 existed. Wait for it with --wait, or:\n\
+                 doas rc-service radbeeper stop",
                 busy.join(", ")
             ),
             busy: true,
