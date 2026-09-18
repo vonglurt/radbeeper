@@ -1,0 +1,53 @@
+# radbeeper-gui -- the window, as a client of the stream.
+#
+# A SEPARATE CRATE, AND DELIBERATELY NOT A WORKSPACE MEMBER. radbeeper has one
+# dependency and it is libc; the manifest at the root says so at length and
+# means it. Iced brings several hundred crates, which is the correct price for
+# a GPU-accelerated Wayland window and the wrong price to put on `cargo install
+# radbeeper`. The empty [workspace] table below is what keeps the two apart:
+# without it cargo would try to fold this into the parent and the root crate's
+# lock file would grow by two orders of magnitude.
+#
+# Nothing here reads a serial port. It cannot: it has no code for one. It
+# attaches to the stream radbeeper serves, exactly as `radbeeper watch` does
+# when a service is running, which is why it can be opened and closed all day
+# without the logging noticing.
+[workspace]
+
+[package]
+name = "radbeeper-gui"
+version = "0.3.1"
+edition = "2021"
+authors = ["Paul Richeson <paulr@sdf.org>"]
+rust-version = "1.85"
+description = "A window onto a GQ GMC Geiger-Muller counter, over radbeeper's stream"
+license = "MIT"
+repository = "https://github.com/vonglurt/radbeeper"
+
+[[bin]]
+name = "radbeeper-gui"
+path = "src/main.rs"
+
+[dependencies]
+radbeeper = { path = ".." }
+
+# BOTH RENDERERS, ON PURPOSE. wgpu is the fast path and what a machine with a
+# GPU should use. This distribution's usual home is a VM where Mesa falls back
+# to llvmpipe and there is no virgl driver -- see the cm_enabled note in the
+# Hyprland config -- and there wgpu either fails to start or crawls. With both
+# features on, iced tries wgpu and falls back to tiny-skia's software renderer
+# by itself, so one binary is right on the desk and right in the VM.
+[dependencies.iced]
+version = "0.14"
+default-features = false
+# wayland first, because that is the session this targets; x11 as well so
+# the same binary runs under Xwayland or an X session without a rebuild.
+# thread-pool is the executor: the lightest of the three iced offers, and the
+# right one here because the only thing this program waits on is a unix socket
+# read that happens on a thread of its own anyway.
+features = ["wgpu", "tiny-skia", "canvas", "wayland", "x11", "linux-theme-detection", "thread-pool"]
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

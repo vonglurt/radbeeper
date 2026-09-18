@@ -1,0 +1,23 @@
+# WHY THIS FILE EXISTS, AND WHY radbeeper ITSELF DOES NOT HAVE ONE.
+#
+# Rust on a musl host -- which Alpine is -- defaults to +crt-static and
+# produces a completely static binary. For radbeeper that is a feature: one
+# file, no libc to match, drop it on any machine and it runs, which is what the
+# releases page ships.
+#
+# A GUI cannot be that binary. Every Wayland toolkit reaches libwayland-client
+# through dlopen at runtime, and dlopen in a statically linked musl program
+# cannot work -- there is no dynamic loader in the process to do it. The
+# failure is not a missing library and says nothing about one: the libraries
+# are installed and load perfectly from anything else on the machine. It comes
+# out as
+#
+#     Create event loop: Os(... WaylandError(Connection(NoWaylandLib)))
+#
+# which reads as "wayland is not installed" and sends you looking in entirely
+# the wrong place. It means "this binary cannot open any shared library at
+# all".
+#
+# So this crate, and only this crate, is linked dynamically.
+[build]
+rustflags = ["-C", "target-feature=-crt-static"]
