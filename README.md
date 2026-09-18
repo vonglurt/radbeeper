@@ -536,6 +536,10 @@ If `port busy` still appears, the holder is something that wants the port to
 itself — a `random`, a `backfill`, a `log pull` — or a build older than this
 one. `--wait` waits for it.
 
+[**The architecture, written up →**](docs/the-stream.md) — the protocol, the
+invariants that make concurrent readers safe, the replay, two counters, the
+window's layout and the application's structure.
+
 ### Two counters
 
 **Plug in a second GMC and `radbeeper service` reads both.** No flag is needed;
@@ -922,6 +926,7 @@ Options: `--source sim`, `--sim-cpm`, `--seed`, `--spans 3,30,300`,
 
 | | |
 |---|---|
+| [The stream](docs/the-stream.md) | the architecture written up as a lab report: why an exclusive lock on a port is not an exclusive claim on the counter, the protocol and its invariants, what a second tube buys and what it does not, and the layout and structure of the window |
 | [The cascade strip](docs/cascade.md) | the counts strip written up as a lab report: chained dyadic time compression, its invariants and arithmetic, the prior art from RRDtool to exponential histograms, and what to call it |
 | [The spectrum](docs/the-spectrum.md) | why flat is the good answer, how windows are accumulated, and why a peak is not called on sigma alone |
 | [The native build](docs/native-build.md) | the Rust crate, what is ported and what is not, and how it is held to the reference implementation |
