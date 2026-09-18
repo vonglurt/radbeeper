@@ -556,6 +556,16 @@ double the dose — what doubles is the evidence:
 | **The cascade grows a fifth tier** | Two counters on their own clocks interleave, so the strip runs `8s/bar · 4s · 2s · 1s · 0.5s` instead of stopping at one second. |
 | **The finest tier is coloured by tube** | Each bar in it is one tube's reading, drawn in that tube's colour, so the interleave is visible. Every tier left of it is a mean over both and takes the level colours — the two have merged into one number by then. |
 
+![radbeeper-gui with two counters: two dials, and a cascade whose finest tier interleaves them](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-pair.gif)
+
+**Two tubes, and the fifth tier.** A dial each, the combined mean and its
+precision beside them, and a cascade that runs `8s · 4s · 2s · 1s · 0.5s` —
+its finest tier drawn in each tube's colour, so the interleave can be seen
+rather than taken on trust. Everything left of that tier is a mean over both.
+*One of these counters is real and one is `tests/fake_gmc.py` on a
+pseudo-terminal, which is why they disagree so plainly; two matched tubes sit
+within about two sigma of each other.*
+
 **The interleave is measured, not assumed.** Two counters only sharpen *time* if
 they disagree about when a second starts, and neither clock can be steered, so
 the window reports the offset it actually sees: `2 tubes · interleave 0.50s
@@ -613,8 +623,17 @@ them is more signal on one time base.
 `gui/` is a second crate: the same counter, in an Iced window, on Wayland.
 
 ```sh
-cd gui && cargo build --release      # then ./target/release/radbeeper-gui
+make gui            # build it and run it against whatever is serving
+make gui-install    # or put radbeeper-gui on PATH beside radbeeper
 ```
+
+![radbeeper-gui: the dial, the cascade and the spectrum overlay, in real time](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui.gif)
+
+**Twenty-four seconds of it, in real time.** One counter, attached to the
+service that is logging it — the service never notices. The needle and the
+five windows are the same numbers the terminal draws; the strip underneath is
+the cascade scrolling a bar a second; the panel below that is three spectra
+overlaid, of which two have filled so far.
 
 **It is a separate crate on purpose.** RadBeeper has one dependency and it is
 `libc`; Iced brings several hundred, which is the right price for a

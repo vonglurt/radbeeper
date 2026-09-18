@@ -86,6 +86,29 @@ make promo-fast            # the same, reusing the last monitor recording
 make promo SHOTS=probe     # just one
 ```
 
+### The window is pixels, because it has to be
+
+That whole apparatus records a **terminal**: it keeps the bytes a program
+writes to a pty, which is exact, tiny, and no use at all for a window. A
+Wayland surface has no byte stream to keep. So `tools/guicast.py` grabs frames
+with `grim` and assembles them with `ffmpeg`, and those are the only two
+outside programs in `tools/`.
+
+```sh
+make gui                                    # the window has to be open
+make gui-gif                                # 24 s of it, into docs/screenshots/gui.gif
+make gui-gif GIFOUT=docs/screenshots/gui-pair.gif GIFSECS=30
+```
+
+Two frames a second, played back at two frames a second: the instrument
+updates once a second, so the recording is real time and the clock in it can
+be read. The window is *found* rather than guessed -- `radbeeper-gui` sets an
+application id, so the compositor can be asked where it is -- and `--geometry
+'X,Y WxH'` covers a compositor `guicast` does not know how to ask. The palette
+is built from what changes between frames and only the moved rectangle is
+rewritten, which is what keeps a 48-frame recording of a 626x756 window under
+half a megabyte.
+
 Two consequences worth having. **A screenshot cannot claim something the
 program does not do** — the log-format shot found that busybox `sed` ignores
 `\x` escapes, because the recording showed the escape instead of the arrow.

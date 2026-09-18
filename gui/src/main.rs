@@ -189,7 +189,19 @@ fn main() -> iced::Result {
         .title(App::title)
         .subscription(App::subscription)
         .theme(App::theme)
-        .window_size((760.0, 900.0))
+        // AN APPLICATION ID, so a compositor can say anything at all about
+        // this window. Without one Hyprland reports its class as the empty
+        // string, and a `windowrule` has nothing to match on -- no float, no
+        // size, no workspace, no way to pick it out of a tiling layout. The
+        // convention is the basename of the .desktop file.
+        .window(iced::window::Settings {
+            size: iced::Size::new(760.0, 900.0),
+            platform_specific: iced::window::settings::PlatformSpecific {
+                application_id: "radbeeper-gui".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
         .run()
 }
 

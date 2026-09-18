@@ -20,6 +20,10 @@
 CARGO  ?= cargo
 PYTHON ?= python3
 BIN     = target/release/radbeeper
+# The window is a second crate on purpose -- see gui/Cargo.toml -- so it has
+# its own target directory and is never built by a bare `make build`. Iced
+# brings several hundred crates and `cargo install radbeeper` brings one.
+GUIBIN  = gui/target/release/radbeeper-gui
 PREFIX ?= $(HOME)/.local
 # Read from the manifest, never typed twice: the monitor's own header prints
 # these out of CARGO_PKG_*, and `make play` titles the window with them.
@@ -27,10 +31,17 @@ NAME    = $(shell sed -n 's/^name = "\(.*\)"/\1/p' Cargo.toml | head -1)
 VERSION = $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 # What `make play` opens when nothing else is asked for: the README's own.
 GIF    ?= docs/screenshots/watch-hero.gif
+# What `make gui-gif` records, and for how long. Two frames a second played
+# back at two frames a second: the instrument updates once a second, so this
+# is real time and the clock on it can be read.
+GIFOUT ?= docs/screenshots/gui.gif
+GIFSECS ?= 24
+GIFFPS  ?= 2
 
 .PHONY: all build test check clippy install uninstall package publish-dry \
-        release-check release probe watch sim service \
-        py-test py-check py-install promo promo-fast play clean help
+        release-check release probe watch sim service gui gui-build \
+        gui-install gui-gif py-test py-check py-install promo promo-fast \
+        play clean help
 
 all: build
 
@@ -122,6 +133,37 @@ probe: build
 ## watch: the monitor against real hardware
 watch: build
 	./$(BIN) watch
+
+## gui-build: the window, target/release/radbeeper-gui in gui/
+gui-build:
+	cd gui && $(CARGO) build --release --locked
+	@printf '  built   $(GUIBIN)\n'
+
+## gui: the window, against whatever is serving the stream
+# It opens no serial port: start `radbeeper service` first, or `make watch`
+# in another terminal, and this attaches to it.
+gui: gui-build
+	./$(GUIBIN)
+
+## gui-install: put the window on PATH beside radbeeper
+gui-install: gui-build
+	@mkdir -p "$(PREFIX)/bin"
+	install -m 0755 $(GUIBIN) "$(PREFIX)/bin/radbeeper-gui"
+	@echo "installed $(PREFIX)/bin/radbeeper-gui"
+
+## gui-gif: re-record docs/screenshots/gui.gif from the running window
+# WHY NOT `make promo`. That records a TERMINAL -- it keeps the bytes a
+# program writes to a pty, which is exact and tiny and no use at all for a
+# window. A Wayland surface has only pixels to keep, so this grabs frames and
+# assembles them. The window has to be OPEN and on screen: it is a screen
+# grab, and a compositor will not hand over a surface nobody is showing.
+#
+#   make gui-gif                        24 seconds of it
+#   make gui-gif GIFOUT=docs/screenshots/gui-pair.gif GIFSECS=30
+gui-gif:
+	@pgrep -x radbeeper-gui >/dev/null \
+	  || { echo "no radbeeper-gui running -- start it first: make gui"; exit 1; }
+	$(PYTHON) tools/guicast.py -o $(GIFOUT) --seconds $(GIFSECS) --fps $(GIFFPS)
 
 ## service: what the boot service runs, in the foreground
 service: build
