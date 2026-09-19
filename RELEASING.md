@@ -1,5 +1,14 @@
 # Releasing
 
+> **Commits and tags are signed.** `git config` in this checkout sets
+> `gpg.format ssh` with `~/.ssh/id_ed25519.pub`, and `commit.gpgsign` and
+> `tag.gpgsign` are both on. The same key has to be registered on GitHub as a
+> **Signing Key** -- a separate entry from the authentication key, even though
+> it is the same key -- or GitHub shows "Unverified" on a correctly signed
+> commit. `git log --show-signature` verifies locally against
+> `~/.config/git/allowed_signers`.
+
+
 Two things ship from a tag: **static Linux binaries** on the GitHub release,
 and **the crate** on crates.io so that `cargo install radbeeper` works. Both
 come out of `.github/workflows/release.yml`, which fires on a `v*` tag and

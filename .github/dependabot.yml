@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 Paul Richeson
+#
+# WHAT THIS IS FOR, GIVEN ONE DEPENDENCY. The crate depends on libc and
+# nothing else, so there is very little here for Dependabot to do -- and the
+# window is a different story: Iced brings several hundred crates, which is
+# the right price for a GPU-accelerated Wayland surface and exactly the kind
+# of surface that needs watching rather than trusting.
+#
+# AND THE ACTIONS, WHICH MATTER MORE THAN EITHER. Every `uses:` in this
+# repository is pinned to a commit SHA rather than a tag, because a tag is a
+# name somebody else can move and a workflow with `contents: write` is worth
+# moving one for. A pin is only safe if something updates it; that is this.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: cargo
+    directory: "/gui"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "deps(gui)"

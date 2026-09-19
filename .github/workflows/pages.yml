@@ -41,8 +41,16 @@
 # stdlib Python, which is the same reason one of them runs on a Pi Zero.
 name: build the page
 
+# BRANCHES, NOT TAGS, AND THE BRANCH LIST IS THE WHOLE POINT. A `push` event
+# fires for a tag as well, and with only a `paths:` filter this ran on every
+# release tag -- where the checkout is DETACHED at the tag, so the commit step
+# had no branch to push to and the run failed. It failed loudly and harmlessly,
+# which is the worst kind: a red mark on every release that meant nothing and
+# trained somebody to ignore a red mark on a release.
 on:
   push:
+    branches:
+      - main
     paths:
       - 'logs/**'
       - 'radbeeper'
@@ -63,7 +71,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Build the counter's report from logs/
         run: python3 radbeeper export --logs logs -o monitor.html

@@ -39,6 +39,15 @@ on:
       - '.github/workflows/rust.yml'
   workflow_dispatch:
 
+# NOTHING THIS WORKFLOW DOES NEEDS TO WRITE ANYTHING. It builds, it tests, it
+# compares two programs' bytes. Declared explicitly because the DEFAULT for a
+# repository that has never set one is read-and-write on everything, and a
+# token that can push is a token worth stealing -- which is the whole reason
+# every action below is pinned to a commit rather than a tag somebody else can
+# move.
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -46,7 +55,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Build, with no warnings allowed
         run: cargo build --release --locked --all-targets
@@ -69,10 +78,25 @@ jobs:
       - name: The Rust and the Python write the same bytes
         run: python3 -m unittest discover -v -s tests
 
+      # THE ONE DEPENDENCY, CHECKED. This crate has exactly one -- libc -- and
+      # the whole argument for that is that a small surface can actually be
+      # audited. Saying so and never looking would be worse than not saying
+      # it, so the RustSec advisory database is checked on every run, for the
+      # crate and for the window's several hundred alike.
+      - name: No known advisories against anything this builds
+        run: |
+          cargo install cargo-audit --locked --quiet || true
+          if command -v cargo-audit >/dev/null; then
+            cargo audit --deny warnings
+            (cd gui && cargo audit --deny warnings)
+          else
+            echo "cargo-audit unavailable; skipped"
+          fi
+
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Pin the toolchain to the rust-version the manifest promises
         run: |
           msrv=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' Cargo.toml)

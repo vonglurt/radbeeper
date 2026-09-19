@@ -233,6 +233,12 @@ release:
 	@# `\x` escape note in docs/reference.md.
 	$(BUMP) -v $(RV) Cargo.toml
 	$(BUMP) -v $(RV) gui/Cargo.toml
+	@# AND THE REFERENCE PROGRAM, which carries its own VERSION and is the
+	@# other half of every byte comparison in the suite. Leaving it behind
+	@# does not drift quietly: both programs write the version into the
+	@# HTML they export, so the whole differential suite fails at once and
+	@# points into the middle of index.html. It is what broke v0.4.0's CI.
+	$(BUMP) -v $(RV) --python radbeeper
 	@# And check it landed where it was meant to, because the failure mode
 	@# above was silent in the manifest and loud somewhere else entirely.
 	@grep -q '^version = "$(RV)"' Cargo.toml \
@@ -241,6 +247,13 @@ release:
 	  || { echo "gui/Cargo.toml: the bump did not take"; exit 1; }
 	@grep -q '^version = "0.14"' gui/Cargo.toml \
 	  || { echo "gui/Cargo.toml: iced's version was overwritten"; exit 1; }
+	@grep -q '^VERSION = "$(RV)"' radbeeper \
+	  || { echo "radbeeper: the reference program was not bumped"; exit 1; }
+	@# THE SUITE AGAIN, NOW THAT THE VERSION HAS MOVED. The run above was
+	@# against the tree as it stood; this is against what will be tagged,
+	@# and it is the one that catches a bump that only landed in half the
+	@# places it had to.
+	@$(PYTHON) -m unittest discover -q -s tests
 	@# The README's own badge line says the version too, and a page that
 	@# disagrees with the binary it documents is the cheapest kind of wrong.
 	sed -i 's|^MIT · `[0-9][^`]*`|MIT · `$(RV)`|' README.md

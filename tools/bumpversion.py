@@ -21,6 +21,15 @@ refuses to touch a file where that line is not where it should be, because the
 whole failure above came of an edit landing somewhere nobody was looking.
 
     tools/bumpversion.py -v 0.4.0 Cargo.toml
+    tools/bumpversion.py -v 0.4.0 --python radbeeper
+
+THE REFERENCE PROGRAM CARRIES ITS OWN VERSION and has to be bumped with the
+manifests. It is not a manifest -- it is `VERSION = "0.3.1"` in a Python file --
+and forgetting it is not a cosmetic drift: both programs write the version into
+the HTML they export, and that HTML is compared byte for byte, so the whole
+differential suite fails at once pointing into the middle of index.html.
+tests/test_version.py exists to say the cause instead, and it does; this exists
+so nobody has to read it.
 """
 import argparse
 import re
@@ -31,6 +40,8 @@ def main():
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("-v", "--version", required=True, help="the version to set")
+    p.add_argument("--python", action="store_true",
+                   help="a Python file with VERSION = \"...\", not a manifest")
     p.add_argument("manifest")
     args = p.parse_args()
 
@@ -39,6 +50,16 @@ def main():
 
     with open(args.manifest, encoding="utf-8") as f:
         lines = f.read().split("\n")
+
+    if args.python:
+        for i, line in enumerate(lines):
+            if re.match(r'^VERSION\s*=\s*"', line):
+                lines[i] = re.sub(r'"[^"]*"', '"%s"' % args.version, line, count=1)
+                with open(args.manifest, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines))
+                print("  %-22s VERSION = \"%s\"" % (args.manifest, args.version))
+                return 0
+        sys.exit("bumpversion: %s: no VERSION line found" % args.manifest)
 
     # THE FIRST ONE, AND IT HAS TO BE THE PACKAGE'S. A manifest whose first
     # `version =` sits under something other than [package] is not one this

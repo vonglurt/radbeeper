@@ -467,4 +467,5 @@ properly, with the arithmetic, the failures that shaped it, and the prior art.
 | [Reference](docs/reference.md) | the tube factor, the counter's protocol, what it costs to run, the tests, and how the screenshots are made |
 | [Troubleshooting](docs/troubleshooting.md) | the four things it can be when `probe` finds nothing, and the four different fixes |
 | [Prior art](docs/prior-art.md) | what else reads these counters, and what this does differently |
+| [Security](SECURITY.md) | what is in scope, what is not, and how the supply chain is kept small |
 | [Archive](docs/archive/) | the long-form README this replaced, kept as it stood at 0.3.1 |
