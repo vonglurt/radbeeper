@@ -186,14 +186,35 @@ jobs:
           EOF
           cat notes.md
 
+      # CREATE OR UPDATE, BECAUSE A RE-RUN IS A NORMAL THING TO DO.
+      # `gh release create` fails when the release exists, which means every
+      # re-run of a SUCCESSFUL release failed -- and because the publish job
+      # `needs` this one, a re-run could never reach the publish. That is the
+      # exact situation a re-run is for: the first run of v0.4.1 skipped the
+      # publish because the trusted-publishing variable was not yet set, and
+      # re-running after setting it failed here instead, on a release that had
+      # already been cut correctly.
+      #
+      # `--clobber` replaces the uploaded assets rather than refusing when a
+      # name collides, so the artefacts always match the run that produced
+      # them.
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" \
-            --title "radbeeper ${{ needs.verify.outputs.version }}" \
-            --notes-file notes.md \
-            dist/SHA256SUMS dist/*.tar.gz
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "release $GITHUB_REF_NAME exists -- updating it"
+            gh release edit "$GITHUB_REF_NAME" \
+              --title "radbeeper ${{ needs.verify.outputs.version }}" \
+              --notes-file notes.md
+            gh release upload "$GITHUB_REF_NAME" \
+              dist/SHA256SUMS dist/*.tar.gz --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --title "radbeeper ${{ needs.verify.outputs.version }}" \
+              --notes-file notes.md \
+              dist/SHA256SUMS dist/*.tar.gz
+          fi
 
   # -------------------------------------------------------------- crates ---
   # Last, because it cannot be undone. No token lives in this repository:

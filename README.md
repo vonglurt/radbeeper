@@ -466,4 +466,5 @@ properly, with the arithmetic, the failures that shaped it, and the prior art.
 | [Troubleshooting](docs/troubleshooting.md) | the four things it can be when `probe` finds nothing, and the four different fixes |
 | [Prior art](docs/prior-art.md) | what else reads these counters, and what this does differently |
 | [Security](SECURITY.md) | what is in scope, what is not, and how the supply chain is kept small |
+| [A signed chain of custody](docs/the-chain-of-custody.md) | the four links from a commit on a Copal VM to a crate on crates.io, the three defects found building them, and what the arrangement does not establish |
 | [Archive](docs/archive/) | the long-form README this replaced, kept as it stood at 0.3.1 |

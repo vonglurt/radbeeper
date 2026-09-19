@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A Signed Chain of Custody for a Single-Maintainer Rust Crate — RadBeeper</title>
+<meta name="description" content="Paul Richeson · RadBeeper · Copal Linux">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/the-chain-of-custody.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="A Signed Chain of Custody for a Single-Maintainer Rust Crate — RadBeeper">
+<meta property="og:description" content="Paul Richeson · RadBeeper · Copal Linux">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/the-chain-of-custody.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="a-signed-chain-of-custody-for-a-single-maintainer-rust-crate">A Signed Chain of Custody for a Single-Maintainer Rust Crate</h1>
+<p><strong>Paul Richeson</strong> · RadBeeper · Copal Linux</p>
+<hr>
+<h2 id="abstract">Abstract</h2>
+<p><em>A hobbyist instrument that publishes a binary to strangers has the same supply-chain obligations as one that does not, and fewer people to meet them. This report describes the chain of custody RadBeeper uses to carry a measurement from a counter on a desk to a crate on crates.io without a long-lived credential existing anywhere along the way. The chain has four links — a signed commit, a signed tag, a build pinned by content hash, and a publish authenticated by a short-lived OIDC token — and each is verifiable by a third party after the fact. We report the configuration in full, the three defects found while establishing it, and, explicitly, what the arrangement does not protect against. The development and build environment is a Copal Linux guest, which is itself part of the claim: the machine that signs is a machine whose contents are described.</em></p>
+<p><strong>Index Terms</strong> — software supply chain, code signing, SSH signatures, OpenID Connect, reproducible release, Rust, crates.io, provenance.</p>
+<hr>
+<h2 id="i-introduction">I. Introduction</h2>
+<p>A release is a claim made to people who cannot inspect the claimant. When <code>cargo install radbeeper</code> fetches a crate, the fetcher is trusting that the bytes correspond to the source in a public repository, that the source was written by the person named in it, and that nothing was substituted in between. None of those is self-evident, and for a single-maintainer project none is backed by an organisation.</p>
+<p>The conventional answer is a published API token held in repository secrets. That answer fails in a specific way: the token is long-lived, is valid from anywhere, and its compromise is silent. It converts a supply-chain problem into a credential-storage problem and then stores the credential in the thing being defended.</p>
+<p>This report describes what RadBeeper does instead. §II gives the threat model. §III–§VI describe the four links. §VII reports three defects the process exposed. §VIII states the limits honestly, because a security document that claims only successes is advertising.</p>
+<hr>
+<h2 id="ii-threat-model">II. Threat Model</h2>
+<p>We consider an adversary who can do one or more of the following:</p>
+<table><thead><tr><th></th><th>Capability</th></tr></thead><tbody><tr><td><strong>T1</strong></td><td>Push commits to the repository, as a stolen account or a compromised token</td></tr><tr><td><strong>T2</strong></td><td>Move a tag, or create one, to point at code the maintainer did not write</td></tr><tr><td><strong>T3</strong></td><td>Alter a GitHub Action the build depends on, by moving a mutable tag it references</td></tr><tr><td><strong>T4</strong></td><td>Obtain a credential from CI logs, repository secrets, or a developer machine</td></tr><tr><td><strong>T5</strong></td><td>Publish a crate version under the project's name</td></tr></tbody></table>
+<p>We do <strong>not</strong> consider an adversary who controls the maintainer's machine while it is signing, who controls GitHub's or crates.io's infrastructure, or who can forge Ed25519. Those are out of scope and no configuration in this repository addresses them.</p>
+<p>The goal is not to make the above impossible. It is to make each of them <strong>leave evidence that a third party can find afterwards</strong> — which is the only property a single maintainer can actually deliver.</p>
+<hr>
+<h2 id="iii-link-one-the-signing-identity">III. Link One — The Signing Identity</h2>
+<h3 id="a-why-ssh-and-not-gpg">A. Why SSH and not GPG</h3>
+<p>RadBeeper signs with an Ed25519 SSH key rather than an OpenPGP key. The reasoning is operational rather than cryptographic:</p>
+<ol><li>The key <strong>already exists and is already trusted</strong> for pushing to the remote. Introducing a second key introduces a second thing to lose.</li><li><code>ssh-keygen -Y verify</code> needs no keyring daemon, no agent socket protocol, and no expiry management.</li><li>The failure modes are legible. A GPG signing failure in a release script is a famously opaque event.</li></ol>
+<h3 id="b-configuration">B. Configuration</h3>
+<pre><code class="language-sh">git config gpg.format ssh
+git config user.signingkey ~/.ssh/id_ed25519.pub
+git config commit.gpgsign true
+git config tag.gpgsign true</code></pre>
+<p><code>commit.gpgsign</code> and <code>tag.gpgsign</code> are both set. Signing only commits is a common and incomplete configuration: a tag is the object a release is built from, so an unsigned tag leaves T2 unaddressed no matter how well the commits are signed.</p>
+<h3 id="c-local-verification">C. Local verification</h3>
+<p>A signature nobody can check is a record, not a control. An allowed-signers file makes verification local and offline:</p>
+<pre><code class="language-sh">printf '%s namespaces="git" %s\n' \
+  "$(git config user.email)" "$(cut -d' ' -f1,2 ~/.ssh/id_ed25519.pub)" \
+  &gt; ~/.config/git/allowed_signers
+git config gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers</code></pre>
+<p><code>git log --format='%G?'</code> then reports <code>G</code> for a good signature rather than the <code>N</code> it reports when there is nothing to check against. This distinction is worth insisting on: without the allowed-signers file, <code>git</code> will happily create signatures and never once tell you whether they verify.</p>
+<h3 id="d-the-identity-binding-which-is-the-part-that-fails">D. The identity binding, which is the part that fails</h3>
+<p>A signature proves possession of a key. It does not, by itself, bind that key to a person. The forge performs that binding, and it requires <strong>two</strong> registrations that are easy to conflate:</p>
+<ol><li>The public key registered as a <strong>Signing Key</strong> — a distinct entry from the Authentication Key, even when the bytes are identical.</li><li>The commit's author email registered <strong>and verified</strong> on the same account.</li></ol>
+<p>If either is missing the commit displays as unverified while being cryptographically valid, which is the most confusing possible failure: the local tooling reports success and the forge reports nothing wrong, only absence. The verification state is machine-readable and should be checked rather than eyeballed:</p>
+<pre><code class="language-sh">curl -s https://api.github.com/repos/OWNER/REPO/commits/SHA \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["commit"]["verification"])'</code></pre>
+<p>A <code>reason</code> of <code>valid</code> is the only acceptable answer. Anything else — <code>no_user</code>, <code>unverified_email</code>, <code>unknown_key</code> — names the missing registration precisely.</p>
+<h3 id="e-vigilant-mode">E. Vigilant mode</h3>
+<p>With vigilant mode enabled, the forge marks every <em>unsigned</em> commit attributed to the author as such. This inverts the default: absence of a signature becomes a visible claim rather than a silent one. It is the setting that makes T1 expensive, because an adversary pushing as the maintainer now produces a commit that is visibly <em>unlike</em> every other commit by that author.</p>
+<hr>
+<h2 id="iv-link-two-the-build-environment">IV. Link Two — The Build Environment</h2>
+<p>The signing machine is a <strong>Copal Linux guest</strong>, a distillation of Alpine Linux, running under UTM/QEMU. This is not incidental to the claim.</p>
+<p>A signature attests that a key was present. It says nothing about what else was present. A general-purpose desktop accumulated over years is a poor answer to "what was on the machine that signed this"; a declaratively staged distribution whose contents are enumerated in its own repository is a better one. Copal carries RadBeeper as a stage and installs the <code>linux-lts</code> kernel the counter requires, so the environment that builds the instrument is described by the same kind of artefact as the instrument.</p>
+<p>Two practical consequences observed:</p>
+<ul><li><strong>The guest is reproducible; the host clipboard is not.</strong> Moving a public key to the forge crosses the guest/host boundary through <code>copal-clip bridge</code> and <code>spice-vdagent</code>. This is a convenience path, not a trusted one, and nothing secret should cross it. Public keys may.</li><li><strong>Busybox is not GNU.</strong> <code>sed '0,/re/s|…|…|'</code> — the idiom for bounding a substitution to the first match — is accepted by busybox <code>sed</code>, matches nothing, and exits zero. A release script relying on it bumps no version and reports success. See §VII-B.</li></ul>
+<hr>
+<h2 id="v-link-three-pinning-the-build">V. Link Three — Pinning the Build</h2>
+<p>A workflow that references <code>actions/checkout@v4</code> is trusting whatever commit that tag currently names. A tag is a mutable pointer in a repository the project does not control; T3 is the act of moving one.</p>
+<p>Every <code>uses:</code> in this repository is therefore pinned to a commit SHA, with the human-readable version retained as a comment:</p>
+<pre><code class="language-yaml">- uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4</code></pre>
+<p><strong>A pin is only as good as the process that updates it.</strong> An unmaintained pin becomes an argument for un-pinning. Dependabot is configured for the <code>github-actions</code> ecosystem alongside the two cargo manifests, so a pin advance arrives as a reviewable diff rather than as a silent retag.</p>
+<p>Token scope is declared per workflow rather than inherited. The default for a repository that has never set one is read-and-write across the board; the build workflow writes nothing and says so:</p>
+<pre><code class="language-yaml">permissions:
+  contents: read</code></pre>
+<p>Only the page-building workflow holds <code>contents: write</code>, and it is the one whose output is regenerated from files already in the repository.</p>
+<hr>
+<h2 id="vi-link-four-publishing-without-a-credential">VI. Link Four — Publishing Without a Credential</h2>
+<p>The final link carries the greatest consequence: a published crate version is permanent. It may be yanked — hidden from new resolution — but never replaced and never deleted, and the name is never reused.</p>
+<p>RadBeeper publishes over <strong>OpenID Connect trusted publishing</strong>. The workflow exchanges a GitHub-issued identity token, scoped to this repository and this workflow file, for a registry credential valid for the length of one job:</p>
+<pre><code class="language-yaml">permissions:
+  contents: read
+  id-token: write</code></pre>
+<p>The security property is the absence of an artefact. There is <strong>no long-lived token in the repository to leak, to rotate, or to forget to revoke.</strong> T4 against this project yields nothing that is useful tomorrow. The registry-side configuration names the repository owner, the repository, and the workflow filename, so a token minted for a different workflow in the same repository will not authenticate.</p>
+<h3 id="a-default-deny-and-why-the-first-three-releases-published-nothing">A. Default-deny, and why the first three releases published nothing</h3>
+<p>The publish job is gated:</p>
+<pre><code class="language-yaml">crates-io:
+  needs: [verify, binaries, release]
+  if: vars.CRATES_IO_TRUSTED == 'true'</code></pre>
+<p>The variable ships unset. A tag pushed before the registry-side setup is complete therefore builds binaries and cuts a forge release, and <strong>skips</strong> the publish, rather than failing inside an authentication step whose error text would send the maintainer looking for a credential problem that does not exist.</p>
+<p>This is correct behaviour and it is also a trap, which §VII-C records.</p>
+<h3 id="b-ordering">B. Ordering</h3>
+<p>Publication is last, after the tag has been checked against the manifest and after every binary has built, because it is the only step in the pipeline that cannot be undone.</p>
+<hr>
+<h2 id="vii-defects-found-while-establishing-the-chain">VII. Defects Found While Establishing the Chain</h2>
+<p>A process is characterised by its failures. Three are worth recording.</p>
+<h3 id="a-version-drift-across-two-implementations">A. Version drift across two implementations</h3>
+<p>RadBeeper ships a Rust implementation and a single-file Python reference implementation whose exported HTML is compared byte for byte. The release target bumped three version strings and missed a fourth — the reference program's own constant. Both programs write their version into that HTML, so a one-line omission failed the entire differential suite, reporting an offset in the middle of a generated document.</p>
+<p>The repository already contained a test whose docstring predicted this outcome, and it correctly identified the cause. The fix was threefold: bump the fourth string; assert afterwards that all four landed; and <strong>run the suite a second time after the bump</strong>. The pre-bump run cannot, structurally, observe a bump that only reached some of its targets.</p>
+<h3 id="b-a-silent-no-op-in-the-version-bump">B. A silent no-op in the version bump</h3>
+<p>The bump initially used <code>sed</code> without an address, which rewrites <em>every</em> matching line. The GUI manifest contains two <code>version =</code> lines — the package's and a dependency's — so the dependency was rewritten to the package's version. The build then failed on an unknown <em>feature name</em>, with nothing in the error pointing at the manifest that had been edited.</p>
+<p>The GNU remedy, <code>sed '0,/re/s|…|…|'</code>, is silently inert under busybox (§IV). Both were replaced with a purpose-built tool that edits only the first match, refuses a non-semver argument, and refuses a manifest whose first <code>version =</code> is not under <code>[package]</code>.</p>
+<h3 id="c-a-correct-default-silently-retained">C. A correct default, silently retained</h3>
+<p>The default-deny gate of §VI-A had never been switched on. Three tagged releases built binaries, cut forge releases, and skipped publication. The registry showed a single old version while the repository showed four tags, and nothing anywhere was <em>failing</em>.</p>
+<p><strong>A skipped job is not a red mark.</strong> Default-deny is the right design, but a default that is safe and invisible will be retained by accident. The recommendation is to treat "did the publish job run?" as an explicit post-release check rather than inferring it from the absence of failure.</p>
+<h3 id="d-advisory-scope-across-two-dependency-surfaces">D. Advisory scope across two dependency surfaces</h3>
+<p><code>cargo audit --deny warnings</code> applied uniformly failed the build on three advisories in the window's 389-crate tree — two unmaintained crates and one unsoundness — none of them vulnerabilities, all of them transitive, none fixable in this repository.</p>
+<p>Applying one standard to two surfaces produces a permanently red build, and a permanently red build is an unread build. The crate proper, which resolves two dependencies, is held to <code>--deny warnings</code> with nothing excused. The window excuses advisories <strong>by identifier</strong>, each documented with its nature and rationale, so that a <em>new</em> advisory still fails while a known and unfixable one does not. This was verified by removing one identifier and confirming the build returned to red.</p>
+<hr>
+<h2 id="viii-what-this-does-not-establish">VIII. What This Does Not Establish</h2>
+<ul><li><strong>It is not reproducible-build provenance.</strong> The chain attests who authorised a release and that the artefacts were built from that tag by that workflow. It does not let a third party rebuild the binary bit-for-bit and compare.</li><li><strong>It does not protect a compromised signing machine.</strong> A key present on a machine an adversary controls signs whatever that adversary asks.</li><li><strong>It says nothing about correctness.</strong> A signed, pinned, OIDC-published crate can be wrong. The differential suite and the advisory check are separate claims with separate evidence.</li><li><strong>The entropy claims are separately scoped.</strong> RadBeeper derives random numbers from decay timing; the accounting for that is a claim about a model of a physical source, not about this chain. See <a href="the-random.html">Random numbers out of decay</a>.</li><li><strong>It is one person.</strong> There is no second reviewer, no separation of duties, and no rota. The chain makes actions attributable; it does not make them reviewed.</li></ul>
+<hr>
+<h2 id="ix-conclusion">IX. Conclusion</h2>
+<p>The chain is four links, each verifiable after the fact by someone who trusts neither the maintainer nor their machine: a signed commit, a signed tag, a build pinned by content hash under least-privilege tokens, and a publication authenticated by a credential that expires before it could be stolen.</p>
+<p>The defects in §VII are more instructive than the design. Two of the three were <strong>silent successes</strong> — a <code>sed</code> that changed nothing and exited zero, and a job that skipped rather than failed. The signing and pinning arrangements described here are routine; the discipline that matters is asserting afterwards that each step did what it claimed, because the failures that survive a review are exactly the ones that do not announce themselves.</p>
+<hr>
+<h2 id="references">References</h2>
+<p>[1] RadBeeper, "Releasing," <code>RELEASING.md</code>, 2026. [Online]. Available: https://github.com/vonglurt/radbeeper</p>
+<p>[2] RadBeeper, "Security," <code>SECURITY.md</code>, 2026.</p>
+<p>[3] Copal Linux. [Online]. Available: https://github.com/vonglurt/copal</p>
+<p>[4] GitHub, "About commit signature verification," GitHub Docs.</p>
+<p>[5] Rust Foundation, "Trusted Publishing," crates.io Documentation.</p>
+<p>[6] RustSec Advisory Database. [Online]. Available: https://rustsec.org</p>
+<p>[7] OpenID Foundation, "OpenID Connect Core 1.0."</p>
+<p>[8] RadBeeper, "Random numbers out of decay," <code>docs/the-random.md</code>, 2026.</p>
+<hr>
+<p>MIT License — Copyright (c) 2026 Paul Richeson</p>
+<hr>
+<p><a href="../index.html">← back to the README</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>
