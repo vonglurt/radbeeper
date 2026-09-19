@@ -3,7 +3,7 @@
 **A GQ GMC-320 Plus Geiger-Muller counter on the desk, read from Alpine Linux —
 and from [Copal](https://github.com/vonglurt/copal), its distillation.**
 
-MIT · `0.3.1` · `cargo install radbeeper` · one dependency, and it is `libc`
+MIT · `0.4.0` · `cargo install radbeeper` · one dependency, and it is `libc`
 
 **[vonglurt.github.io/radbeeper](https://vonglurt.github.io/radbeeper/)** — this
 page, the lab reports, and [a live counter's
@@ -195,9 +195,10 @@ delivered its first line.
 radbeeper-gui
 ```
 
-An instrument cluster: a round dial per counter with a 270-degree sweep, the
-bands painted on the face at the same thresholds everything else uses, and the
-reading in digits on the black face under the needle. Beside it the five
+An instrument cluster: a round dial per counter with a 270-degree sweep on a
+**fixed logarithmic scale**, the bands painted on the face at the same
+thresholds everything else uses, and the reading in digits on the black face
+under the needle. Beside it the five
 averaging windows, each with the **precision** of its own figure. Then the
 cascade, the spectrum overlay, the emission and its countdown, and the log rows
 as the server wrote them.
@@ -228,22 +229,37 @@ The needle has mass: it leans out fast and settles back slower, the way every
 moving-coil meter does mechanically. Without it the needle teleports once a
 second and the eye cannot follow which way it went.
 
+### The scale does not move
+
+**Three decades, `3 → 3000` CPM, and it is the same three every time you look.**
+The range used to be picked from a list to suit the current reading, which meant
+a value sitting near a boundary flipped the whole face back and forth several
+times a minute — every band and every tick jumping with it. A fixed scale cannot
+do that, and a logarithmic one is the right fixed scale here because the
+quantity is: background is tens of counts a minute, a source is thousands, and
+on a linear face the only reading anybody ever takes sits in the bottom tenth.
+
+The decades land on the numbers the bands are named after — 3 at the bottom
+stop, 30 a third of the way round, 300 at two thirds, 3000 at full — with the
+2..9 of each decade ticked between them and a heavy mark at every band floor.
+
 ### The bands, named
 
-A reading is not "above 240" — it is a **warning**. The floor of each:
+A reading is not "above 240" — it is a **warning**. The names are printed under
+the cluster in their own colours, and the floor of each is a mark on the face:
 
-| | |
-|---|---|
-| **attenuated** — under 30 CPM | not a clean room: a tube shielded, unplugged or dying |
-| **nominal** — 30 | ordinary background |
-| **advisory** — 120 | worth knowing about, not worth acting on |
-| **warning** — 240 | |
-| **deadly** — 600 | |
+| | sweep | |
+|---|---|---|
+| **attenuated** — under 3 CPM | 0% | not a clean room: a tube shielded, unplugged or dying |
+| **nominal** — 30 | 33% | ordinary background |
+| **advisory** — 120 | 53% | worth knowing about, not worth acting on |
+| **warning** — 240 | 63% | |
+| **deadly** — 600 | 77% | |
 
 **The floor of *nominal* is 30 and not 0, deliberately.** Natural background does
 not go below a few counts a minute, so a counter reading under 30 is reporting
 *itself* rather than the room — which is why that band is cold blue and not
-green.
+green, and why the dial's bottom stop is 3 rather than nothing.
 
 ### Both themes, and it follows yours
 
@@ -264,9 +280,9 @@ the instruments this borrows from actually look like.
 
 A tiling compositor hands this window whatever is left once every other window
 has had its share. **The charts are the instrument, so they are the last thing to
-go, not the first**: the log table goes first, then the per-layer spectrum
-verdicts, then the axis. The dials, the numbers and the two charts keep their
-shape all the way down — and grow into the glass when there is more of it.
+go, not the first**: the log table goes first, then the spectrum's axis. The
+dials, the numbers and the two charts keep their shape all the way down — and
+grow into the glass when there is more of it.
 
 `radbeeper hotplug` opens the window when it is installed and a terminal running
 `watch` when it is not.

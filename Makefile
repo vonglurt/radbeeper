@@ -19,6 +19,9 @@
 
 CARGO  ?= cargo
 PYTHON ?= python3
+# Rewrite the FIRST `version = "..."` line of a manifest in place, and only
+# the first. See the note in `release` for why this is not a sed.
+BUMP = $(PYTHON) tools/bumpversion.py
 BIN     = target/release/radbeeper
 # The window is a second crate on purpose -- see gui/Cargo.toml -- so it has
 # its own target directory and is never built by a bare `make build`. Iced
@@ -59,7 +62,7 @@ GIFWIDTH ?= 1100
 
 .PHONY: all build test check clippy install uninstall package publish-dry \
         release-check release release-media release-verify bump probe watch \
-        sim service gui gui-build gui-install gui-gif site site-py site-serve \
+        sim service gui gui-build gui-install gui-gif gui-shots site site-py site-serve \
         py-test py-check py-install promo promo-fast play clean help
 
 all: build
@@ -168,6 +171,9 @@ release-media:
 	       && $(MAKE) --no-print-directory gui-gif \
 	       || echo "  SKIPPED gui.gif -- no radbeeper-gui running (make gui)"; } \
 	  || echo "  SKIPPED gui.gif -- no Wayland compositor with grim"
+	@command -v grim >/dev/null && test -n "$$WAYLAND_DISPLAY" \
+	  && $(PYTHON) tools/guishots.py $(if $(GIFWS),--workspace $(GIFWS),) \
+	  || echo "  SKIPPED the theme shots -- no Wayland compositor with grim"
 	@$(PYTHON) tools/promo.py $(if $(SHOTS),--only $(SHOTS)) \
 	  || echo "  SKIPPED the terminal shots -- promo.py could not run"
 	@echo "  media done"
@@ -195,15 +201,53 @@ release:
 	@echo "== radbeeper $(VERSION) -> $(RV) =="
 	@grep -c '^version = ' Cargo.toml | grep -qx 1 \
 	  || { echo "Cargo.toml: expected exactly one version line"; exit 1; }
-	sed -i 's|^version = ".*"|version = "$(RV)"|' Cargo.toml
-	sed -i 's|^version = ".*"|version = "$(RV)"|' gui/Cargo.toml
+	@# TEST BEFORE BUMPING, and this order was learnt the hard way. The
+	@# bump used to come first, so that the recordings below would carry
+	@# the version they are published as -- correct, and it meant a failing
+	@# test left the tree half-bumped. Worse: `NEXTV` is read from
+	@# Cargo.toml when make starts, so the NEXT attempt saw 0.4.0 and
+	@# offered 0.5.0. A release that skips a version because a test failed
+	@# once is a trap nobody would guess at.
+	@#
+	@# So the suite runs against the tree as it stands, and nothing is
+	@# written until it passes. The rebuild after the bump is what stamps
+	@# the new version into the binaries the recordings are made from.
+	@echo "== test, before anything is written =="
+	@$(MAKE) --no-print-directory check
+	@echo "== bump =="
+	@# ONLY THE FIRST `version =` LINE IN EACH MANIFEST, which is the one
+	@# under [package].
+	@#
+	@# A bare `sed s|...|...|` replaces EVERY match, and gui/Cargo.toml has
+	@# a second one: `[dependencies.iced]` carries `version = "0.14"`.
+	@# Bumping that alongside the crate's own asked cargo for iced ^0.4.0 --
+	@# which exists, is four years old, and has none of the features this
+	@# uses -- so the build died on an unknown feature name with nothing in
+	@# the message pointing at the manifest that had been rewritten.
+	@#
+	@# AND NOT `sed '0,/re/'` EITHER, which is how GNU sed bounds a
+	@# substitution to the first match and is not how busybox sed does
+	@# anything: it accepts the address, matches nothing, and changes no
+	@# bytes at all. This is Alpine, sed is busybox, and that is the second
+	@# time its sed has cost this repository an afternoon -- see the
+	@# `\x` escape note in docs/reference.md.
+	$(BUMP) -v $(RV) Cargo.toml
+	$(BUMP) -v $(RV) gui/Cargo.toml
+	@# And check it landed where it was meant to, because the failure mode
+	@# above was silent in the manifest and loud somewhere else entirely.
+	@grep -q '^version = "$(RV)"' Cargo.toml \
+	  || { echo "Cargo.toml: the bump did not take"; exit 1; }
+	@head -25 gui/Cargo.toml | grep -q '^version = "$(RV)"' \
+	  || { echo "gui/Cargo.toml: the bump did not take"; exit 1; }
+	@grep -q '^version = "0.14"' gui/Cargo.toml \
+	  || { echo "gui/Cargo.toml: iced's version was overwritten"; exit 1; }
 	@# The README's own badge line says the version too, and a page that
 	@# disagrees with the binary it documents is the cheapest kind of wrong.
 	sed -i 's|^MIT · `[0-9][^`]*`|MIT · `$(RV)`|' README.md
 	$(CARGO) update --workspace --offline
 	@cd gui && $(CARGO) update --workspace --offline >/dev/null 2>&1 || true
-	@echo "== build and test =="
-	@$(MAKE) --no-print-directory check
+	@echo "== rebuild at $(RV) =="
+	$(CARGO) build --release --locked
 	@$(MAKE) --no-print-directory gui-build
 	@cd gui && $(CARGO) test --release
 	$(if $(NOMEDIA),@echo "== media skipped (NOMEDIA) ==",@$(MAKE) --no-print-directory release-media)
@@ -245,6 +289,12 @@ gui-install: gui-build
 	@mkdir -p "$(PREFIX)/bin"
 	install -m 0755 $(GUIBIN) "$(PREFIX)/bin/radbeeper-gui"
 	@echo "installed $(PREFIX)/bin/radbeeper-gui"
+
+## gui-shots: re-take both themes and the squeezed layout
+# Each theme is a fresh window: the panel reads the desktop's theme once, at
+# startup, so the light shot has to be a window that was started light.
+gui-shots: gui-build
+	$(PYTHON) tools/guishots.py $(if $(GIFWS),--workspace $(GIFWS),)
 
 ## gui-gif: re-record docs/screenshots/gui.gif from the running window
 # WHY NOT `make promo`. That records a TERMINAL -- it keeps the bytes a

@@ -28,9 +28,8 @@ use std::time::{Duration, Instant};
 use iced::widget::{canvas, column, container, row, stack, text, Space};
 use iced::{Color, Element, Fill, Font, Length, Rectangle, Renderer, Subscription, Theme};
 use radbeeper::analysis::{
-    band, bar_seconds, interleave_quality, span_words, tiers_interleaved, tiers_with,
-    Band, Spectrum,
-    Tier, Windows, TIERS,
+    self, band, bar_seconds, interleave_quality, span_words, tiers_interleaved,
+    tiers_with, Band, Spectrum, Tier, Windows, TIERS,
 };
 use radbeeper::broker::{self, Client, CounterId, Event, Poll};
 use radbeeper::{clock, entropy, log};
@@ -130,7 +129,13 @@ const DIAL_CY: f32 = DIAL_R + 8.0;
 const DIAL_MAX_SCALE: f32 = 1.75;
 
 /// The most of a window's height the instrument cluster may take.
-const CLUSTER_SHARE: f32 = 0.30;
+///
+/// RAISED WHEN THE VERDICT LINES WENT. Four rows came out of the bottom of
+/// the panel and the dials were the thing most short of room, so they took
+/// the larger share of what was freed -- a bigger face is a needle that can
+/// be read at a glance across a desk, which is the entire argument for
+/// drawing a dial instead of printing the number again.
+const CLUSTER_SHARE: f32 = 0.34;
 
 /// How much bigger than its minimum to draw the cluster, in this window.
 ///
@@ -192,13 +197,33 @@ const DIAL_PLATE_TOP: f32 = DIAL_CY + DIAL_R + 7.0;
 const NEEDLE_RAW: f32 = 0.0;
 const NEEDLE_HELD: f32 = 3.4;
 
-/// Full-scale marks a dial will choose between, smallest first.
+/// The dial's scale: three decades, fixed, from 3 CPM to 3000.
 ///
-/// A GAUGE WITH A MOVING SCALE IS NOT A GAUGE. The needle has to mean the same
-/// thing minute to minute, so the range is picked from this short list and
-/// only ever moves up a step -- background sits in the low quarter of the
-/// 300 mark and stays there, and a source that pegs it moves it once.
-const RANGES: [f64; 7] = [60.0, 120.0, 300.0, 600.0, 1200.0, 3000.0, 6000.0];
+/// A GAUGE WITH A MOVING SCALE IS NOT A GAUGE, and this one used to have one.
+/// The range was picked from a list of full-scale marks by a function of the
+/// CURRENT READING with no memory of the last -- so a reading sitting near a
+/// boundary flipped the whole face back and forth, every band and every tick
+/// jumping with it, several times a minute. The doc comment claimed the range
+/// "only ever moves up a step"; nothing in the code did that, and nothing
+/// could, because there was nowhere to keep what the last step had been.
+///
+/// A PEAK HOLD WOULD HAVE FIXED THE FLICKER AND KEPT THE PROBLEM. The needle
+/// would still mean something different at two o'clock than it did at one,
+/// and a dial whose angles have to be re-read after every glance is a chart
+/// with extra steps.
+///
+/// SO THE SCALE IS FIXED, AND LOGARITHMIC BECAUSE THE QUANTITY IS. Background
+/// is tens of counts a minute and a source is thousands; on a linear face the
+/// only reading anybody ever takes sits in the bottom tenth. Three decades put
+/// 3, 30, 300 and 3000 at nought, a third, two thirds and full -- and those
+/// are the numbers the bands are already named after, so the tick marks and
+/// the colours are the same statement made twice.
+///
+/// The floor is `BAND_ATTENUATED`: under 3 CPM the counter is reporting
+/// itself rather than the room, and pegging at the bottom stop is the honest
+/// picture of that.
+const DIAL_FLOOR: f64 = analysis::BAND_ATTENUATED;
+const DIAL_CEIL: f64 = 3000.0;
 
 /// The window the big number is an average over, when it has one.
 const HEADLINE: f64 = 30.0;
@@ -668,13 +693,9 @@ impl Meters {
 struct Layer {
     window: usize,
     rel: Vec<f64>,
+    /// The height a peak has to clear before it means anything, which is
+    /// what the luck line across the overlay is drawn at.
     luck: f64,
-    runs: u32,
-    /// Seconds until this one has anything to say, 0 once it has.
-    wait: usize,
-    /// Its loudest bin, and the period that bin stands for.
-    top: f64,
-    period: f64,
 }
 
 /// Everything the interface knows, computed by the feed thread.
@@ -898,19 +919,9 @@ impl App {
         // that cannot be compared, which is the only reason to draw them side
         // by side.
         let m = &self.meters;
-        let top = s
-            .per
-            .iter()
-            .filter_map(|v| *v)
-            .chain(m.needle)
-            .chain(m.live3)
-            .chain(m.range60.map(|(_, hi)| hi))
-            .fold(0.0f64, f64::max);
-        let full = dial_range(top);
         let faces: Vec<Face> = vec![
             Face {
                 needles: (0..tubes).map(|k| (k, s.per.get(k).copied().flatten())).collect(),
-                full,
                 range30: None,
                 range60: None,
                 pointer: None,
@@ -921,7 +932,6 @@ impl App {
                 // target instead would make the mass invisible, which is the
                 // whole of what it is for.
                 needles: vec![(usize::MAX, m.needle)],
-                full,
                 range30: m.range30,
                 range60: m.range60,
                 pointer: m.live30,
@@ -1139,6 +1149,43 @@ impl App {
         ]
         .spacing(1);
 
+        // ---- the scale, in the words the colours stand for --------------
+        //
+        // THE FACE IS FIXED NOW, SO THE LEGEND CAN BE. A moving range made a
+        // key useless -- the colour at a given angle meant something
+        // different a minute later -- and three decades that never move mean
+        // every band sits at the same place on every dial, for good. So the
+        // names are printed once, in their own colours, at the foot of the
+        // cluster: the dial says where the reading is and this says what the
+        // colour under it is called.
+        //
+        // A reading is not "above 240", it is a WARNING, and that is the
+        // whole reason the bands are named at all.
+        //
+        // The floors are the same constants the arcs, the ticks and every
+        // number on the panel are drawn from, so they cannot disagree.
+        let mut legend = row![
+            mono(format!("{:.0}\u{2013}{:.0} CPM \u{b7} log", DIAL_FLOOR, DIAL_CEIL))
+                .size(9)
+                .color(self.skin.faint),
+        ]
+        .spacing(8);
+        for b in Band::all() {
+            // THE LOWEST BAND HAS NO FLOOR WORTH PRINTING. `Attenuated` runs
+            // from zero counts, which is true and reads as a mistake beside a
+            // dial whose bottom stop is three: the name and the colour are
+            // the whole of what it has to say.
+            legend = legend.push(
+                mono(if b.floor() > 0.0 {
+                    format!("{} {:.0}", b.name(), b.floor())
+                } else {
+                    b.name().to_string()
+                })
+                .size(9)
+                .color(self.skin.colour(b)),
+            );
+        }
+
         // ---- the cascade captions, over the tiers they describe ---------
         //
         // A CAPTION HAS TO FIT ITS OWN TIER, and the tiers are no longer the
@@ -1211,6 +1258,7 @@ impl App {
             column![
                 container(row![dial_faces, Space::new().width(6.0), numbers].spacing(0))
                     .height(Length::Fixed(band_h)),
+                legend,
                 caps,
                 Space::new().height(Fill),
             ]
@@ -1227,45 +1275,62 @@ impl App {
             Space::new().width(Fill),
             mono(span_words(period_floor(shortest, longest))).size(10).color(self.skin.dim),
         ];
-        let mut verdicts = column![].spacing(0);
-        for (i, l) in s.layers.iter().enumerate() {
-            verdicts = verdicts.push(
-                mono(layer_verdict(l, shortest, longest))
-                    .size(10)
-                    .color(if l.runs == 0 { self.skin.faint } else { self.skin.layers[i] }),
-            );
-        }
-
-        // ---- one line for the emission, one for the clock ---------------
-        let random: Element<Message> = match &s.random {
-            Some((who, hex, at, suspect)) => column![
-                row![
-                    mono(format!("{} ", tube_name(*who)))
-                        .size(11)
-                        .color(self.skin.tube(*who)),
-                    mono(entropy::group_hex(hex))
-                        .size(11)
-                        .color(if *suspect { self.skin.warn } else { self.skin.cyan }),
-                ],
-                mono(format!(
-                    "{} bits from {} at {} \u{b7} {}{}",
-                    entropy::ENTROPY_BITS as i64,
-                    s.counters.get(*who).map(|c| c.serial_no.as_str()).unwrap_or("?"),
-                    at,
-                    s.pool,
-                    if *suspect { " \u{b7} SPECTRUM NOT FLAT, suspect" } else { "" }
-                ))
-                .size(10)
-                .color(self.skin.faint),
-            ]
-            .spacing(0)
-            .into(),
-            None => mono(format!("random \u{b7} {}", s.pool)).size(10).color(self.skin.faint).into(),
-        };
-
-        let now = mono(clock::format(clock::now(), "%Y-%m-%d %H:%M:%S"))
+        // ---- the clock, the emission and its countdown, on ONE line -----
+        //
+        // FOUR LINES BECAME ONE, and the panel is denser for it. It used to
+        // run: a verdict per spectrum layer, then the hex, then a sentence
+        // saying which counter and when and how long until the next one, then
+        // the clock on a line of its own. Between them they spent six rows
+        // restating things the reader can already see -- the layer colours
+        // are on the chart, the serial is at the top of the panel, and "next
+        // in 168s" needs neither the word "random" nor a row to itself.
+        //
+        // LEFT, CENTRE, RIGHT. The clock anchors the left because it is the
+        // one thing on the panel that is not about the counter; the hex takes
+        // the middle because it is the widest and the thing being read; the
+        // countdown sits hard right where a number that only ever decreases
+        // belongs. Two `Fill` spacers do the justifying, so it holds at any
+        // width.
+        //
+        // AND NOTHING SAYS "FLAT". The spectrum's own verdict lines are gone
+        // and so is the suspect note: flatness is a health check on the
+        // source, not a headline, and a panel that spent three rows a second
+        // saying a counter was behaving normally was spending them on the
+        // least surprising fact it knows. A source that stops looking like
+        // decay still marks the emission -- the hex turns warning-coloured --
+        // and the audit page and `random --frames` carry the detail.
+        let stamp = mono(clock::format(clock::now(), "%Y-%m-%d %H:%M:%S"))
             .size(10)
             .color(self.skin.faint);
+        let countdown = mono(match &s.random {
+            // After a line has been drawn, the pool status IS the countdown
+            // and needs no label in front of it.
+            Some(_) => s.pool.clone(),
+            None => format!("random \u{b7} {}", s.pool),
+        })
+        .size(10)
+        .color(self.skin.faint);
+        let emission: Element<Message> = match &s.random {
+            Some((who, hex, _at, suspect)) => row![
+                mono(format!("{} ", tube_name(*who)))
+                    .size(11)
+                    .color(self.skin.tube(*who)),
+                mono(entropy::group_hex(hex))
+                    .size(11)
+                    .color(if *suspect { self.skin.warn } else { self.skin.cyan }),
+            ]
+            .into(),
+            None => Space::new().into(),
+        };
+        let footline = row![
+            stamp,
+            Space::new().width(Fill),
+            emission,
+            Space::new().width(Fill),
+            countdown,
+        ]
+        .spacing(10)
+        .align_y(iced::Center);
 
         // WHAT GOES FIRST WHEN THERE IS NO ROOM. A tiling compositor will
         // hand this window a quarter of a screen without asking, and
@@ -1273,11 +1338,15 @@ impl App {
         // Fill and everything else is fixed, so at 373 pixels the fixed
         // content took the lot and the cascade collapsed to nothing. The
         // charts ARE the instrument -- they are the last thing to go, not the
-        // first. So the log table goes, then the per-layer verdicts, then the
-        // axis, in that order, and what is left keeps its shape.
+        // first. So the log table goes, then the axis, in that order, and
+        // what is left keeps its shape.
+        //
+        // THE VERDICT LINES USED TO BE IN THIS LADDER and are not in the
+        // panel at all now, which is why there are two thresholds here
+        // instead of three. Four rows of the shortest window's content went
+        // with them, and the charts have it.
         let room = self.size.height;
-        let (want_table, want_verdicts, want_axis) =
-            (room >= 620.0, room >= 500.0, room >= 430.0);
+        let (want_table, want_axis) = (room >= 560.0, room >= 400.0);
         let table: Element<Message> = if s.rows.is_empty() || !want_table {
             Space::new().into()
         } else {
@@ -1299,9 +1368,7 @@ impl App {
                 who,
                 panel,
                 if want_axis { axis.into() } else { Element::from(Space::new()) },
-                if want_verdicts { verdicts.into() } else { Element::from(Space::new()) },
-                random,
-                now,
+                footline,
                 table,
             ]
             .spacing(2),
@@ -1334,41 +1401,6 @@ fn phase_note(gap: f64, tubes: usize) -> String {
     )
 }
 
-fn layer_verdict(l: &Layer, shortest: usize, longest: usize) -> String {
-    if l.runs == 0 {
-        return format!(
-            "{:>14} filling, {} to go",
-            format!(
-                "{:>7}\u{2013}{}",
-                span_words(layer_floor(l.window, shortest, longest)),
-                span_words(l.window as f64)
-            ),
-            span_words(l.wait as f64)
-        );
-    }
-    let band = format!(
-        "{:>7}\u{2013}{}",
-        span_words(layer_floor(l.window, shortest, longest)),
-        span_words(l.window as f64)
-    );
-    if l.top < l.luck * 1.25 {
-        format!(
-            "{:>14} flat \u{b7} {} window{}",
-            band,
-            l.runs,
-            if l.runs == 1 { "" } else { "s" }
-        )
-    } else {
-        format!(
-            "{:>14} peak at {} \u{b7} {:.1}x (luck {:.1}x)",
-            band,
-            span_words(l.period),
-            l.top,
-            l.luck
-        )
-    }
-}
-
 /// A log row as one monospace line.
 fn cells(cells: &[String]) -> String {
     cells
@@ -1384,14 +1416,11 @@ fn cells(cells: &[String]) -> String {
 
 
 /// Where a dial's needle sits for a reading, as a fraction of its sweep.
-fn dial_fraction(value: f64, full: f64) -> f64 {
-    (value / full).clamp(0.0, 1.0)
-}
-
-/// The smallest full scale on the list that holds `value` with room to read.
-fn dial_range(value: f64) -> f64 {
-    let want = value * 1.15;
-    *RANGES.iter().find(|r| **r >= want).unwrap_or(RANGES.last().unwrap())
+///
+/// Logarithmic, over a scale that never moves. See DIAL_FLOOR.
+fn dial_fraction(value: f64) -> f64 {
+    let span = (DIAL_CEIL / DIAL_FLOOR).log10();
+    ((value.max(1e-9) / DIAL_FLOOR).log10() / span).clamp(0.0, 1.0)
 }
 
 // ------------------------------------------------------------------- chart ---
@@ -1414,7 +1443,6 @@ struct Face {
     /// (tube index, its reading), or (usize::MAX, reading) for the collected
     /// one, which belongs to no single tube.
     needles: Vec<(usize, Option<f64>)>,
-    full: f64,
     /// The half-minute and minute ranges, on the collecting meter only. The
     /// raw meter has none: a range needs one needle to be the range OF.
     range30: Option<(f64, f64)>,
@@ -1488,7 +1516,6 @@ impl Chart {
         let sweep = std::f32::consts::PI * 1.5; // three quarters of a turn
 
         for (k, face) in self.dials.iter().enumerate() {
-            let full = face.full;
             let (dial_r, dial_w) = (DIAL_R * self.scale, DIAL_W * self.scale);
             let cx = dial_w * (k as f32 + 0.5);
             // A FIXED HEIGHT, NOT THE MIDDLE OF THE BAND. The band grows by a
@@ -1510,8 +1537,8 @@ impl Chart {
             // An arc of the scale, at whatever radius, in whatever colour.
             let arc_at = |frame: &mut canvas::Frame, from: f64, to: f64,
                           radius: f32, width: f32, tint: Color| {
-                let a0 = start + sweep * dial_fraction(from, full) as f32;
-                let a1 = start + sweep * dial_fraction(to, full) as f32;
+                let a0 = start + sweep * dial_fraction(from) as f32;
+                let a1 = start + sweep * dial_fraction(to) as f32;
                 if a1 <= a0 + 0.004 {
                     return;
                 }
@@ -1533,26 +1560,58 @@ impl Chart {
             // every number on the panel by construction.
             let bands = Band::all();
             for (i, b) in bands.iter().enumerate() {
-                let to = bands.get(i + 1).map(|n| n.floor()).unwrap_or(full);
-                arc_at(frame, b.floor(), to.min(full), 0.82, 5.0,
+                let to = bands.get(i + 1).map(|n| n.floor()).unwrap_or(DIAL_CEIL);
+                arc_at(frame, b.floor(), to.min(DIAL_CEIL), 0.82, 5.0,
                        Color { a: 0.75, ..self.skin.face_colour(*b) });
             }
 
-            // Ticks: eleven majors across the sweep, four minors between.
-            for i in 0..=50 {
-                let t = i as f32 / 50.0;
-                let a = start + sweep * t;
-                let major = i % 5 == 0;
-                let r1 = dial_r * if major { 0.66 } else { 0.73 };
+            // TICKS AT THE NUMBERS, NOT AT EQUAL ANGLES. An evenly spaced
+            // ring told you where half of full scale was, which on a
+            // logarithmic face is not a number anybody is looking for. These
+            // are the decades -- 3, 30, 300, 3000 -- with the 2..9 of each
+            // one between them, which is what every log scale ever printed
+            // does and what makes the spacing legible AS logarithmic rather
+            // than as a dial with uneven ticks.
+            //
+            // And a heavy mark at every band floor, so the place the colour
+            // changes is a place the eye can find without reading the colour.
+            let mut tick = |value: f64, weight: f32, alpha: f32| {
+                let a = start + sweep * dial_fraction(value) as f32;
+                let r1 = dial_r * if weight > 1.5 { 0.66 } else { 0.73 };
                 let r2 = dial_r * 0.79;
-                let p1 = iced::Point::new(cx + r1 * a.cos(), cy + r1 * a.sin());
-                let p2 = iced::Point::new(cx + r2 * a.cos(), cy + r2 * a.sin());
                 frame.stroke(
-                    &Path::line(p1, p2),
+                    &Path::line(
+                        iced::Point::new(cx + r1 * a.cos(), cy + r1 * a.sin()),
+                        iced::Point::new(cx + r2 * a.cos(), cy + r2 * a.sin()),
+                    ),
                     Stroke::default()
-                        .with_width(if major { 2.0 } else { 1.0 })
-                        .with_color(Color { a: if major { 0.75 } else { 0.35 }, ..self.skin.fg }),
+                        .with_width(weight)
+                        // THE BEZEL'S COLOUR, NOT THE PAGE'S. `fg` is the
+                        // colour of text on paper, and the dial face is black
+                        // in BOTH skins -- so under Antiquity the ticks were
+                        // dark navy on near-black and simply were not there.
+                        // This is the same trap the band colours have their
+                        // own `face_bands` set to avoid, and the ticks are
+                        // instrument furniture like the hub and the pointer,
+                        // so they take the chrome.
+                        .with_color(Color { a: alpha, ..self.skin.bezel }),
                 );
+            };
+            let mut decade = DIAL_FLOOR;
+            while decade <= DIAL_CEIL * 1.0001 {
+                tick(decade, 2.0, 0.75);
+                for step in 2..10 {
+                    let v = decade * step as f64;
+                    if v < DIAL_CEIL {
+                        tick(v, 1.0, 0.30);
+                    }
+                }
+                decade *= 10.0;
+            }
+            for b in Band::all() {
+                if b.floor() > DIAL_FLOOR && b.floor() < DIAL_CEIL {
+                    tick(b.floor(), 2.0, 0.6);
+                }
             }
 
             // THE RANGES, AS ARCS OUTSIDE THE BANDS -- the half minute and the
@@ -1565,7 +1624,7 @@ impl Chart {
             // Takes the frame rather than capturing it: `arc_at` already
             // holds a unique borrow, and two closures cannot both have one.
             let bug = |frame: &mut canvas::Frame, value: f64, radius: f32, width: f32| {
-                let a = start + sweep * dial_fraction(value, full) as f32;
+                let a = start + sweep * dial_fraction(value) as f32;
                 let (r0, r1) = (dial_r * (radius - 0.05), dial_r * (radius + 0.05));
                 frame.stroke(
                     &Path::line(
@@ -1598,7 +1657,7 @@ impl Chart {
             // counterweight, chrome rather than a band colour, and stopping
             // short of the hub. It must never be mistaken for the reading.
             if let Some(v) = face.pointer {
-                let a = start + sweep * dial_fraction(v, full) as f32;
+                let a = start + sweep * dial_fraction(v) as f32;
                 let (r0, r1) = (dial_r * 0.30, dial_r * 0.795);
                 let (ca, sa) = (a.cos(), a.sin());
                 frame.stroke(
@@ -1635,7 +1694,7 @@ impl Chart {
             let n = face.needles.len().max(1);
             for (j, (tube, value)) in face.needles.iter().enumerate() {
                 let Some(v) = value else { continue };
-                let a = start + sweep * dial_fraction(*v, full) as f32;
+                let a = start + sweep * dial_fraction(*v) as f32;
                 let reach = dial_r * (0.74 - 0.05 * (j as f32).min(4.0));
                 let (ca, sa) = (a.cos(), a.sin());
                 let tint = if *tube == usize::MAX {
@@ -2169,8 +2228,6 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                     } else {
                         peak_hold + (tallest - peak_hold) * (1.0 - (-1.0f64 / PEAK_TAU).exp())
                     };
-                    let shortest = LADDER.iter().copied().min().unwrap_or(2);
-                    let longest = LADDER.iter().copied().max().unwrap_or(2);
                     let headline = mean_of(&all, HEADLINE, tubes)
                         .or_else(|| id.spans.last().and_then(|s| mean_of(&all, *s, tubes)));
                     let shot = Snapshot {
@@ -2213,28 +2270,10 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                             .iter()
                             .map(|r| {
                                 let rel = r.relative();
-                                // THE LOUDEST BIN THAT IS DRAWN, not the
-                                // loudest there is. A peak the panel cannot
-                                // show is a peak nobody can check, and a
-                                // caption pointing at empty axis is worse
-                                // than no caption.
-                                let floor = layer_floor(r.window, shortest, longest);
-                                let mut top = 0.0f64;
-                                let mut at = 0usize;
-                                for (i, v) in rel.iter().enumerate() {
-                                    if r.period(i) >= floor && *v > top {
-                                        top = *v;
-                                        at = i;
-                                    }
-                                }
                                 Layer {
                                     window: r.window,
                                     rel,
                                     luck: r.chance_max(),
-                                    runs: r.runs,
-                                    wait: r.wait(),
-                                    top,
-                                    period: r.period(at),
                                 }
                             })
                             .collect(),
@@ -2710,24 +2749,60 @@ mod tests {
         assert_eq!(at(560.0, 4000.0), 1.0);
     }
 
-    /// A dial reads the same fraction of its sweep for the same fraction of
-    /// its range, and never runs past either end.
+    /// THE SCALE DOES NOT MOVE, WHICH IS THE WHOLE FIX. It used to be chosen
+    /// from a list by a function of the current reading with no memory, so a
+    /// value sitting near a boundary flipped the entire face back and forth
+    /// several times a minute. `dial_fraction` now takes one argument, and
+    /// there is no second one left to change.
     #[test]
-    fn a_needle_stays_on_its_face() {
-        assert_eq!(dial_fraction(0.0, 600.0), 0.0);
-        assert_eq!(dial_fraction(300.0, 600.0), 0.5);
-        assert_eq!(dial_fraction(600.0, 600.0), 1.0);
-        assert_eq!(dial_fraction(9000.0, 600.0), 1.0, "a pegged needle stops");
-        assert_eq!(dial_fraction(-5.0, 600.0), 0.0);
+    fn the_decades_land_where_the_face_is_marked() {
+        let at = |v: f64| (dial_fraction(v) * 1000.0).round() / 1000.0;
+        // Three decades: 3, 30, 300, 3000 at nought, a third, two thirds, full.
+        assert_eq!(at(3.0), 0.0);
+        assert_eq!(at(30.0), 0.333);
+        assert_eq!(at(300.0), 0.667);
+        assert_eq!(at(3000.0), 1.0);
+        // A reading either side of a band floor moves the needle a little and
+        // moves nothing else: there is no range left to re-pick.
+        let (a, b) = (dial_fraction(239.0), dial_fraction(241.0));
+        assert!((a - b).abs() < 0.01, "{} vs {}", a, b);
     }
 
-    /// The range is picked from the list and leaves headroom, so background
-    /// does not sit against the stop and a spike is still on the face.
+    /// A needle never runs past either end, whatever it is handed.
     #[test]
-    fn the_range_is_one_of_the_marks_and_holds_the_reading() {
-        assert_eq!(dial_range(25.0), 60.0);
-        assert_eq!(dial_range(55.0), 120.0, "55 needs more than the 60 mark");
-        assert_eq!(dial_range(880.0), 1200.0);
-        assert_eq!(dial_range(99999.0), 6000.0, "beyond the last mark it pegs");
+    fn a_needle_stays_on_its_face() {
+        assert_eq!(dial_fraction(0.0), 0.0, "nothing at all pegs at the bottom");
+        assert_eq!(dial_fraction(-5.0), 0.0);
+        assert_eq!(dial_fraction(1.0), 0.0, "under the floor is the floor");
+        assert_eq!(dial_fraction(99999.0), 1.0, "a pegged needle stops");
+        // Monotonic across the whole span, which is what makes an angle
+        // comparable to another angle.
+        let mut last = -1.0;
+        for v in [3.0, 10.0, 30.0, 120.0, 240.0, 600.0, 1500.0, 3000.0] {
+            let f = dial_fraction(v);
+            assert!(f > last, "{} did not advance the needle", v);
+            last = f;
+        }
+    }
+
+    /// THE TICKS AND THE COLOURS ARE THE SAME STATEMENT TWICE. Every band
+    /// floor the panel names is a mark on the face, and every one of them is
+    /// on the face rather than off the end of it.
+    #[test]
+    fn every_named_band_has_a_place_on_the_scale() {
+        for b in Band::all() {
+            let f = dial_fraction(b.floor());
+            assert!(
+                (0.0..=1.0).contains(&f),
+                "{} at {} is off the face",
+                b.name(),
+                b.floor()
+            );
+        }
+        // Attenuated is the bottom stop, deadly is well up the face and not
+        // against the top -- there is room to see a source climb past it.
+        assert_eq!(dial_fraction(Band::Attenuated.floor()), 0.0);
+        let deadly = dial_fraction(Band::Deadly.floor());
+        assert!((0.6..0.9).contains(&deadly), "deadly sits at {}", deadly);
     }
 }

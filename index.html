@@ -71,7 +71,7 @@ footer a{color:var(--dim)}
 {"@context":"https://schema.org","@type":"SoftwareSourceCode",
 "name":"RadBeeper","description":"RadBeeper reads a GQ GMC-320 Plus Geiger-Muller counter over USB serial on Linux: a terminal monitor and a Wayland window, five averaging windows at once, an interleaved cascade of counts per second, and tab-separated data logging you can publish. Built in Rust for Copal Linux, an Alpine distillation.",
 "url":"https://vonglurt.github.io/radbeeper/","codeRepository":"https://github.com/vonglurt/radbeeper","programmingLanguage":"Rust","license":
-"https://opensource.org/licenses/MIT","version":"0.3.1",
+"https://opensource.org/licenses/MIT","version":"0.4.0",
 "runtimePlatform":"Linux","operatingSystem":"Linux, Alpine Linux, Copal Linux",
 "applicationCategory":"Science","keywords":"geiger counter linux, GMC-320 Plus, GQ GMC, geiger muller counter USB, radiation monitor Linux, tty serial geiger counter, counts per minute logging, radiation data logging, Alpine Linux geiger, Copal Linux, Hyprland Wayland radiation monitor, rust geiger counter, CPM to uSv/h",
 "author":{"@type":"Person","name":"Paul Richeson"},
@@ -136,7 +136,7 @@ machine</strong> this project's own screenshots come from.</p></div>
 <div class="wrap"><main id="radbeeper">
 <h1 id="radbeeper">RadBeeper</h1>
 <p><strong>A GQ GMC-320 Plus Geiger-Muller counter on the desk, read from Alpine Linux — and from <a href="https://github.com/vonglurt/copal">Copal</a>, its distillation.</strong></p>
-<p>MIT · <code>0.3.1</code> · <code>cargo install radbeeper</code> · one dependency, and it is <code>libc</code></p>
+<p>MIT · <code>0.4.0</code> · <code>cargo install radbeeper</code> · one dependency, and it is <code>libc</code></p>
 <p><strong><a href="https://vonglurt.github.io/radbeeper/">vonglurt.github.io/radbeeper</a></strong> — this page, the lab reports, and <a href="https://vonglurt.github.io/radbeeper/monitor.html">a live counter's report</a> built from the logs in this repository.</p>
 <p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui.gif" alt="radbeeper-gui: two counters, in real time" loading="lazy"></p>
 <p><strong>Twenty-four seconds of two counters, in real time</strong>, attached to the service that is logging them — which never notices. Two dials, five averaging windows with the precision of each, a strip of counts that compresses as it ages, three spectra looking for anything arriving on a schedule, and 256 bits of hex out of the timing of decay.</p>
@@ -203,7 +203,7 @@ doas adduser $USER dialout               # then log out and back in</code></pre>
 <hr>
 <h2 id="the-window">The window</h2>
 <pre><code class="language-sh">radbeeper-gui</code></pre>
-<p>An instrument cluster: a round dial per counter with a 270-degree sweep, the bands painted on the face at the same thresholds everything else uses, and the reading in digits on the black face under the needle. Beside it the five averaging windows, each with the <strong>precision</strong> of its own figure. Then the cascade, the spectrum overlay, the emission and its countdown, and the log rows as the server wrote them.</p>
+<p>An instrument cluster: a round dial per counter with a 270-degree sweep on a <strong>fixed logarithmic scale</strong>, the bands painted on the face at the same thresholds everything else uses, and the reading in digits on the black face under the needle. Beside it the five averaging windows, each with the <strong>precision</strong> of its own figure. Then the cascade, the spectrum overlay, the emission and its countdown, and the log rows as the server wrote them.</p>
 <p>It opens no serial port — it <em>cannot</em>, it has no code for one — which is exactly what makes it safe to open and close all day while the logging carries on underneath.</p>
 <h3 id="the-two-meters">The two meters</h3>
 <p><strong>They answer different questions and neither answers the other.</strong></p>
@@ -211,10 +211,13 @@ doas adduser $USER dialout               # then log out and back in</code></pre>
 <p>They share a scale, because two dials that don't cannot be compared — which is the only reason to draw them side by side.</p>
 <p><strong>A dial can show more than one answer at a time and a number cannot.</strong> The collected face carries the <strong>three seconds</strong> its needle points at, the <strong>half minute</strong> the chrome pointer sits at, and — as two arcs outside the bands — where the needle has been over the last half minute and minute. The gap between needle and pointer <em>is</em> the trend.</p>
 <p>The needle has mass: it leans out fast and settles back slower, the way every moving-coil meter does mechanically. Without it the needle teleports once a second and the eye cannot follow which way it went.</p>
+<h3 id="the-scale-does-not-move">The scale does not move</h3>
+<p><strong>Three decades, <code>3 → 3000</code> CPM, and it is the same three every time you look.</strong> The range used to be picked from a list to suit the current reading, which meant a value sitting near a boundary flipped the whole face back and forth several times a minute — every band and every tick jumping with it. A fixed scale cannot do that, and a logarithmic one is the right fixed scale here because the quantity is: background is tens of counts a minute, a source is thousands, and on a linear face the only reading anybody ever takes sits in the bottom tenth.</p>
+<p>The decades land on the numbers the bands are named after — 3 at the bottom stop, 30 a third of the way round, 300 at two thirds, 3000 at full — with the 2..9 of each decade ticked between them and a heavy mark at every band floor.</p>
 <h3 id="the-bands-named">The bands, named</h3>
-<p>A reading is not "above 240" — it is a <strong>warning</strong>. The floor of each:</p>
-<table><tbody><tr><td><strong>attenuated</strong> — under 30 CPM</td><td>not a clean room: a tube shielded, unplugged or dying</td></tr><tr><td><strong>nominal</strong> — 30</td><td>ordinary background</td></tr><tr><td><strong>advisory</strong> — 120</td><td>worth knowing about, not worth acting on</td></tr><tr><td><strong>warning</strong> — 240</td><td></td></tr><tr><td><strong>deadly</strong> — 600</td><td></td></tr></tbody></table>
-<p><strong>The floor of <em>nominal</em> is 30 and not 0, deliberately.</strong> Natural background does not go below a few counts a minute, so a counter reading under 30 is reporting <em>itself</em> rather than the room — which is why that band is cold blue and not green.</p>
+<p>A reading is not "above 240" — it is a <strong>warning</strong>. The names are printed under the cluster in their own colours, and the floor of each is a mark on the face:</p>
+<table><thead><tr><th></th><th>sweep</th><th></th></tr></thead><tbody><tr><td><strong>attenuated</strong> — under 3 CPM</td><td>0%</td><td>not a clean room: a tube shielded, unplugged or dying</td></tr><tr><td><strong>nominal</strong> — 30</td><td>33%</td><td>ordinary background</td></tr><tr><td><strong>advisory</strong> — 120</td><td>53%</td><td>worth knowing about, not worth acting on</td></tr><tr><td><strong>warning</strong> — 240</td><td>63%</td><td></td></tr><tr><td><strong>deadly</strong> — 600</td><td>77%</td><td></td></tr></tbody></table>
+<p><strong>The floor of <em>nominal</em> is 30 and not 0, deliberately.</strong> Natural background does not go below a few counts a minute, so a counter reading under 30 is reporting <em>itself</em> rather than the room — which is why that band is cold blue and not green, and why the dial's bottom stop is 3 rather than nothing.</p>
 <h3 id="both-themes-and-it-follows-yours">Both themes, and it follows yours</h3>
 <p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-antiquity.png" alt="the panel under Antiquity, the desktop&#x27;s own light theme" loading="lazy"></p>
 <p>Copal writes down which theme is on, so the window <strong>asks rather than guesses</strong>. <code>--theme dark</code>, <code>--theme antiquity</code> or <code>--theme auto</code> (the default) override it.</p>
@@ -222,7 +225,7 @@ doas adduser $USER dialout               # then log out and back in</code></pre>
 <p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-dark.png" alt="the same panel, dark" loading="lazy"></p>
 <h3 id="it-fits-what-the-compositor-gives-it">It fits what the compositor gives it</h3>
 <p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-small.png" alt="the panel squeezed into 560 by 400" loading="lazy"></p>
-<p>A tiling compositor hands this window whatever is left once every other window has had its share. <strong>The charts are the instrument, so they are the last thing to go, not the first</strong>: the log table goes first, then the per-layer spectrum verdicts, then the axis. The dials, the numbers and the two charts keep their shape all the way down — and grow into the glass when there is more of it.</p>
+<p>A tiling compositor hands this window whatever is left once every other window has had its share. <strong>The charts are the instrument, so they are the last thing to go, not the first</strong>: the log table goes first, then the spectrum's axis. The dials, the numbers and the two charts keep their shape all the way down — and grow into the glass when there is more of it.</p>
 <p><code>radbeeper hotplug</code> opens the window when it is installed and a terminal running <code>watch</code> when it is not.</p>
 <hr>
 <h2 id="two-counters">Two counters</h2>

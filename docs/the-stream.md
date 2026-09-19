@@ -447,15 +447,35 @@ The panel is laid out in descending order of how often a person looks at it.
 │ ─────────────────────────── luck line ────────────────────── │ spectrum
 │ ▁▂▁▃▁▂▁▁▂▁▃▁▂▁▁▂▃▁▂▁▁▃▁▂▁▂▁▁▃▁▂▁▁▂▁▃▁▂▁▂▁▁▃▁▂▁▁▂▁▃▁▂▁▁▂▁▃▁▂ │ overlay
 │ 9h 6m                    period · log                    7s  │ axis
-│    7s–8m flat · 9 windows                                    │ per layer
-│   58s–1h 8m filling, 25m to go                               │ verdicts
-│    7m–9h 6m filling, 8h 23m to go                            │
-│ random · next in 828s                                        │
-│ 2026-09-18 12:40:28                                          │
+│ 2026-09-18 12:40  A 0ec70b7d e62a0c5b ...    next in 828s    │ clock, hex,
 │ time      cps   counts  seconds  cpm_3  cpm_30  ...          │ the log, as
 │ 13:03:54  0.767  23      30      20.0   46.0    ...          │ the server
 └──────────────────────────────────────────────────────────────┘   wrote it
 ```
+
+#### One line where there were six
+
+The block between the spectrum and the log table used to run: a verdict per
+spectrum layer, then the hex, then a sentence naming the counter and the time
+and the wait, then the clock on a row of its own. Six rows, on a panel whose
+whole argument is density.
+
+**It is one row now, justified three ways.** The clock anchors the left — it is
+the only thing on the panel not about the counter. The hex takes the middle,
+because it is the widest and it is the thing being read. The countdown sits hard
+right, where a number that only ever decreases belongs. Two `Fill` spacers do
+the justifying, so it holds at any width.
+
+**And nothing says "flat".** The per-layer verdicts are gone and so is the
+`SPECTRUM NOT FLAT, suspect` note. Flatness is a health check on the source, not
+a headline: a panel spending three rows a second reporting that a counter was
+behaving normally was spending them on the least surprising fact it knows. A
+source that stops looking like decay still marks its emission — the hex is drawn
+in the warning colour — and `random --frames`, the `.tsv` and the audit page all
+carry the detail for anybody actually auditing it.
+
+The rows that freed went to the instruments: `CLUSTER_SHARE` rose from 0.30 to
+0.34, so the dials are bigger, and the cascade and the overlay keep the rest.
 
 Vertical space is deliberately tight: the dials and the numbers sit *side by
 side* rather than stacked, because the readout alone consumed a third of the
@@ -469,14 +489,59 @@ One per counter. A 270° sweep from down-left to down-right -- the arc a needle
 can cross without the eye losing it, and what every speedometer and tachometer
 does. The level bands are painted onto the face at the same thresholds the rest
 of the program uses, so the colour under the needle and the colour of the number
-above it agree by construction rather than by being kept in step by hand. Fifty
-ticks, every fifth major. A counterweight behind the hub, which is what stops a
+above it agree by construction rather than by being kept in step by hand. The
+ticks are the decades and the 2..9 between them, with a heavy mark at every band
+floor -- see below. A counterweight behind the hub, which is what stops a
 needle looking like a clock hand. The reading in digits on the black face
 beneath, as a marine gauge does it.
 
-**The full scale is chosen from a fixed list** (60, 120, 300, 600, 1200, 3000,
-6000 CPM) with 15% headroom. A gauge whose range moves continuously is not a
-gauge: the needle has to mean the same thing minute to minute.
+#### The scale is fixed, and logarithmic
+
+**A gauge with a moving scale is not a gauge, and this one had one.** The range
+was chosen from a list of full-scale marks by a function of the *current
+reading* with no memory of the last, so a value sitting near a boundary flipped
+the entire face back and forth — every band, every tick — several times a
+minute. The doc comment claimed the range "only ever moves up a step". Nothing
+in the code did that, and nothing could: there was nowhere to keep what the last
+step had been.
+
+A peak hold with a slow decay would have stopped the flicker and kept the
+problem. The needle would still mean something different at two o'clock than it
+did at one, and a dial whose angles must be re-read after every glance is a
+chart with extra steps.
+
+**So the scale does not move at all, and it is logarithmic because the quantity
+is.** Background is tens of counts a minute and a source is thousands; on a
+linear face the only reading anybody ever takes sits in the bottom tenth. Three
+decades — `3 → 3000` — put the numbers the bands are already named after at
+nought, a third, two thirds and full:
+
+| CPM | sweep | band |
+|---|---|---|
+| 3 | 0% | **attenuated** — the bottom stop |
+| 30 | 33% | **nominal** — ordinary background |
+| 120 | 53% | **advisory** |
+| 240 | 63% | **warning** |
+| 300 | 67% | |
+| 600 | 77% | **deadly** |
+| 3000 | 100% | full scale |
+
+The floor is `BAND_ATTENUATED`. Under 3 CPM the counter is reporting *itself*
+rather than the room, and pegging at the bottom stop is the honest picture of
+that.
+
+**The ticks are at the numbers, not at equal angles.** An evenly spaced ring
+told you where half of full scale was, which on a logarithmic face is not a
+number anybody is looking for. The marks are the decades with the 2..9 of each
+between them — what every printed log scale does, and what makes the spacing
+legible *as* logarithmic rather than as a dial with uneven ticks. Every band
+floor gets a heavy mark of its own, so the place the colour changes can be
+found without reading the colour.
+
+And because the face no longer moves, the key can be printed once: the band
+names sit under the cluster in their own colours, drawn from the same constants
+as the arcs, the ticks and every number on the panel. A reading is not "above
+240" — it is a **warning**, which is the whole reason the bands are named.
 
 With two counters the two needles side by side answer *do they agree?* before
 any number has been read.
@@ -586,9 +651,16 @@ an octave the 512-second window could honestly have shown.
 
 Tube A and tube B have colours, used for their identity lines, their per-tube
 readings and their bars in the finest cascade tier. The three spectrum layers
-have colours, used for their bars and their verdict lines. Nothing anywhere is
-labelled "key"; the colour *is* the key, and it is consistent across every
-component that mentions the thing.
+have colours, used for their bars. The five level bands have colours, used for
+the arcs on every dial face, the big number, the cascade's bars and the one
+line of names under the cluster. Nothing anywhere is labelled "key"; the colour
+*is* the key, and it is consistent across every component that mentions the
+thing.
+
+The band names are the single exception, and a deliberate one: the dial's scale
+is fixed, so its colours sit at the same angles for good, and a key that can be
+printed once and stay true is worth the row it costs. A reading is not "above
+240" -- it is a **warning**.
 
 ---
 

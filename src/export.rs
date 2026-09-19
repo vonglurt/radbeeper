@@ -2295,8 +2295,6 @@ mod tests {
         assert!(svg_overlay(&stub).is_empty(), "a single point is not a line");
     }
 
-    use super::*;
-
     #[test]
     fn numbers_are_written_the_way_python_writes_them() {
         assert_eq!(commas(0), "0");
