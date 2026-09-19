@@ -59,7 +59,7 @@ GIFWIDTH ?= 1100
 
 .PHONY: all build test check clippy install uninstall package publish-dry \
         release-check release release-media release-verify bump probe watch \
-        sim service gui gui-build gui-install gui-gif site site-serve \
+        sim service gui gui-build gui-install gui-gif site site-py site-serve \
         py-test py-check py-install promo promo-fast play clean help
 
 all: build
@@ -305,7 +305,16 @@ play:
 # is before they are shown a table of counts. `monitor.html` is the counter's
 # own report, which is what used to be at the root. Both are committed, so
 # Pages serves them with no build step.
-site:
+site: build
+	./$(BIN) pages
+	@test -d logs && ./$(BIN) export --logs logs -o monitor.html \
+	  || echo "  (no logs/ -- monitor.html left alone)"
+
+## site-py: the same site, from the stdlib Python -- what the Action runs
+# BYTE FOR BYTE THE SAME PAGES, and tests/test_differential.py is what says
+# so. This one needs no toolchain, which is why the workflow uses it and why
+# it is not going anywhere.
+site-py:
 	$(PYTHON) tools/landing.py
 	@test -d logs && $(PYTHON) radbeeper export --logs logs -o monitor.html \
 	  || echo "  (no logs/ -- monitor.html left alone)"

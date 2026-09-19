@@ -1230,25 +1230,43 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
                     entropy::pool_status(&pools[0], "next in "), OFF
                 )),
             }
-            // The time now, two rows under the random line whether or not
-            // it has a note yet, so it does not jump when the first line
-            // arrives -- and so a screenshot says when it was taken.
-            if row + 2 < hv.saturating_sub(2) {
-                out.push_str(&format!("{}{}clock{}    {}", at(row + 2, 0), DIM, OFF,
+            // THE CLOCK SITS ON THE TABLE, when there is one.
+            //
+            // It used to be pinned two rows under the random line, which is
+            // where it belongs when nothing follows it: it does not jump as
+            // the first emission arrives, and a screenshot says when it was
+            // taken. But the table is anchored to the BOTTOM of the screen,
+            // and on a short one the content above ran out first -- leaving a
+            // blank row between the clock and the log rows, with everything
+            // else pushed tight. Two things anchored to opposite ends of the
+            // same gap is how that happens.
+            //
+            // So when the table is drawn the clock goes directly above it,
+            // which is also where it reads best: the clock says when, and the
+            // rows under it say what went to disk at that time. `max` keeps
+            // it clear of the random line on a screen tall enough for the
+            // content to reach down that far.
+            let clock_row = if tl > 0 {
+                h.saturating_sub(3 + tl).max(row + 2)
+            } else {
+                row + 2
+            };
+            if clock_row < hv.saturating_sub(2) {
+                out.push_str(&format!("{}{}clock{}    {}", at(clock_row, 0), DIM, OFF,
                                       clock::format(clock::now(), "%Y-%m-%d %H:%M:%S")));
                 // Who else is reading this counter through us. Worth a word
                 // because the whole point of the socket is invisible
                 // otherwise -- a GUI attaching shows up here and nowhere else.
                 match feed.watchers() {
                     0 => {}
-                    1 => out.push_str(&format!("{}{}1 attached{}", at(row + 2, 24), DIM, OFF)),
-                    n => out.push_str(&format!("{}{}{} attached{}", at(row + 2, 24), DIM, n, OFF)),
+                    1 => out.push_str(&format!("{}{}1 attached{}", at(clock_row, 24), DIM, OFF)),
+                    n => out.push_str(&format!("{}{}{} attached{}", at(clock_row, 24), DIM, n, OFF)),
                 }
                 // What the log is doing, beside it: what the backfill found,
                 // or that rows are not reaching the disk.
                 if !table_note.is_empty() && width > 40 + table_note.len() {
                     let tint = if table_note.starts_with("NOT") { YELLOW } else { DIM };
-                    out.push_str(&format!("{}{}{}{}", at(row + 2, 32), tint, table_note, OFF));
+                    out.push_str(&format!("{}{}{}{}", at(clock_row, 32), tint, table_note, OFF));
                 }
             }
         }
@@ -2706,6 +2724,7 @@ fn usage() {
     println!("  radbeeper backfill         fill the log's gaps from the counter's flash");
     println!("  radbeeper log info|pull    what history it holds, or download it");
     println!("  radbeeper export           index.html and random.html, from the logs");
+    println!("  radbeeper pages            the landing page and lab reports, from the documents");
     println!("  radbeeper hotplug          sit in the session, open the monitor on plug-in");
     println!();
     println!("  -d, --device PATH          serial port; repeat it for a second counter");
@@ -2911,6 +2930,17 @@ fn main() {
             std::process::exit(check_random(&p));
         }
         std::process::exit(random(&spans, duration, devices.first().map(|s| s.as_str()), baud, logs));
+    }
+    // `pages`, NOT `site`. `radbeeper site` is already a command and it means
+    // where the COUNTER is -- a place name against a serial over time. This
+    // one builds the GitHub Pages site, and two commands one letter apart
+    // meaning entirely different things is how somebody ends up publishing a
+    // web page when they meant to record a garage.
+    if command == "pages" {
+        // Built from the documents where they are, so the root is the
+        // checkout rather than a log directory: `-o DIR` moves it.
+        let root = output.as_deref().map(std::path::Path::new);
+        std::process::exit(radbeeper::site::run(root));
     }
     if command == "hotplug" {
         let dir = logs.clone().unwrap_or_else(log::state_dir);

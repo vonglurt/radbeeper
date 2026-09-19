@@ -107,7 +107,7 @@ GitHub Pages serves this repository's root, and three generators write into it.
 
 | | |
 |---|---|
-| `index.html` | the landing page, from `README.md` via `tools/landing.py` |
+| `index.html` | the landing page, from `README.md` via `radbeeper pages` |
 | `docs/*.html` | the lab reports, from `docs/*.md`, by the same renderer |
 | `monitor.html` | the counter's report, from `logs/` via `radbeeper export` |
 | `random.html` | the entropy audit, written beside it when there are emissions |
@@ -124,9 +124,27 @@ from the documentation either. A hand-written overview is a second description
 of the program that goes stale the first time the first one changes.
 
 ```sh
-make site          # build all of it
+make site          # build all of it -- the Rust generator
+make site-py       # the same pages, from the stdlib Python
 make site-serve    # and look at it before pushing
 ```
+
+**There are two generators and they agree byte for byte.** `radbeeper pages`
+is the Rust one, and it is what `make release` uses: one binary, one command,
+no interpreter. `tools/landing.py` is stdlib Python with nothing to install,
+which is why the GitHub Action uses it — a push that only touches `logs/`
+rebuilds the site without building the crate first.
+
+Two dialects of one site is exactly the failure that arrangement invites, so
+`tests/test_differential.py` renders every page with both and compares the
+bytes, the same way it does for the log format. It also catches a markdown
+construct somebody uses for the first time that only one of the two renderers
+understands.
+
+> `radbeeper pages`, not `radbeeper site`. `site` is already a command and it
+> means where the *counter* is — a place name against a serial over time. Two
+> commands one letter apart meaning entirely different things is how somebody
+> publishes a web page when they meant to record a garage.
 
 **`radbeeper export` still defaults to `index.html`**, which is the right name
 in a directory of your own and the wrong one here — run in the repository root

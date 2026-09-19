@@ -424,6 +424,7 @@ two programs can both write, and publishing in more detail.
 | `recompute` | fill long-window columns in existing logs from their own counts |
 | `site` | where a counter is, and where it has been |
 | `export` | build `index.html` and `random.html` from the logs |
+| `pages` | build the landing page and the lab reports from the documents |
 | `log info` / `log pull` | how much history the flash holds, and download it |
 
 Options: `--source sim`, `--sim-cpm`, `--seed`, `--spans 3,30,300`,

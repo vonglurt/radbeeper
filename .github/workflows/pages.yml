@@ -30,8 +30,15 @@
 # expire. random.html is written only when there are emissions in logs/, so a
 # fork with none gets no broken link.
 #
-# No pip install, no requirements.txt, no lockfile: both generators are stdlib
-# Python, which is the same reason one of them runs on a Pi Zero.
+# WHY THE PYTHON ONE AND NOT `radbeeper pages`. There are two generators and
+# tests/test_differential.py proves they write the same bytes. The Rust one is
+# what `make release` uses -- one binary, one command. This is the one that
+# needs no toolchain, so a push that only touches logs/ rebuilds the site
+# without building the crate first, which is the property this workflow has
+# always had and is worth keeping.
+#
+# No pip install, no requirements.txt, no lockfile: both generators here are
+# stdlib Python, which is the same reason one of them runs on a Pi Zero.
 name: build the page
 
 on:

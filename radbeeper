@@ -3266,6 +3266,143 @@ def hour_series(counter):
     return out
 
 
+# PORT: replaced by src/export.rs :: together() -- same counts-weighted mean, same sigma, same worst-pair z
+def together(counters, cpm_per_usvh=DEFAULT_CPM_PER_USVH):
+    """What two or more tubes in one room measured, taken together.
+
+    COUNTS-WEIGHTED, WHICH IS THE ONLY DEFENSIBLE MEAN. Adding the counts and
+    adding the seconds gives the rate of the pair; averaging the two rates
+    instead would give a tube that recorded for an hour the same say as one
+    that recorded for a week. Two counters do NOT double the dose -- what
+    doubles is the evidence, and the whole benefit lands in `sigma`.
+
+    None unless at least two tubes have counts.
+    """
+    import math
+    live = [(serial, c) for serial, c in sorted(counters.items())
+            if c["seconds"] > 0 and c["counts"] > 0]
+    if len(live) < 2:
+        return None
+    counts = sum(c["counts"] for _s, c in live)
+    seconds = sum(c["seconds"] for _s, c in live)
+    cpm = counts * 60.0 / seconds
+
+    def rate_of(c):
+        if c["seconds"] <= 0 or c["counts"] <= 0:
+            return None
+        r = c["counts"] / c["seconds"]
+        return r, r / math.sqrt(c["counts"])
+
+    # DO THEY AGREE? Two identical tubes in one room should, to within a
+    # couple of sigma; a difference that keeps growing is the tubes being
+    # different, not the room being interesting, and it is the one question
+    # a second instrument exists to answer.
+    worst = None
+    for i in range(len(live)):
+        for j in range(i + 1, len(live)):
+            a, b = rate_of(live[i][1]), rate_of(live[j][1])
+            if not a or not b:
+                continue
+            sd = math.sqrt(a[1] * a[1] + b[1] * b[1])
+            if sd <= 0:
+                continue
+            z = abs((a[0] - b[0]) / sd)
+            if worst is None or z > worst[0]:
+                worst = (z, live[i][0], live[j][0])
+    return {
+        "tubes": len(live),
+        "counts": counts,
+        "seconds": seconds,
+        "cpm": cpm,
+        "usvh": cpm / cpm_per_usvh if cpm_per_usvh else 0.0,
+        "sigma": cpm / math.sqrt(counts) if counts > 0 else 0.0,
+        "worst": worst,
+    }
+
+
+# PORT: replaced by src/export.rs :: agreement() -- the same three verdicts at the same two thresholds
+def agreement(z):
+    """How to read a disagreement, in the words it deserves."""
+    if z < 2.0:
+        return "they agree"
+    if z < 4.0:
+        return "they differ -- watch it"
+    return "they disagree -- not the same measurement"
+
+
+# PORT: replaced by src/export.rs :: svg_overlay() -- the same axes, the same four colours, the same coordinates to the tenth
+def svg_overlay(series, width=1120, height=560, pad_l=52, pad_b=26, pad_t=12,
+                pad_r=10):
+    """Every tube's hourly mean on one pair of axes, in one colour each.
+
+    THE POINT IS THE TRACKING, NOT THE VALUES. Two counters watching one room
+    should draw the same shape; where they part company is where something is
+    wrong with a tube, a cable or a pass-through, and no table of averages
+    shows that as fast as two lines that stop being parallel.
+
+    NO PEAK LINE AND NO MINOR GRID, unlike svg_plot: this chart is read by
+    comparing shapes, and four peak traces over four mean traces is eight
+    lines nobody can follow.
+    """
+    import math
+    live = [(serial, s) for serial, s in series if len(s) >= 2]
+    if len(live) < 2:
+        return ""
+    values = [m for _serial, s in live for _t, m, _p in s if m > 0]
+    if not values:
+        return ""
+    lo = 10.0 ** math.floor(math.log10(min(values)))
+    hi = 10.0 ** math.ceil(math.log10(max(values)))
+    if hi <= lo:
+        hi = lo * 10.0
+    span_y = math.log10(hi) - math.log10(lo)
+    t0 = min(s[0][0] for _serial, s in live)
+    t1 = max(s[-1][0] for _serial, s in live)
+    span = (t1 - t0) or 1.0
+    iw = width - pad_l - pad_r
+    ih = height - pad_t - pad_b
+    X = lambda t: pad_l + iw * (t - t0) / span
+    Y = lambda v: pad_t + ih * (1.0 - (math.log10(max(v, lo)) - math.log10(lo))
+                                / span_y)
+    step = 3600 * 1.5
+
+    out = ['<svg class="plot" viewBox="0 0 %d %d" width="100%%" '
+           'preserveAspectRatio="xMidYMid meet" role="img" '
+           'aria-label="counts per minute over time, every counter">'
+           % (width, height)]
+    decade = lo
+    while decade <= hi * 1.0001:
+        y = Y(decade)
+        out.append('<line class="grid" x1="%d" y1="%.1f" x2="%d" y2="%.1f"/>'
+                   % (pad_l, y, width - pad_r, y))
+        out.append('<text class="ylab" x="%d" y="%.1f">%s</text>'
+                   % (pad_l - 8, y + 4, "{:,}".format(int(decade))))
+        decade *= 10.0
+    day = 86400.0
+    t = t0 - (t0 % day) + day
+    while t < t1:
+        x = X(t)
+        out.append('<line class="grid" x1="%.1f" y1="%d" x2="%.1f" y2="%d"/>'
+                   % (x, pad_t, x, pad_t + ih))
+        out.append('<text class="xlab" x="%.1f" y="%d">%s</text>'
+                   % (x, height - 8,
+                      time.strftime("%b %-d", time.localtime(t))))
+        t += day
+    for i, (serial, points) in enumerate(live):
+        d, last = [], None
+        for when, mean, _peak in points:
+            letter = "M" if last is None or when - last > step else "L"
+            d.append("%s%.1f %.1f" % (letter, X(when), Y(mean)))
+            last = when
+        out.append('<path class="tube t%d" d="%s"/>' % (i % 4, " ".join(d)))
+        out.append('<text class="key t%d" x="%d" y="%d">%s</text>'
+                   % (i % 4, pad_l + 8, pad_t + 16 + 15 * i, esc(serial)))
+    out.append('<text class="ycap" x="%d" y="%d">CPM, log</text>'
+               % (pad_l - 44, pad_t + 10))
+    out.append("</svg>")
+    return "".join(out)
+
+
 # PORT: replaced by src/export.rs :: svg_plot() -- same name, same log axis and broken line, the same coordinates to the tenth
 def svg_plot(series, width=1120, height=1200, pad_l=52, pad_b=26, pad_t=12,
              pad_r=10):
@@ -3427,6 +3564,15 @@ def page_head(title, extra=()):
     a(".plot .mean{fill:none;stroke:var(--accent);stroke-width:1.6;"
       "stroke-linejoin:round;stroke-linecap:round}")
     a(".plot .peak{fill:none;stroke:var(--warn);stroke-width:1;opacity:.55}")
+    # One colour per tube, shared by its line and its key, so the overlay is
+    # read by colour and needs no legend anywhere else.
+    a(".plot .tube{fill:none;stroke-width:1.6;stroke-linejoin:round;"
+      "stroke-linecap:round;opacity:.9}")
+    a(".plot .key{font-size:12px;text-anchor:start}")
+    a(".plot .t0{stroke:#6cc6ff;fill:#6cc6ff}")
+    a(".plot .t1{stroke:#c9a0ff;fill:#c9a0ff}")
+    a(".plot .t2{stroke:#7ee787;fill:#7ee787}")
+    a(".plot .t3{stroke:#ffa657;fill:#ffa657}")
     a(".plot text{fill:var(--dim);font-size:11px;"
       "font-family:system-ui,sans-serif}")
     a(".plot .ylab{text-anchor:end}")
@@ -3471,8 +3617,19 @@ def page_head(title, extra=()):
 
 # PORT: replaced by src/export.rs :: render_html() -- same name; index.html is the same bytes from either
 def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
-                title="Radiation monitor", shots=None, random_link=None):
-    """One self-contained page: no scripts, no fetches, no web fonts."""
+                title="Radiation monitor", shots=None, randoms=None):
+    """One self-contained page: no scripts, no fetches, no web fonts.
+
+    `randoms` is one audit page per counter, by serial. It used to be a single
+    link, which silently dropped every tube's emissions but the first: with two
+    counters plugged in, half the record simply had no page and nothing said
+    so. An emission is an audit trail of ONE source and is recomputed from that
+    source's own counts, so it cannot be merged with another's either.
+    """
+    randoms = randoms or {}
+    # The lede links the first, because the paragraph is about the idea rather
+    # than about any one tube. Each counter's own section links its own.
+    random_link = next(iter(randoms.values()), None)
     when = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t))
     out = page_head(title)
     a = out.append
@@ -3500,6 +3657,56 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
     if not counters:
         a("<p>No logs found. Put <code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code> "
           "files beside this page and run <code>radbeeper export</code>.</p>")
+    # BOTH TUBES, BEFORE EITHER OF THEM. With one counter this is not drawn
+    # at all; with two it is the first thing on the page, because the pair is
+    # the measurement and the individual tubes are how it was arrived at.
+    t = together(counters, cpm_per_usvh)
+    if t:
+        a("<h2>Both counters</h2>")
+        a('<div class="cards">')
+
+        def card(k, v, n):
+            return ('<div class="card"><div class="k">' + esc(k)
+                    + '</div><div class="v">' + esc(v) + "</div>"
+                    + ('<div class="n">' + esc(n) + "</div>" if n else "")
+                    + "</div>")
+
+        a(card("Mean, together", "%.1f CPM" % t["cpm"],
+               "%.3f uSv/h" % t["usvh"]))
+        # THE CHARACTER, NOT THE ENTITY. `card` escapes its value, so
+        # "&plusmn;" would arrive on the page as those nine letters. The
+        # document is utf-8 and has been since the first line of it.
+        a(card("Precision", "\u00b1%.1f CPM" % t["sigma"],
+               "%.2f%% of the mean"
+               % (100.0 * t["sigma"] / max(t["cpm"], 1e-9))))
+        a(card("Arrivals behind it", "{:,}".format(t["counts"]),
+               "over %.1f tube-hours" % (t["seconds"] / 3600.0)))
+        if t["worst"]:
+            a(card("Do they agree?", agreement(t["worst"][0]),
+                   "widest gap %.1f sigma" % t["worst"][0]))
+        else:
+            a(card("Do they agree?", "--", "not enough counts yet"))
+        a("</div>")
+        a('<p class="note">Two tubes watching one room are two measurements '
+          "of one number: they do <strong>not</strong> double the dose "
+          "&mdash; what doubles is the evidence. The mean above is "
+          "counts-weighted across %d tubes, and the precision is all a "
+          "second counter buys: arrivals are Poisson, so N of them are known "
+          "to 1/&radic;N and twice the counts is a factor of &radic;2 "
+          "better. The agreement is the one question a second instrument "
+          "exists to answer &mdash; identical tubes in one room should sit "
+          "within about two sigma of each other, and a gap that keeps "
+          "growing is the tubes differing, not the room being interesting."
+          "</p>" % t["tubes"])
+        plot = svg_overlay([(serial, hour_series(counters[serial]))
+                            for serial in sorted(counters)])
+        if plot:
+            a('<div class="plotwrap">' + plot + "</div>")
+            a('<p class="note">Every counter\'s hourly mean, one colour each. '
+              "Two tubes in one room draw the same shape; where they stop "
+              "being parallel is where something is wrong with a tube, a "
+              "cable or a pass-through, and no table of averages shows that "
+              "as quickly.</p>")
     for serial in sorted(counters):
         c = counters[serial]
         here = site_at(serial, c["last"] or export_now(), sites)
@@ -3572,6 +3779,13 @@ def render_html(counters, sites, cpm_per_usvh=DEFAULT_CPM_PER_USVH,
               + " &middot; ".join('<a href="%s">%s</a>' % (href, esc(name))
                                   for name, href in c["links"])
               + " &mdash; tab-separated, one row every 30 seconds.</p>")
+        # THIS TUBE'S OWN AUDIT PAGE. Each counter's emissions are recomputed
+        # from that counter's own counts and belong to it alone, so the link
+        # lives in its section rather than once at the top of the page.
+        if randoms.get(serial):
+            a('<p class="more"><a href="' + esc(randoms[serial])
+              + '">Where this counter\'s random comes from</a> &mdash; every '
+              "line it has emitted, with the counts behind it.</p>")
 
     # THE HOW-TO AND THE DATA ON ONE PAGE. Somebody arriving from a link
     # wants to know what they are looking at and how to get their own; putting
@@ -4216,26 +4430,39 @@ def cmd_export(args):
         pools = read_random(path)
         if pools:
             randoms.append((serial, pools))
-    random_out = None
-    if randoms and not args.no_random_page:
-        random_out = args.random_output or os.path.join(
-            out_dir, "random.html")
-        serial, pools = randoms[0]
-        with open(random_out, "w") as f:
-            f.write(render_random_html(
-                serial, pools, index=os.path.basename(out)))
-    link = os.path.relpath(random_out, out_dir) if random_out else None
+    # ONE AUDIT PAGE PER COUNTER, NOT ONE PER MACHINE. This used to write the
+    # first counter's emissions and silently drop every other tube's: with two
+    # counters plugged in, half the record simply had no page and nothing said
+    # so. An emission is an audit trail of ONE source and is recomputed from
+    # that source's own counts, so it cannot be merged with another's either.
+    #
+    # The first keeps the name `random.html` -- or whatever --random-output
+    # asked for -- so a page that has always been at that address still is.
+    # The rest go beside it as `random-<serial>.html`.
+    random_pages = []
+    if not args.no_random_page:
+        for i, (serial, pools) in enumerate(randoms):
+            if i == 0:
+                target = args.random_output or os.path.join(
+                    out_dir, "random.html")
+            else:
+                target = os.path.join(out_dir, "random-%s.html" % serial)
+            with open(target, "w") as f:
+                f.write(render_random_html(
+                    serial, pools, index=os.path.basename(out)))
+            random_pages.append((serial, target, len(pools)))
+    links = dict((serial, os.path.relpath(target, out_dir))
+                 for serial, target, _ in random_pages)
     html = render_html(counters, sites, args.cpm_per_usvh, args.title, shots,
-                       random_link=link)
+                       randoms=links)
     with open(out, "w") as f:
         f.write(html)
     rows = sum(c["rows"] for c in counters.values())
     print("radbeeper: %s -- %d counter%s, %d rows"
           % (out, len(counters), "" if len(counters) == 1 else "s", rows))
-    if random_out:
+    for _serial, target, n in random_pages:
         print("radbeeper: %s -- %d emission%s"
-              % (random_out, len(randoms[0][1]),
-                 "" if len(randoms[0][1]) == 1 else "s"))
+              % (target, n, "" if n == 1 else "s"))
     return 0
 
 

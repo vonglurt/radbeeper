@@ -1053,6 +1053,84 @@ def build_binary():
     return binary if os.path.exists(binary) else None
 
 
+class TestTheTwoSiteGeneratorsWriteTheSamePages(unittest.TestCase):
+    """`radbeeper pages` and tools/landing.py agree, byte for byte.
+
+    TWO GENERATORS FOR ONE SITE, AND THE SAME ARGUMENT AS THE LOG FORMAT. The
+    Python one exists so the GitHub Action can rebuild the site with no
+    toolchain at all -- stdlib only, nothing to install -- and the Rust one
+    exists so `make release` is one binary and one command. Two dialects of a
+    site is the failure this comparison prevents: a landing page that said one
+    thing when a bot built it and another when a person did.
+
+    The documents are the repository's own, so this also catches a markdown
+    construct somebody uses for the first time that only one of the two
+    renderers understands.
+    """
+
+    BINARY = os.path.join(ROOT, "target", "release", "radbeeper")
+
+    def build_both(self):
+        import shutil
+        import tempfile
+        out = []
+        for i, how in enumerate(("python", "rust")):
+            d = tempfile.mkdtemp()
+            self.addCleanup(shutil.rmtree, d, ignore_errors=True)
+            shutil.copy(os.path.join(ROOT, "README.md"), d)
+            shutil.copy(os.path.join(ROOT, "Cargo.toml"), d)
+            shutil.copytree(os.path.join(ROOT, "docs"), os.path.join(d, "docs"),
+                            ignore=shutil.ignore_patterns("screenshots", "*.html"))
+            if how == "python":
+                r = subprocess.run(
+                    [sys.executable, os.path.join(ROOT, "tools", "landing.py"),
+                     "--quiet"],
+                    cwd=d, capture_output=True, text=True, timeout=120)
+            else:
+                r = subprocess.run([self.BINARY, "pages", "-o", d],
+                                   cwd=d, capture_output=True, text=True,
+                                   timeout=120)
+            self.assertEqual(r.returncode, 0, "%s: %s" % (how, r.stderr))
+            out.append(d)
+        return out
+
+    def test_every_page_is_the_same_bytes(self):
+        if not os.path.exists(self.BINARY):
+            self.skipTest("no Rust build")
+        py, rs = self.build_both()
+        names = set()
+        for base in (py, rs):
+            for root, _dirs, files in os.walk(base):
+                for f in files:
+                    if f.endswith((".html", ".xml", ".txt")) or f == ".nojekyll":
+                        names.add(os.path.relpath(os.path.join(root, f), base))
+        self.assertTrue(names, "neither generator wrote anything")
+        # The landing page, every lab report, the docs index, the archive, the
+        # sitemap and robots.txt -- all of it, or the comparison is worth less
+        # than it looks.
+        self.assertIn("index.html", names)
+        self.assertIn(os.path.join("docs", "the-log.html"), names)
+        self.assertIn("sitemap.xml", names)
+        for name in sorted(names):
+            a = os.path.join(py, name)
+            b = os.path.join(rs, name)
+            self.assertTrue(os.path.exists(a), "only the Rust wrote %s" % name)
+            self.assertTrue(os.path.exists(b), "only the Python wrote %s" % name)
+            with open(a, "rb") as f:
+                want = f.read()
+            with open(b, "rb") as f:
+                got = f.read()
+            if want == got:
+                continue
+            at = 0
+            while at < min(len(want), len(got)) and want[at] == got[at]:
+                at += 1
+            self.fail("%s differs at byte %d of %d:\n  python %r\n  rust   %r"
+                      % (name, at, len(want),
+                         want[max(0, at - 80):at + 80],
+                         got[max(0, at - 80):at + 80]))
+
+
 class TestTheTwoExportsWriteTheSamePages(unittest.TestCase):
     """index.html and random.html, from both, compared byte for byte.
 
