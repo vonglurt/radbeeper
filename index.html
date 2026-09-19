@@ -139,7 +139,7 @@ machine</strong> this project's own screenshots come from.</p></div>
 <p>MIT · <code>0.4.1</code> · <code>cargo install radbeeper</code> · one dependency, and it is <code>libc</code></p>
 <p><strong><a href="https://vonglurt.github.io/radbeeper/">vonglurt.github.io/radbeeper</a></strong> — this page, the lab reports, and <a href="https://vonglurt.github.io/radbeeper/monitor.html">a live counter's report</a> built from the logs in this repository.</p>
 <p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui.gif" alt="radbeeper-gui: two counters, in real time" loading="lazy"></p>
-<p><strong>Twenty-four seconds of two counters, in real time</strong>, attached to the service that is logging them — which never notices. Two dials, five averaging windows with the precision of each, a strip of counts that compresses as it ages, three spectra looking for anything arriving on a schedule, and 256 bits of hex out of the timing of decay.</p>
+<p><strong>Twenty-four seconds of two counters, in real time</strong>, attached to radbeeper service daemon. GUI visuals like analogue dial meters, five averaging windows with the precision of each, a strip of counts that compresses as it ages, three spectra of FFT.</p>
 <p>Plug a counter into a machine running Alpine — <strong>including a VM with the counter passed through, which is what these logs were taken on</strong> — switch it on, and RadBeeper finds it, shows what it is counting, pulls the history it recorded while nobody was watching, and builds a web page out of the result.</p>
 <pre><code class="language-sh">cargo install radbeeper            # or a static binary from the releases page
 doas adduser $USER dialout         # once, then log out and back in
