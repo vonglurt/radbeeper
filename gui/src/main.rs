@@ -28,7 +28,8 @@ use std::time::{Duration, Instant};
 use iced::widget::{canvas, column, container, row, stack, text, Space};
 use iced::{Color, Element, Fill, Font, Length, Rectangle, Renderer, Subscription, Theme};
 use radbeeper::analysis::{
-    bar_seconds, level, span_words, tiers_with, Level, Spectrum, Tier, Windows, TIERS,
+    band, bar_seconds, span_words, tiers_interleaved, tiers_with, Band, Spectrum,
+    Tier, Windows, TIERS,
 };
 use radbeeper::broker::{self, Client, CounterId, Event};
 use radbeeper::{clock, entropy, log};
@@ -55,6 +56,16 @@ const ROWS: usize = 6;
 /// columns to the width it is handed.
 const STRIP_COLS: usize = 240;
 
+/// How long the cascade's vertical scale takes to forget a spike.
+///
+/// THE SCALE WAS BREATHING. Taking the tallest bar in view as the top means
+/// every burst rescales the whole strip and every quiet second rescales it
+/// back, so the bars a person is trying to read never stand still. The top
+/// now rises the instant something exceeds it and sinks over half a minute,
+/// which is long enough that ordinary Poisson lumpiness does not move it at
+/// all.
+const PEAK_TAU: f64 = 30.0;
+
 /// How tall each band of the instrument panel is inside the one canvas.
 ///
 /// THE WHOLE PANEL IS ONE CANVAS, dials and charts together, because only the
@@ -65,6 +76,18 @@ const STRIP_COLS: usize = 240;
 /// band of empty grey under the table on a tall window and clip them on a
 /// short one.
 const CLUSTER_H: f32 = 132.0;
+
+/// How tall the dial band actually is, given how many rows of per-tube
+/// readings have to sit beside it.
+///
+/// THE BAND CANNOT BE A CONSTANT ONCE THE TUBE COUNT IS NOT. Nine counters is
+/// two more rows of numbers than one counter, and a fixed band let them
+/// overflow into the cascade's captions -- two pieces of text on top of each
+/// other, which is the one thing a dense panel must never do.
+fn cluster_h(tubes: usize) -> f32 {
+    let rows = if tubes > 1 { tubes.div_ceil(5) } else { 0 };
+    CLUSTER_H + rows as f32 * 12.0
+}
 /// The cascade's share of the space under the dials.
 const CASCADE_SHARE: f32 = 0.62;
 
@@ -207,6 +230,45 @@ fn main() -> iced::Result {
 
 // ---------------------------------------------------------------- messages ---
 
+/// A held range that snaps outward and drifts back like molasses.
+///
+/// A PEAK HOLD THAT FORGETS SLOWLY. The needle bounces around several times a
+/// second and the eye cannot integrate that; what a person actually wants off
+/// a dial is *where has it been lately*. So each extreme moves out instantly
+/// when the reading pushes past it -- the needle shoves the bug -- and creeps
+/// back toward the reading with a time constant of the window it stands for.
+/// A true windowed min and max would be exact and would also lurch every time
+/// an old extreme fell out of the window, which on a dial reads as a fault.
+#[derive(Debug, Clone, Copy)]
+struct Drift {
+    lo: f64,
+    hi: f64,
+    tau: f64,
+    seeded: bool,
+}
+
+impl Drift {
+    fn new(tau: f64) -> Drift {
+        Drift { lo: 0.0, hi: 0.0, tau, seeded: false }
+    }
+
+    fn push(&mut self, v: f64, dt: f64) {
+        if !self.seeded {
+            self.lo = v;
+            self.hi = v;
+            self.seeded = true;
+            return;
+        }
+        let creep = 1.0 - (-dt / self.tau).exp();
+        self.hi = if v > self.hi { v } else { self.hi + (v - self.hi) * creep };
+        self.lo = if v < self.lo { v } else { self.lo + (v - self.lo) * creep };
+    }
+
+    fn range(&self) -> Option<(f64, f64)> {
+        self.seeded.then_some((self.lo, self.hi))
+    }
+}
+
 /// One spectrum of the overlay, as the interface needs it.
 #[derive(Debug, Clone)]
 struct Layer {
@@ -234,6 +296,16 @@ struct Snapshot {
     headline_sigma: Option<f64>,
     now: u32,
     total: u64,
+    /// The combined reading at one-second resolution -- what the collecting
+    /// meter's needle sits at, and what pushes its bugs about.
+    live: Option<f64>,
+    /// The half-minute and minute ranges that needle has been bouncing
+    /// between, drifting inward.
+    range30: Option<(f64, f64)>,
+    range60: Option<(f64, f64)>,
+    /// The cascade's vertical scale, held so it does not breathe. See
+    /// PEAK_TAU.
+    peak: f64,
     /// Mean gap between one tube's sample and the next tube's, in seconds.
     /// Half a second is the ideal interleave; see `phase_note`.
     phase: Option<f64>,
@@ -244,7 +316,9 @@ struct Snapshot {
     samples: i64,
     every: i64,
     layers: Vec<Layer>,
-    random: Option<(String, String, bool)>,
+    /// Which tube drew it, the line, when, and whether its spectrum was
+    /// flat at the time. An emission is an audit record of ONE source.
+    random: Option<(usize, String, String, bool)>,
     pool: String,
     rows: Vec<Vec<String>>,
     columns: Vec<String>,
@@ -326,39 +400,88 @@ impl App {
         };
 
         let tubes = s.tubes();
-        let tint = s.headline.map(|c| colour(level(c))).unwrap_or(DIM);
+        let tint = s.headline.map(|c| colour(band(c))).unwrap_or(DIM);
 
-        // ---- the counters, one tight line each -------------------------
-        let mut who = column![].spacing(0);
-        for (k, c) in s.counters.iter().enumerate() {
-            who = who.push(
-                mono(format!(
-                    "{} {} \u{b7} {} \u{b7} {}",
-                    tube_name(k),
-                    c.path,
-                    c.version,
-                    c.serial_no
-                ))
-                .size(10)
-                .color(if tubes > 1 && k == 1 { TUBE_B } else if tubes > 1 { TUBE_A } else { DIM }),
-            );
-        }
-
-        // ---- the dials -------------------------------------------------
+        // ---- who is on the other end ------------------------------------
         //
-        // ONE PER TUBE WHEN THERE ARE TWO, because the only question a second
-        // instrument answers is whether it agrees with the first, and two
-        // needles side by side answer it before any number is read. With one
-        // counter the single dial shows the reading everything else does.
-        let dials: Vec<(Option<f64>, f64)> = if tubes > 1 {
-            s.per.iter().map(|v| (*v, dial_range(v.unwrap_or(0.0)))).collect()
+        // ONE LINE WHATEVER THE COUNT. Nine counters listed one per line is
+        // nine lines of a panel that is trying to be dense; the per-tube
+        // readings below already carry the letters and the colours, so this
+        // only has to say what they are and where.
+        let firmwares: std::collections::BTreeSet<&str> =
+            s.counters.iter().map(|c| c.version.as_str()).collect();
+        let who: Element<Message> = if tubes <= 2 {
+            let mut col = column![].spacing(0);
+            for (k, c) in s.counters.iter().enumerate() {
+                col = col.push(
+                    mono(format!(
+                        "{} {} \u{b7} {} \u{b7} {}",
+                        tube_name(k), c.path, c.version, c.serial_no
+                    ))
+                    .size(10)
+                    .color(if tubes > 1 { tube_colour(k) } else { DIM }),
+                );
+            }
+            col.into()
         } else {
-            vec![(s.headline, dial_range(s.headline.unwrap_or(0.0)))]
+            mono(format!(
+                "{} tubes \u{b7} {} \u{b7} {} \u{2026} {}",
+                tubes,
+                firmwares.into_iter().collect::<Vec<_>>().join(", "),
+                s.counters.first().map(|c| c.path.as_str()).unwrap_or(""),
+                s.counters.last().map(|c| c.path.as_str()).unwrap_or("")
+            ))
+            .size(10)
+            .color(DIM)
+            .into()
         };
-        let dials_w = DIAL_W * dials.len() as f32;
+
+        // ---- the dials --------------------------------------------------
+        //
+        // EVENS ON THE LEFT FACE, ODDS ON THE RIGHT. With one counter there
+        // is one face and one needle; with two, a face each; with nine, five
+        // needles on the left and four on the right. Needles on one face
+        // share a scale, because the only question several tubes in one room
+        // raise is whether they agree, and two angles can only be compared
+        // when they mean the same thing.
+        // ONE METER RAW, ONE METER COLLECTED. The left face carries a needle
+        // per tube -- every input, unaveraged, in its own colour -- so a tube
+        // that has wandered off is a needle that has wandered off. The right
+        // face carries ONE needle, the whole-second collection at the
+        // resolution the log is written in, and the ranges it has been
+        // bouncing between. The first answers "do they agree?", the second
+        // answers "what is the room doing?", and neither answers the other.
+        //
+        // They share a scale, because two dials that do not are two dials
+        // that cannot be compared, which is the only reason to draw them side
+        // by side.
+        let top = s
+            .per
+            .iter()
+            .filter_map(|v| *v)
+            .chain(s.live)
+            .chain(s.range60.map(|(_, hi)| hi))
+            .fold(0.0f64, f64::max);
+        let full = dial_range(top);
+        let faces: Vec<Face> = vec![
+            Face {
+                needles: (0..tubes).map(|k| (k, s.per.get(k).copied().flatten())).collect(),
+                full,
+                range30: None,
+                range60: None,
+            },
+            Face {
+                needles: vec![(usize::MAX, s.live)],
+                full,
+                range30: s.range30,
+                range60: s.range60,
+            },
+        ];
 
         let chart = canvas(Chart {
-            dials: dials.clone(),
+            cluster: cluster_h(tubes),
+            peak: s.peak,
+            dials: faces.clone(),
             strip: s.strip.clone(),
             sources: s.sources.clone(),
             tubes,
@@ -369,28 +492,44 @@ impl App {
         .width(Fill)
         .height(Fill);
 
-        // The numerals that belong on the faces: the reading in the lower
-        // half of each dial, and what it is under that, as a marine gauge
-        // puts its digits on a black face.
-        let mut faces = row![].spacing(0);
-        for (k, (v, full)) in dials.iter().enumerate() {
-            faces = faces.push(
+        // The numerals that belong on the faces: what the face reads in the
+        // lower half of it, and which tubes are on it under that.
+        let mut dial_faces = row![].spacing(0);
+        for (fi, face) in faces.iter().enumerate() {
+            let live: Vec<f64> = face.needles.iter().filter_map(|(_, v)| *v).collect();
+            let mean = (!live.is_empty())
+                .then(|| live.iter().sum::<f64>() / live.len() as f64);
+            let caption: Element<Message> = if fi == 0 {
+                let mut letters = row![].spacing(3);
+                for (k, _) in face.needles.iter().take(10) {
+                    letters = letters.push(
+                        mono(tube_name(*k)).size(9).color(tube_colour(*k)),
+                    );
+                }
+                letters.into()
+            } else {
+                mono(match (s.range30, s.range60) {
+                    (Some((l, h)), _) => format!("{:.0}\u{2013}{:.0}", l, h),
+                    _ => "range".into(),
+                })
+                .size(9)
+                .color(Color { a: 0.85, ..HUD })
+                .into()
+            };
+            dial_faces = dial_faces.push(
                 container(
                     column![
-                        Space::new().height(56.0),
-                        mono(match v {
+                        Space::new().height(54.0),
+                        mono(match mean {
                             Some(v) => format!("{:.0}", v),
                             None => "--".into(),
                         })
                         .size(19)
-                        .color(v.map(|v| colour(level(v))).unwrap_or(DIM)),
-                        mono(if tubes > 1 {
-                            format!("{} \u{b7} {:.0}", tube_name(k), full)
-                        } else {
-                            format!("CPM \u{b7} {:.0}", full)
-                        })
-                        .size(9)
-                        .color(FAINT),
+                        .color(mean.map(|v| colour(band(v))).unwrap_or(DIM)),
+                        caption,
+                        mono(if fi == 0 { "raw".to_string() } else { "1s \u{b7} held".to_string() })
+                            .size(9)
+                            .color(FAINT),
                     ]
                     .spacing(0)
                     .align_x(iced::Center),
@@ -406,7 +545,7 @@ impl App {
             let label = mono(format!("{:>6}s", *span as i64)).size(10).color(DIM);
             let body: Element<Message> = match avg {
                 Some(cpm) => row![
-                    mono(format!("{:>8.1}", cpm)).size(10).color(colour(level(*cpm))),
+                    mono(format!("{:>8.1}", cpm)).size(10).color(colour(band(*cpm))),
                     mono(format!("{:>8.3}", cpm / self.cpm_per_usvh)).size(10).color(DIM),
                     mono(match sd {
                         // A WINDOW THAT IS FULL SAYS HOW WELL IT KNOWS ITS
@@ -431,6 +570,27 @@ impl App {
                 .into(),
             };
             windows = windows.push(row![label, body].spacing(6));
+        }
+
+        // EVERY TUBE'S OWN NUMBER, in its own colour, chunked so that nine of
+        // them are three short rows and not one that runs off the panel. The
+        // needles say the same thing at a glance; this is for reading off.
+        let mut per_grid = column![].spacing(0);
+        if tubes > 1 {
+            for chunk in (0..tubes).collect::<Vec<_>>().chunks(5) {
+                let mut line = row![].spacing(7);
+                for k in chunk {
+                    line = line.push(
+                        mono(match s.per.get(*k).copied().flatten() {
+                            Some(v) => format!("{} {:>5.0}", tube_name(*k), v),
+                            None => format!("{}    --", tube_name(*k)),
+                        })
+                        .size(10)
+                        .color(tube_colour(*k)),
+                    );
+                }
+                per_grid = per_grid.push(line);
+            }
         }
 
         let numbers = column![
@@ -462,6 +622,7 @@ impl App {
             ]
             .spacing(8),
             windows,
+            per_grid,
             mono(format!(
                 "now {:<4} run {} in {}s{}",
                 s.now,
@@ -469,7 +630,7 @@ impl App {
                 s.elapsed.round() as i64,
                 match (tubes, s.phase) {
                     (1, _) => String::new(),
-                    (n, Some(p)) => format!("  {} tubes {}", n, phase_note(p)),
+                    (n, Some(p)) => format!("  {} tubes {}", n, phase_note(p, n)),
                     (n, None) => format!("  {} tubes averaged", n),
                 }
             ))
@@ -479,17 +640,27 @@ impl App {
         .spacing(1);
 
         // ---- the cascade captions, over the tiers they describe ---------
+        // A CAPTION HAS TO FIT ITS TIER. Four tiers across a window have room
+        // for "F 4s/bar . 3m"; eight do not, and a caption that wraps lands on
+        // the strip it is labelling. Past five tiers it says the one thing
+        // that cannot be inferred -- how much time a bar holds -- and drops
+        // the rest, which the tier widths already show.
+        let terse = s.strip.len() > 5;
         let mut caps = row![].spacing(0);
         for (ti, t) in s.strip.iter().enumerate() {
             caps = caps.push(
                 container(
-                    mono(format!(
-                        "{}{}s/bar \u{b7} {}",
-                        if ti == 0 { "" } else { "F " },
-                        bar_seconds(t.seconds),
-                        span_words(t.columns as f64 * t.seconds)
-                    ))
-                    .size(10)
+                    mono(if terse {
+                        format!("{}s", bar_seconds(t.seconds))
+                    } else {
+                        format!(
+                            "{}{}s/bar \u{b7} {}",
+                            if ti == 0 { "" } else { "F " },
+                            bar_seconds(t.seconds),
+                            span_words(t.columns as f64 * t.seconds)
+                        )
+                    })
+                    .size(if terse { 9 } else { 10 })
                     .color(DIM),
                 )
                 .width(Length::FillPortion(t.columns as u16)),
@@ -504,14 +675,13 @@ impl App {
         let panel = stack![
             chart,
             column![
-                container(row![faces, Space::new().width(6.0), numbers].spacing(0))
-                    .height(Length::Fixed(CLUSTER_H)),
+                container(row![dial_faces, Space::new().width(6.0), numbers].spacing(0))
+                    .height(Length::Fixed(cluster_h(tubes))),
                 caps,
                 Space::new().height(Fill),
             ]
             .spacing(0),
         ];
-        let _ = dials_w;
 
         // ---- the spectrum's axis and its verdict ------------------------
         let (shortest, longest) = ladder_ends(&s.layers);
@@ -533,13 +703,19 @@ impl App {
 
         // ---- one line for the emission, one for the clock ---------------
         let random: Element<Message> = match &s.random {
-            Some((hex, at, suspect)) => column![
-                mono(entropy::group_hex(hex))
-                    .size(11)
-                    .color(if *suspect { WARN } else { CYAN }),
+            Some((who, hex, at, suspect)) => column![
+                row![
+                    mono(format!("{} ", tube_name(*who)))
+                        .size(11)
+                        .color(tube_colour(*who)),
+                    mono(entropy::group_hex(hex))
+                        .size(11)
+                        .color(if *suspect { WARN } else { CYAN }),
+                ],
                 mono(format!(
-                    "{} bits at {} \u{b7} {}{}",
+                    "{} bits from {} at {} \u{b7} {}{}",
                     entropy::ENTROPY_BITS as i64,
+                    s.counters.get(*who).map(|c| c.serial_no.as_str()).unwrap_or("?"),
                     at,
                     s.pool,
                     if *suspect { " \u{b7} SPECTRUM NOT FLAT, suspect" } else { "" }
@@ -592,19 +768,31 @@ fn tube_name(k: usize) -> String {
     format!("{}", (b'A' + (k as u8 % 26)) as char)
 }
 
-/// What the measured interleave is worth.
+/// What the measured interleave is worth, against what n tubes could manage.
 ///
-/// TWO COUNTERS ONLY SHARPEN TIME IF THEY DISAGREE ABOUT WHEN A SECOND
-/// STARTS. Each has its own clock and its own phase and neither can be
-/// steered, so the offset is whatever it is -- half a second is a perfect
-/// interleave and near zero is two tubes reporting together, which still
-/// doubles the counts and buys the precision but adds no time resolution at
-/// all. Measuring it is the only honest thing to do, since claiming "0.5s per
-/// bar" when the two fire together would be a lie the display tells itself.
-fn phase_note(gap: f64) -> String {
-    let ideal = 0.5;
-    let quality = 1.0 - (gap - ideal).abs() / ideal;
-    format!("\u{b7} interleave {:.2}s ({:.0}%)", gap, (quality.max(0.0) * 100.0))
+/// TUBES ONLY SHARPEN TIME IF THEY DISAGREE ABOUT WHEN A SECOND STARTS. Each
+/// has its own clock and its own phase and none can be steered, so the offset
+/// is whatever it is. THE IDEAL IS 1/n OF A SECOND, not half of one: two tubes
+/// perfectly interleaved are half a second apart, nine are a ninth. Measuring
+/// it against a fixed half-second -- which this did until nine counters were
+/// plugged in -- marks a perfect nine-way interleave down to 36%, and marks a
+/// pair that fires together as better than it is.
+///
+/// Near the ideal is a full grid in time. Near zero is every tube reporting at
+/// once, which still multiplies the counts and still buys the precision but
+/// adds no resolution at all -- and claiming "1/9s per bar" in that case would
+/// be a lie the display tells itself.
+fn phase_note(gap: f64, tubes: usize) -> String {
+    let ideal = 1.0 / tubes.max(2) as f64;
+    // A RATIO, NOT A DISTANCE FROM IDEAL. The obvious form -- one minus the
+    // relative error -- hits zero the moment the gap is twice the ideal and
+    // goes negative after, so nine free-running tubes averaging 0.24s against
+    // an ideal of 0.11s were reported as 0%: a rig that is in fact spreading
+    // its samples out over most of the second, dismissed as doing nothing.
+    // The smaller over the larger is scale-free, symmetric, and degrades the
+    // way the thing it measures does.
+    let quality = if gap > 0.0 { ideal.min(gap) / ideal.max(gap) } else { 0.0 };
+    format!("\u{b7} interleave {:.2}s ({:.0}%)", gap, quality * 100.0)
 }
 
 fn layer_verdict(l: &Layer, shortest: usize, longest: usize) -> String {
@@ -681,9 +869,25 @@ fn dial_range(value: f64) -> f64 {
 /// BARS ONLY, AND NOT ONE CHARACTER OF TEXT, for the same family of reason: a
 /// `fill_text` in a canvas program takes that frame's geometry with it. Every
 /// caption around these charts is an ordinary text widget.
+/// A dial face: every needle on it, and the scale they share.
+#[derive(Debug, Clone)]
+struct Face {
+    /// (tube index, its reading), or (usize::MAX, reading) for the collected
+    /// one, which belongs to no single tube.
+    needles: Vec<(usize, Option<f64>)>,
+    full: f64,
+    /// The half-minute and minute ranges, on the collecting meter only. The
+    /// raw meter has none: a range needs one needle to be the range OF.
+    range30: Option<(f64, f64)>,
+    range60: Option<(f64, f64)>,
+}
+
 struct Chart {
-    /// One reading per dial, with the full scale each has settled on.
-    dials: Vec<(Option<f64>, f64)>,
+    /// The dial band's height, which depends on the tube count. See cluster_h.
+    cluster: f32,
+    /// The cascade's vertical scale, held steady by the feed. See PEAK_TAU.
+    peak: f64,
+    dials: Vec<Face>,
     strip: Vec<Tier>,
     /// Which tube the newest samples came from, for the finest tier.
     sources: Vec<u8>,
@@ -733,9 +937,10 @@ impl Chart {
         let start = std::f32::consts::PI * 0.75; // down-left
         let sweep = std::f32::consts::PI * 1.5; // three quarters of a turn
 
-        for (k, (value, full)) in self.dials.iter().enumerate() {
+        for (k, face) in self.dials.iter().enumerate() {
+            let full = face.full;
             let cx = DIAL_W * (k as f32 + 0.5);
-            let cy = CLUSTER_H * 0.5;
+            let cy = self.cluster * 0.5;
             let c = iced::Point::new(cx, cy);
 
             // The face, and the bezel around it.
@@ -745,28 +950,36 @@ impl Chart {
                 Stroke::default().with_width(2.0).with_color(Color { a: 0.5, ..BEZEL }),
             );
 
-            // The bands, as an arc just inside the bezel: calm, then raised,
-            // then the red at the top of the scale.
-            let band = |frame: &mut canvas::Frame, from: f64, to: f64, tint: Color| {
-                let a0 = start + sweep * dial_fraction(from, *full) as f32;
-                let a1 = start + sweep * dial_fraction(to, *full) as f32;
-                if a1 <= a0 {
+            // An arc of the scale, at whatever radius, in whatever colour.
+            let arc_at = |frame: &mut canvas::Frame, from: f64, to: f64,
+                          radius: f32, width: f32, tint: Color| {
+                let a0 = start + sweep * dial_fraction(from, full) as f32;
+                let a1 = start + sweep * dial_fraction(to, full) as f32;
+                if a1 <= a0 + 0.004 {
                     return;
                 }
                 let arc = Path::new(|b| {
                     b.arc(canvas::path::Arc {
                         center: c,
-                        radius: DIAL_R * 0.86,
+                        radius: DIAL_R * radius,
                         start_angle: Radians(a0),
                         end_angle: Radians(a1),
                     });
                 });
-                frame.stroke(&arc, Stroke::default().with_width(5.0).with_color(tint));
+                frame.stroke(&arc, Stroke::default().with_width(width).with_color(tint));
             };
-            band(frame, 0.0, radbeeper::analysis::LEVEL_RAISED, Color { a: 0.55, ..CALM });
-            band(frame, radbeeper::analysis::LEVEL_RAISED,
-                 radbeeper::analysis::LEVEL_HIGH, Color { a: 0.55, ..RAISED });
-            band(frame, radbeeper::analysis::LEVEL_HIGH, *full, Color { a: 0.55, ..HIGH });
+
+            // THE FIVE BANDS, PAINTED ON THE FACE. Each runs from its own
+            // floor to the next one's, so the colour under the needle is the
+            // colour of the word for where the needle is -- attenuated,
+            // nominal, advisory, warning, deadly -- and the dial agrees with
+            // every number on the panel by construction.
+            let bands = Band::all();
+            for (i, b) in bands.iter().enumerate() {
+                let to = bands.get(i + 1).map(|n| n.floor()).unwrap_or(full);
+                arc_at(frame, b.floor(), to.min(full), 0.82, 5.0,
+                       Color { a: 0.55, ..colour(*b) });
+            }
 
             // Ticks: eleven majors across the sweep, four minors between.
             for i in 0..=50 {
@@ -785,13 +998,46 @@ impl Chart {
                 );
             }
 
-            // The needle, and the hub it turns on.
-            if let Some(v) = value {
-                let a = start + sweep * dial_fraction(*v, *full) as f32;
-                let tip = iced::Point::new(
-                    cx + DIAL_R * 0.72 * a.cos(),
-                    cy + DIAL_R * 0.72 * a.sin(),
+            // THE RANGES, AS ARCS OUTSIDE THE BANDS -- the half minute and the
+            // minute the needle has been bouncing between. A bug at each end,
+            // coloured by the band that end is in, so an excursion into
+            // warning leaves an orange mark sitting there for half a minute
+            // after the needle has come back. This is a head-up display's
+            // heading bug doing a VU meter's job: the arc is where it has
+            // been, the needle is where it is.
+            // Takes the frame rather than capturing it: `arc_at` already
+            // holds a unique borrow, and two closures cannot both have one.
+            let bug = |frame: &mut canvas::Frame, value: f64, radius: f32, width: f32| {
+                let a = start + sweep * dial_fraction(value, full) as f32;
+                let (r0, r1) = (DIAL_R * (radius - 0.05), DIAL_R * (radius + 0.05));
+                frame.stroke(
+                    &Path::line(
+                        iced::Point::new(cx + r0 * a.cos(), cy + r0 * a.sin()),
+                        iced::Point::new(cx + r1 * a.cos(), cy + r1 * a.sin()),
+                    ),
+                    Stroke::default().with_width(width).with_color(colour(band(value))),
                 );
+            };
+            for (range, radius, width, alpha) in [
+                (face.range60, 0.99f32, 2.0f32, 0.30f32),
+                (face.range30, 0.91f32, 3.0f32, 0.55f32),
+            ] {
+                let Some((lo, hi)) = range else { continue };
+                arc_at(frame, lo, hi, radius, width, Color { a: alpha, ..HUD });
+                bug(frame, lo, radius, width + 0.5);
+                bug(frame, hi, radius, width + 0.5);
+            }
+
+            // A NEEDLE PER TUBE ON THIS FACE, each in its own colour and each
+            // a little shorter than the one before, so two tubes reading the
+            // same number are two needles that can still be told apart
+            // instead of one that has swallowed the other.
+            let n = face.needles.len().max(1);
+            for (j, (tube, value)) in face.needles.iter().enumerate() {
+                let Some(v) = value else { continue };
+                let a = start + sweep * dial_fraction(*v, full) as f32;
+                let reach = DIAL_R * (0.74 - 0.05 * (j as f32).min(4.0));
+                let tip = iced::Point::new(cx + reach * a.cos(), cy + reach * a.sin());
                 // A counterweight the other side of the hub, as a real needle
                 // has: it is what stops the dial looking like a clock hand.
                 let tail = iced::Point::new(
@@ -800,7 +1046,13 @@ impl Chart {
                 );
                 frame.stroke(
                     &Path::line(tail, tip),
-                    Stroke::default().with_width(2.5).with_color(colour(level(*v))),
+                    Stroke::default()
+                        .with_width(if n > 3 { 1.8 } else { 2.5 })
+                        .with_color(if *tube == usize::MAX {
+                            colour(band(*v))
+                        } else {
+                            tube_colour(*tube)
+                        }),
                 );
             }
             frame.fill(&Path::circle(c, 4.0), BEZEL);
@@ -814,20 +1066,19 @@ impl Chart {
             return;
         }
         let bar = bounds.width / total as f32;
-        let peak = self
-            .strip
-            .iter()
-            .flat_map(|t| t.values.iter().flatten())
-            .cloned()
-            .fold(0.0f64, f64::max)
-            .max(1.0);
+        // THE HELD SCALE, not the tallest bar in view. Taking the maximum
+        // afresh each frame made the strip breathe -- every burst rescaled it
+        // and every quiet second rescaled it back, so nothing on it stood
+        // still long enough to be read. The feed holds the top and lets it
+        // sink slowly; see PEAK_TAU.
+        let peak = self.peak.max(1.0);
         let tick = 3.0f32;
-        let top = CLUSTER_H;
+        let top = self.cluster;
         // WHATEVER IS LEFT, SPLIT THREE TO TWO. The panel grows with the
         // window rather than leaving a band of empty grey under the table,
         // and the cascade gets the larger share because it is the one people
         // watch second by second.
-        let rest = (bounds.height - CLUSTER_H - 4.0).max(40.0);
+        let rest = (bounds.height - self.cluster - 4.0).max(40.0);
         let height = (rest * CASCADE_SHARE - tick).max(1.0);
         let mut x0 = 0.0f32;
 
@@ -860,15 +1111,14 @@ impl Chart {
                     // The sources run to the newest sample, as the tier does.
                     let back = tier.columns - i;
                     match self.sources.len().checked_sub(back).and_then(|j| self.sources.get(j)) {
-                        Some(0) => TUBE_A,
-                        Some(_) => TUBE_B,
+                        Some(t) => tube_colour(*t as usize),
                         None => DIM,
                     }
                 } else {
                     // Coloured by the rate a whole minute at that height
                     // would be, so the strip and the number above it agree
                     // about what "raised" means.
-                    colour(level(*v * 60.0))
+                    colour(band(*v * 60.0))
                 };
                 frame.fill_rectangle(
                     iced::Point::new(x0 + i as f32 * bar, top + tick + height - h),
@@ -909,8 +1159,8 @@ impl Chart {
     /// a lone spike keeps its own colour and announces which window it came
     /// from.
     fn spectrum(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
-        let rest = (bounds.height - CLUSTER_H - 4.0).max(40.0);
-        let top = CLUSTER_H + rest * CASCADE_SHARE + 4.0;
+        let rest = (bounds.height - self.cluster - 4.0).max(40.0);
+        let top = self.cluster + rest * CASCADE_SHARE + 4.0;
         let h = (bounds.height - top - 1.0).max(1.0);
         let live: Vec<&Layer> = self.layers.iter().filter(|l| !l.rel.is_empty()).collect();
         if live.is_empty() {
@@ -1055,7 +1305,7 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                 let mut sources: VecDeque<u8> = VecDeque::with_capacity(STRIP_KEEP);
                 let mut dropped = 0usize;
                 let mut rows: VecDeque<Vec<String>> = VecDeque::with_capacity(ROWS);
-                let mut random: Option<(String, String, bool)> = None;
+                let mut random: Option<(usize, String, String, bool)> = None;
                 let mut now = 0u32;
                 // Whole seconds, summed across the tubes, for the spectra: a
                 // period is a property of the room and every tube is looking
@@ -1063,6 +1313,11 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                 // one time base.
                 let mut sec_bin: Option<i64> = None;
                 let mut sec_sum: u32 = 0;
+                // What the collecting meter shows, and where it has been.
+                let mut live: Option<f64> = None;
+                let mut d30 = Drift::new(30.0);
+                let mut d60 = Drift::new(60.0);
+                let mut peak_hold = 0.0f64;
                 // For the interleave measurement: when the previous sample
                 // landed, and which tube it came from.
                 let mut last: Option<(usize, f64)> = None;
@@ -1096,10 +1351,22 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                             let this = when.floor() as i64;
                             match sec_bin {
                                 Some(b) if b == this => sec_sum += counts,
-                                Some(_) => {
+                                Some(was) => {
                                     for r in ladder.iter_mut() {
                                         r.add(sec_sum);
                                     }
+                                    // A SECOND HAS CLOSED, so the collecting
+                                    // meter has a reading: the whole-second
+                                    // sum across every tube, as a rate, which
+                                    // is the mean the tubes agree on and not
+                                    // their sum.
+                                    let cpm = sec_sum as f64 * 60.0 / tubes as f64;
+                                    let dt = ((this - was) as f64).clamp(1.0, 60.0);
+                                    if !replaying {
+                                        d30.push(cpm, dt);
+                                        d60.push(cpm, dt);
+                                    }
+                                    live = Some(cpm);
                                     sec_bin = Some(this);
                                     sec_sum = counts;
                                 }
@@ -1117,8 +1384,8 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                             }
                         }
                         Event::Live => replaying = false,
-                        Event::Random { hex, at, suspect, .. } => {
-                            random = Some((hex, at, suspect));
+                        Event::Random { who, hex, at, suspect } => {
+                            random = Some((who.min(tubes - 1), hex, at, suspect));
                             pool.reset();
                         }
                         Event::Row { row, .. } => {
@@ -1132,6 +1399,25 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                         continue;
                     }
                     sent = Instant::now();
+                    let series: Vec<f64> = merged.iter().copied().collect();
+                    // Whole seconds, and one tier below them for the
+                    // interleave; see analysis::tiers_interleaved.
+                    let strip = if tubes > 1 {
+                        tiers_interleaved(&series, dropped, STRIP_COLS, tubes)
+                    } else {
+                        tiers_with(&series, dropped, STRIP_COLS, LADDER[0], TIERS, 1.0)
+                    };
+                    // The scale rises at once and sinks slowly: see PEAK_TAU.
+                    let tallest = strip
+                        .iter()
+                        .flat_map(|t| t.values.iter().flatten())
+                        .cloned()
+                        .fold(0.0f64, f64::max);
+                    peak_hold = if tallest > peak_hold {
+                        tallest
+                    } else {
+                        peak_hold + (tallest - peak_hold) * (1.0 - (-1.0f64 / PEAK_TAU).exp())
+                    };
                     let shortest = LADDER.iter().copied().min().unwrap_or(2);
                     let longest = LADDER.iter().copied().max().unwrap_or(2);
                     let headline = mean_of(&all, HEADLINE, tubes)
@@ -1160,14 +1446,11 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                         now,
                         total: all.total,
                         phase: (gaps.1 > 0).then(|| gaps.0 / gaps.1 as f64),
-                        strip: tiers_with(
-                            &merged.iter().copied().collect::<Vec<f64>>(),
-                            dropped,
-                            STRIP_COLS,
-                            LADDER[0] * tubes,
-                            TIERS + if tubes > 1 { 1 } else { 0 },
-                            1.0 / tubes as f64,
-                        ),
+                        strip,
+                        live,
+                        range30: d30.range(),
+                        range60: d60.range(),
+                        peak: peak_hold,
                         sources: sources.iter().rev().take(STRIP_COLS).rev().copied().collect(),
                         samples: (dropped + merged.len()) as i64,
                         every: log::DEFAULT_LOG_EVERY.round() as i64,
@@ -1228,13 +1511,42 @@ const FACE: Color = Color::from_rgb(0.04, 0.05, 0.08);
 const BEZEL: Color = Color::from_rgb(0.62, 0.66, 0.74);
 const DIM: Color = Color::from_rgb(0.62, 0.64, 0.72);
 const FAINT: Color = Color::from_rgb(0.45, 0.47, 0.55);
-const CALM: Color = Color::from_rgb(0.40, 0.85, 0.55);
-const RAISED: Color = Color::from_rgb(0.98, 0.79, 0.35);
-const HIGH: Color = Color::from_rgb(0.96, 0.40, 0.42);
+/// THE NAMED SCALE, IN COLOUR. Five bands, and the low one is not green:
+/// under 30 CPM a counter is not reporting a clean room, it is reporting
+/// itself -- shielded, unplugged or dying -- and a reassuring colour there
+/// would be the most dangerous thing on the panel. It gets the cold blue that
+/// every other instrument uses for "this reading is not to be trusted".
+const ATTENUATED: Color = Color::from_rgb(0.45, 0.62, 0.85);
+const NOMINAL: Color = Color::from_rgb(0.40, 0.85, 0.55);
+const ADVISORY: Color = Color::from_rgb(0.95, 0.85, 0.35);
+const WARNING: Color = Color::from_rgb(0.98, 0.62, 0.25);
+const DEADLY: Color = Color::from_rgb(0.97, 0.32, 0.34);
 const WARN: Color = Color::from_rgb(0.98, 0.79, 0.35);
+/// The instrument's own markings: the range arcs and their bugs, in the
+/// colour every head-up display puts its bugs in.
+const HUD: Color = Color::from_rgb(0.55, 0.95, 0.90);
 const CYAN: Color = Color::from_rgb(0.45, 0.82, 0.92);
-const TUBE_A: Color = Color::from_rgb(0.55, 0.80, 0.98);
-const TUBE_B: Color = Color::from_rgb(0.85, 0.70, 0.98);
+/// A COLOUR PER TUBE, because colour is the only legend this panel has. Ten
+/// of them, distinguishable on a dark face, and they cycle: a rig with more
+/// than ten counters gets repeats, which is better than running out and
+/// better than inventing shades nobody can tell apart.
+const TUBES: [Color; 10] = [
+    Color::from_rgb(0.55, 0.80, 0.98), // blue
+    Color::from_rgb(0.85, 0.70, 0.98), // violet
+    Color::from_rgb(0.55, 0.92, 0.65), // green
+    Color::from_rgb(0.99, 0.75, 0.45), // orange
+    Color::from_rgb(0.45, 0.92, 0.92), // cyan
+    Color::from_rgb(0.99, 0.62, 0.78), // pink
+    Color::from_rgb(0.82, 0.90, 0.50), // lime
+    Color::from_rgb(0.98, 0.55, 0.52), // red
+    Color::from_rgb(0.50, 0.78, 0.72), // teal
+    Color::from_rgb(0.76, 0.76, 0.96), // lavender
+];
+
+fn tube_colour(k: usize) -> Color {
+    TUBES[k % TUBES.len()]
+}
+
 
 /// PRIMARIES, one per spectrum window, because the overlay is read by colour
 /// and nothing else. Red is the long view, green the middle, blue the short.
@@ -1244,13 +1556,15 @@ const LAYER: [Color; 3] = [
     Color::from_rgb(1.00, 0.45, 0.45),
 ];
 
-/// The same three bands everything else uses, so one counter does not look
-/// calm in one place and raised in another.
-fn colour(l: Level) -> Color {
-    match l {
-        Level::Calm => CALM,
-        Level::Raised => RAISED,
-        Level::High => HIGH,
+/// The same five bands everywhere, so one counter cannot look nominal in one
+/// place and advisory in another.
+fn colour(b: Band) -> Color {
+    match b {
+        Band::Attenuated => ATTENUATED,
+        Band::Nominal => NOMINAL,
+        Band::Advisory => ADVISORY,
+        Band::Warning => WARNING,
+        Band::Deadly => DEADLY,
     }
 }
 
@@ -1295,6 +1609,32 @@ mod tests {
     fn two_seconds_is_the_floor_under_the_floor() {
         assert!(period_floor(4, 8) >= 2.0);
         assert!(layer_floor(2, 2, 4) >= 2.0);
+    }
+
+    /// THE IDEAL INTERLEAVE IS 1/n, NOT HALF A SECOND. A perfect nine-way
+    /// interleave was being marked at 36% against a hard-coded pair.
+    #[test]
+    fn the_interleave_is_judged_against_what_this_many_tubes_could_manage() {
+        assert!(phase_note(0.5, 2).contains("100%"), "{}", phase_note(0.5, 2));
+        assert!(phase_note(1.0 / 9.0, 9).contains("100%"), "{}", phase_note(1.0 / 9.0, 9));
+        // Tubes firing together buy precision and no time at all.
+        assert!(phase_note(0.0, 2).contains("0%"));
+        // And a pair's ideal is not nine's.
+        assert!(!phase_note(0.5, 9).contains("100%"));
+        // Twice the ideal gap is half a grid, not no grid: the old form
+        // called this zero, and called anything wider than it zero too.
+        assert!(phase_note(0.25, 2).contains("50%"), "{}", phase_note(0.25, 2));
+        assert!(phase_note(1.0, 2).contains("50%"), "{}", phase_note(1.0, 2));
+        assert!(phase_note(0.24, 9).contains("46%"), "{}", phase_note(0.24, 9));
+    }
+
+    /// The dial band grows by a row of numbers for every five tubes, so nine
+    /// counters cannot push their readings onto the cascade's captions.
+    #[test]
+    fn the_dial_band_makes_room_for_the_readings_beside_it() {
+        assert_eq!(cluster_h(1), CLUSTER_H, "one tube needs no grid at all");
+        assert!(cluster_h(9) > cluster_h(2));
+        assert_eq!(cluster_h(9), CLUSTER_H + 24.0, "nine is two rows of five");
     }
 
     /// A dial reads the same fraction of its sweep for the same fraction of
