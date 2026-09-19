@@ -572,13 +572,15 @@ double the dose — what doubles is the evidence:
 
 ![radbeeper-gui with two counters: two dials, and a cascade whose finest tier interleaves them](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-pair.gif)
 
-**Two tubes, and the fifth tier.** A dial each, the combined mean and its
-precision beside them, and a cascade that runs `8s · 4s · 2s · 1s · 0.5s` —
-its finest tier drawn in each tube's colour, so the interleave can be seen
-rather than taken on trust. Everything left of that tier is a mean over both.
-*One of these counters is real and one is `tests/fake_gmc.py` on a
-pseudo-terminal, which is why they disagree so plainly; two matched tubes sit
-within about two sigma of each other.*
+**Two tubes, and one more tier.** A needle each on the raw meter, the combined
+mean and its precision beside them, and a cascade that runs
+`8s · 4s · 2s · 1s · 1/2s` — its finest tier drawn in each tube's colour, so
+the interleave can be seen rather than taken on trust. Everything left of that
+tier is a mean over both.
+
+*Both of these are real: a GMC-320 and a GMC-320+ V4 on one machine. They read
+rather differently, which is the sort of thing the agreement figure on the
+exported page exists to put a number on.*
 
 **The interleave is measured, not assumed.** Two counters only sharpen *time* if
 they disagree about when a second starts, and neither clock can be steered, so
@@ -639,15 +641,116 @@ them is more signal on one time base.
 ```sh
 make gui            # build it and run it against whatever is serving
 make gui-install    # or put radbeeper-gui on PATH beside radbeeper
+
+radbeeper-gui --theme dark      # or antiquity, or auto (the default)
+radbeeper-gui --logs DIR        # where the serving radbeeper keeps its socket
 ```
 
-![radbeeper-gui: the dial, the cascade and the spectrum overlay, in real time](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui.gif)
+![radbeeper-gui: one counter, in real time](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui.gif)
 
-**Twenty-four seconds of it, in real time.** One counter, attached to the
-service that is logging it — the service never notices. The needle and the
-five windows are the same numbers the terminal draws; the strip underneath is
-the cascade scrolling a bar a second; the panel below that is three spectra
-overlaid, of which two have filled so far.
+**Twenty-four seconds of one counter, in real time**, attached to the service
+that is logging it — which never notices. [The two-counter
+recording](#two-counters) above is three minutes at twelve times speed: watch
+there for the range arcs breathing and, two thirds through, **a line of hex
+arriving** — 256 bits out of the timing of decay, the moment the pool has
+measured enough of it to justify them.
+
+### Reading the viewport
+
+```
+ A /dev/ttyUSB0 · GMC-320Re 4.26 · F48824B8207F7E     one line per counter,
+ B /dev/ttyUSB1 · GMC-320+V4Re 4.83 · F7F4CA7F05C2EA  each in its own colour
++----------+----------+------------------------------+
+|   RAW    | COLLECTED|  34 CPM +-6 (17.1 pc)        |  the reading, and how
+| a needle | one      |  0.221 uSv/h                 |  well it is known
+| per tube | needle,  |    3s  70.0  0.455  37.8 pc  |
+|          | + range  |   30s  34.0  0.221  17.1 pc  |  per window, with the
+|  A  B    |   arcs   |  300s  23.0  0.150   6.6 pc  |  precision of each
++----------+----------+------------------------------+
+   A 60  B 8                                           every tube on its own
+   now 0   run 2468 in 2577s   2 tubes, interleave 0.54s
+ 8s/bar   4s/bar   2s/bar   1s/bar   1/2s/bar          the cascade's tiers
+ [=== counts, compressing as they age, newest at the right ===]
+ [=== three spectra, overlaid on one log-period axis ========]
+ 9h 6m            period, log                     7s
+    7s-8m flat, 9 windows                              what each one can see
+   58s-1h 8m filling, 25m to go                        and makes of it
+ A 08783b9b e62a0c5b 0b1a45c6 126a552b ...             256 bits from decay
+ 256 bits from F48824B8207F7E at 20:21:12, next in 500s
+```
+
+### The two meters
+
+**They answer different questions and neither answers the other.**
+
+| | |
+|---|---|
+| **RAW** | A needle per counter, every input unaveraged, each in that counter's colour. A tube that has wandered off is a needle that has wandered off. This is *do they agree?* |
+| **COLLECTED** | One needle: the whole-second collection, at the resolution the log is written in. This is *what is the room doing?* |
+
+They share a scale, because two dials that don't cannot be compared — which is
+the only reason to draw them side by side.
+
+### The bugs and the birds
+
+The collected meter carries two range arcs outside its colour bands: **the half
+minute and the minute the needle has been bouncing between.**
+
+Each extreme **snaps outward the instant the needle pushes past it** — the
+needle shoves the bug — and then **creeps back like molasses**, with a time
+constant of the window it stands for. An excursion into *warning* leaves a mark
+sitting out there for half a minute after the needle has come home, so you can
+see where it has been without having watched it.
+
+A true windowed minimum and maximum would be exact, and would also lurch every
+time an old extreme fell out of the window, which on a dial reads as a fault.
+The drift is the honest version: it says *lately*, and it never jumps.
+
+### The bands, named
+
+A reading is not "above 240" — it is a **warning**. The floor of each:
+
+| | |
+|---|---|
+| **attenuated** — under 30 CPM | not a clean room: a tube shielded, unplugged or dying |
+| **nominal** — 30 | ordinary background |
+| **advisory** — 120 | worth knowing about, not worth acting on |
+| **warning** — 240 | |
+| **deadly** — 600 | |
+
+**The floor of *nominal* is 30 and not 0, deliberately.** Natural background does
+not go below a few counts a minute, so a counter reading under 30 is reporting
+*itself* rather than the room. An instrument reading low because it has failed
+must not look like one reading low because there is nothing there — which is why
+that band is cold blue and not green.
+
+### Both themes, and it follows yours
+
+![the panel under Antiquity, the desktop's own light theme](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-antiquity.png)
+
+Copal writes down which theme is on, so the window **asks rather than guesses**:
+`~/.config/copal/current/theme/theme.conf` is the active theme's own file and
+says whether it is a light one or a dark one. `--theme dark`, `--theme
+antiquity` or `--theme auto` (the default) override it.
+
+**The dial faces stay dark in both.** Antiquity's own note about itself is that
+it is *dark chrome around light paper*, and a black-faced gauge on paper is what
+the instruments this borrows from actually look like. That takes two colour sets
+rather than one — dark colours for text on paper, bright ones for needles and
+bands on the face. A single set cannot serve both; the first attempt drew
+near-black bands on a near-black face.
+
+![the same panel, dark](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-dark.png)
+
+### It fits what the compositor gives it
+
+![the panel squeezed into 560 by 400](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-small.png)
+
+A tiling compositor hands this window whatever is left once every other window
+has had its share. **The charts are the instrument, so they are the last thing
+to go, not the first**: the log table goes first, at three rows before none,
+then the per-layer spectrum verdicts, then the axis. The dials, the numbers and
+the two charts keep their shape all the way down.
 
 **It is a separate crate on purpose.** RadBeeper has one dependency and it is
 `libc`; Iced brings several hundred, which is the right price for a

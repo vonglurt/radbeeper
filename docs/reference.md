@@ -96,9 +96,15 @@ outside programs in `tools/`.
 
 ```sh
 make gui                                    # the window has to be open
-make gui-gif                                # 24 s of it, into docs/screenshots/gui.gif
-make gui-gif GIFOUT=docs/screenshots/gui-pair.gif GIFSECS=30
+make gui-gif                                # 24 s of it, real time
+make gui-gif GIFSECS=180 GIFFPS=1 GIFPLAY=12 GIFWIDTH=540
 ```
+
+The second is three minutes of counter played in fifteen seconds. **Playing
+faster than it was captured** is how a long session becomes a short clip:
+frames a second apart on the wall clock are written a twelfth of a second apart
+in the file. Nothing is dropped and nothing is interpolated -- every frame is a
+second that really happened, in order.
 
 Two frames a second, played back at two frames a second: the instrument
 updates once a second, so the recording is real time and the clock in it can

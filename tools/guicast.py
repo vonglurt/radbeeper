@@ -88,6 +88,12 @@ def capture(geometry, seconds, fps, into):
 def assemble(into, out, fps, width):
     """Frames to a GIF, at a palette that suits a mostly-still panel.
 
+    PLAYING FASTER THAN IT WAS CAPTURED is how a ten-minute session becomes a
+    ten-second clip: the frames are a second apart on the wall clock and are
+    written a twelfth of a second apart in the file. Nothing is dropped and
+    nothing is interpolated -- every frame in the recording is a second that
+    really happened, in order.
+
     `stats_mode=diff` builds the palette from what CHANGES between frames
     rather than from the whole picture, and `diff_mode=rectangle` rewrites only
     the rectangle that moved. On this panel -- a dark instrument face where a
@@ -113,7 +119,10 @@ def main():
     p.add_argument("--seconds", type=float, default=20.0,
                    help="how long to record (default 20)")
     p.add_argument("--fps", type=int, default=2,
-                   help="frames a second, captured and played (default 2)")
+                   help="frames a second CAPTURED (default 2)")
+    p.add_argument("--play-fps", type=int,
+                   help="frames a second PLAYED; higher than --fps speeds the "
+                        "recording up (default: the same, so real time)")
     p.add_argument("--width", type=int, default=540,
                    help="scale the frames to this width (default 540)")
     p.add_argument("--geometry",
@@ -133,12 +142,14 @@ def main():
                  "'X,Y WxH'." % APP_ID)
 
     into = tempfile.mkdtemp(prefix="guicast-")
-    print("guicast: %s at %s, %gs at %d fps"
-          % (APP_ID, geometry, args.seconds, args.fps))
+    speed = (args.play_fps or args.fps) / float(args.fps)
+    print("guicast: %s at %s, %gs at %d fps%s"
+          % (APP_ID, geometry, args.seconds, args.fps,
+             "" if speed == 1 else ", played at %gx" % speed))
     try:
         frames = capture(geometry, args.seconds, args.fps, into)
         os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
-        assemble(into, args.output, args.fps, args.width)
+        assemble(into, args.output, args.play_fps or args.fps, args.width)
     finally:
         if args.keep:
             print("guicast: frames in %s" % into)

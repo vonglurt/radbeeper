@@ -37,6 +37,11 @@ GIF    ?= docs/screenshots/watch-hero.gif
 GIFOUT ?= docs/screenshots/gui.gif
 GIFSECS ?= 24
 GIFFPS  ?= 2
+# Played faster than captured, for a long session in a short clip. Equal to
+# GIFFPS is real time.
+GIFPLAY ?= 2
+# How wide the frames are scaled before they become a GIF.
+GIFWIDTH ?= 540
 
 .PHONY: all build test check clippy install uninstall package publish-dry \
         release-check release probe watch sim service gui gui-build \
@@ -158,12 +163,13 @@ gui-install: gui-build
 # assembles them. The window has to be OPEN and on screen: it is a screen
 # grab, and a compositor will not hand over a surface nobody is showing.
 #
-#   make gui-gif                        24 seconds of it
-#   make gui-gif GIFOUT=docs/screenshots/gui-pair.gif GIFSECS=30
+#   make gui-gif                        24 seconds of it, in real time
+#   make gui-gif GIFSECS=300 GIFFPS=1 GIFPLAY=12    five minutes at 12x
 gui-gif:
 	@pgrep -x radbeeper-gui >/dev/null \
 	  || { echo "no radbeeper-gui running -- start it first: make gui"; exit 1; }
-	$(PYTHON) tools/guicast.py -o $(GIFOUT) --seconds $(GIFSECS) --fps $(GIFFPS)
+	$(PYTHON) tools/guicast.py -o $(GIFOUT) --seconds $(GIFSECS) \
+	  --fps $(GIFFPS) --play-fps $(GIFPLAY) --width $(GIFWIDTH)
 
 ## service: what the boot service runs, in the foreground
 service: build

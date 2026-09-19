@@ -183,6 +183,11 @@ fn ladder_ends(layers: &[Layer]) -> (usize, usize) {
 /// never written again.
 static LOGS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
 
+/// The skin, chosen once at startup: `--theme`, or what the desktop is
+/// wearing. Beside LOGS and for the same reason -- there is nowhere to hang a
+/// captured value on a plain function pointer.
+static SKIN: std::sync::OnceLock<Skin> = std::sync::OnceLock::new();
+
 fn logs_dir() -> std::path::PathBuf {
     LOGS.get().cloned().unwrap_or_else(log::state_dir)
 }
@@ -196,10 +201,17 @@ fn main() -> iced::Result {
                     let _ = LOGS.set(std::path::PathBuf::from(d));
                 }
             }
+            "--theme" => {
+                if let Some(t) = args.next() {
+                    let _ = SKIN.set(Skin::named(&t));
+                }
+            }
             "-h" | "--help" => {
                 println!("radbeeper-gui -- a window onto the counters");
                 println!();
                 println!("  --logs DIR    where the serving radbeeper keeps its socket");
+                println!("  --theme T     dark, antiquity, or auto (the default:");
+                println!("                whatever ~/.config/copal/current says)");
                 println!();
                 println!("It opens no serial port. Start `radbeeper service` first, or");
                 println!("`radbeeper watch`, and this attaches to whichever is serving.");
@@ -208,6 +220,7 @@ fn main() -> iced::Result {
             _ => {}
         }
     }
+    let _ = SKIN.set(Skin::detect());
     iced::application(App::new, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
@@ -341,6 +354,7 @@ enum Message {
 // ------------------------------------------------------------------- state ---
 
 struct App {
+    skin: Skin,
     shot: Option<Snapshot>,
     adrift: String,
     cpm_per_usvh: f64,
@@ -353,6 +367,7 @@ impl App {
     fn new() -> (App, iced::Task<Message>) {
         (
             App {
+                skin: SKIN.get().cloned().unwrap_or_else(Skin::dark),
                 shot: None,
                 adrift: "looking for the counters...".into(),
                 cpm_per_usvh: 153.8,
@@ -385,7 +400,7 @@ impl App {
     /// function that works for any lifetime of the borrow, and inference will
     /// not generalise a closure that far.
     fn theme(&self) -> Theme {
-        Theme::CatppuccinMocha
+        self.skin.theme()
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -404,8 +419,8 @@ impl App {
         let Some(s) = self.shot.as_ref() else {
             return container(
                 column![
-                    text("no counter").size(30).color(DIM),
-                    text(self.adrift.clone()).size(13).color(DIM),
+                    text("no counter").size(30).color(self.skin.dim),
+                    text(self.adrift.clone()).size(13).color(self.skin.dim),
                 ]
                 .spacing(6)
                 .align_x(iced::Center),
@@ -415,7 +430,7 @@ impl App {
         };
 
         let tubes = s.tubes();
-        let tint = s.headline.map(|c| colour(band(c))).unwrap_or(DIM);
+        let tint = s.headline.map(|c| self.skin.colour(band(c))).unwrap_or(self.skin.dim);
 
         // ---- who is on the other end ------------------------------------
         //
@@ -434,7 +449,7 @@ impl App {
                         tube_name(k), c.path, c.version, c.serial_no
                     ))
                     .size(10)
-                    .color(if tubes > 1 { tube_colour(k) } else { DIM }),
+                    .color(if tubes > 1 { self.skin.tube(k) } else { self.skin.dim }),
                 );
             }
             col.into()
@@ -447,7 +462,7 @@ impl App {
                 s.counters.last().map(|c| c.path.as_str()).unwrap_or("")
             ))
             .size(10)
-            .color(DIM)
+            .color(self.skin.dim)
             .into()
         };
 
@@ -494,6 +509,7 @@ impl App {
         ];
 
         let chart = canvas(Chart {
+            skin: self.skin.clone(),
             cluster: cluster_h(tubes),
             peak: s.peak,
             dials: faces.clone(),
@@ -518,7 +534,7 @@ impl App {
                 let mut letters = row![].spacing(3);
                 for (k, _) in face.needles.iter().take(10) {
                     letters = letters.push(
-                        mono(tube_name(*k)).size(9).color(tube_colour(*k)),
+                        mono(tube_name(*k)).size(9).color(self.skin.tube(*k)),
                     );
                 }
                 letters.into()
@@ -528,7 +544,7 @@ impl App {
                     _ => "range".into(),
                 })
                 .size(9)
-                .color(Color { a: 0.85, ..HUD })
+                .color(Color { a: 0.85, ..self.skin.hud })
                 .into()
             };
             dial_faces = dial_faces.push(
@@ -540,11 +556,11 @@ impl App {
                             None => "--".into(),
                         })
                         .size(19)
-                        .color(mean.map(|v| colour(band(v))).unwrap_or(DIM)),
+                        .color(mean.map(|v| self.skin.colour(band(v))).unwrap_or(self.skin.dim)),
                         caption,
                         mono(if fi == 0 { "raw".to_string() } else { "1s \u{b7} held".to_string() })
                             .size(9)
-                            .color(FAINT),
+                            .color(self.skin.faint),
                     ]
                     .spacing(0)
                     .align_x(iced::Center),
@@ -557,11 +573,11 @@ impl App {
         // ---- the dense numeric block, beside the dials -----------------
         let mut windows = column![].spacing(0);
         for (span, avg, sd) in &s.averages {
-            let label = mono(format!("{:>6}s", *span as i64)).size(10).color(DIM);
+            let label = mono(format!("{:>6}s", *span as i64)).size(10).color(self.skin.dim);
             let body: Element<Message> = match avg {
                 Some(cpm) => row![
-                    mono(format!("{:>8.1}", cpm)).size(10).color(colour(band(*cpm))),
-                    mono(format!("{:>8.3}", cpm / self.cpm_per_usvh)).size(10).color(DIM),
+                    mono(format!("{:>8.1}", cpm)).size(10).color(self.skin.colour(band(*cpm))),
+                    mono(format!("{:>8.3}", cpm / self.cpm_per_usvh)).size(10).color(self.skin.dim),
                     mono(match sd {
                         // A WINDOW THAT IS FULL SAYS HOW WELL IT KNOWS ITS
                         // NUMBER. The long ones are the precise ones, and
@@ -572,7 +588,7 @@ impl App {
                         _ => String::new(),
                     })
                     .size(10)
-                    .color(FAINT),
+                    .color(self.skin.faint),
                 ]
                 .spacing(5)
                 .into(),
@@ -581,7 +597,7 @@ impl App {
                     (span - s.elapsed).max(0.0).round() as i64
                 ))
                 .size(10)
-                .color(FAINT)
+                .color(self.skin.faint)
                 .into(),
             };
             windows = windows.push(row![label, body].spacing(6));
@@ -601,7 +617,7 @@ impl App {
                             None => format!("{}    --", tube_name(*k)),
                         })
                         .size(10)
-                        .color(tube_colour(*k)),
+                        .color(self.skin.tube(*k)),
                     );
                 }
                 per_grid = per_grid.push(line);
@@ -625,13 +641,13 @@ impl App {
                         _ => "CPM".into(),
                     })
                     .size(11)
-                    .color(DIM),
+                    .color(self.skin.dim),
                     mono(match s.headline {
                         Some(v) => format!("{:.3} uSv/h", v / self.cpm_per_usvh),
                         None => "-- uSv/h".into(),
                     })
                     .size(11)
-                    .color(DIM),
+                    .color(self.skin.dim),
                 ]
                 .spacing(0),
             ]
@@ -650,7 +666,7 @@ impl App {
                 }
             ))
             .size(10)
-            .color(FAINT),
+            .color(self.skin.faint),
         ]
         .spacing(1);
 
@@ -676,7 +692,7 @@ impl App {
                         )
                     })
                     .size(if terse { 9 } else { 10 })
-                    .color(DIM),
+                    .color(self.skin.dim),
                 )
                 .width(Length::FillPortion(t.columns as u16)),
             );
@@ -701,18 +717,18 @@ impl App {
         // ---- the spectrum's axis and its verdict ------------------------
         let (shortest, longest) = ladder_ends(&s.layers);
         let axis = row![
-            mono(span_words(longest as f64)).size(10).color(DIM),
+            mono(span_words(longest as f64)).size(10).color(self.skin.dim),
             Space::new().width(Fill),
-            mono("period \u{b7} log").size(10).color(FAINT),
+            mono("period \u{b7} log").size(10).color(self.skin.faint),
             Space::new().width(Fill),
-            mono(span_words(period_floor(shortest, longest))).size(10).color(DIM),
+            mono(span_words(period_floor(shortest, longest))).size(10).color(self.skin.dim),
         ];
         let mut verdicts = column![].spacing(0);
         for (i, l) in s.layers.iter().enumerate() {
             verdicts = verdicts.push(
                 mono(layer_verdict(l, shortest, longest))
                     .size(10)
-                    .color(if l.runs == 0 { FAINT } else { LAYER[i] }),
+                    .color(if l.runs == 0 { self.skin.faint } else { self.skin.layers[i] }),
             );
         }
 
@@ -722,10 +738,10 @@ impl App {
                 row![
                     mono(format!("{} ", tube_name(*who)))
                         .size(11)
-                        .color(tube_colour(*who)),
+                        .color(self.skin.tube(*who)),
                     mono(entropy::group_hex(hex))
                         .size(11)
-                        .color(if *suspect { WARN } else { CYAN }),
+                        .color(if *suspect { self.skin.warn } else { self.skin.cyan }),
                 ],
                 mono(format!(
                     "{} bits from {} at {} \u{b7} {}{}",
@@ -736,16 +752,16 @@ impl App {
                     if *suspect { " \u{b7} SPECTRUM NOT FLAT, suspect" } else { "" }
                 ))
                 .size(10)
-                .color(FAINT),
+                .color(self.skin.faint),
             ]
             .spacing(0)
             .into(),
-            None => mono(format!("random \u{b7} {}", s.pool)).size(10).color(FAINT).into(),
+            None => mono(format!("random \u{b7} {}", s.pool)).size(10).color(self.skin.faint).into(),
         };
 
         let now = mono(clock::format(clock::now(), "%Y-%m-%d %H:%M:%S"))
             .size(10)
-            .color(FAINT);
+            .color(self.skin.faint);
 
         // WHAT GOES FIRST WHEN THERE IS NO ROOM. A tiling compositor will
         // hand this window a quarter of a screen without asking, and
@@ -767,9 +783,9 @@ impl App {
             // window this will ever be in. A threshold above it would give
             // the short table to the ordinary case.
             let keep = if room >= 700.0 { ROWS } else { 3 };
-            let mut t = column![mono(cells(&s.columns)).size(9).color(FAINT)].spacing(0);
+            let mut t = column![mono(cells(&s.columns)).size(9).color(self.skin.faint)].spacing(0);
             for r in s.rows.iter().rev().take(keep).rev() {
-                t = t.push(mono(cells(r)).size(9).color(DIM));
+                t = t.push(mono(cells(r)).size(9).color(self.skin.dim));
             }
             t.into()
         };
@@ -915,6 +931,7 @@ struct Face {
 }
 
 struct Chart {
+    skin: Skin,
     /// The dial band's height, which depends on the tube count. See cluster_h.
     cluster: f32,
     /// The cascade's vertical scale, held steady by the feed. See PEAK_TAU.
@@ -976,10 +993,10 @@ impl Chart {
             let c = iced::Point::new(cx, cy);
 
             // The face, and the bezel around it.
-            frame.fill(&Path::circle(c, DIAL_R), Color { a: 0.55, ..FACE });
+            frame.fill(&Path::circle(c, DIAL_R), self.skin.face);
             frame.stroke(
                 &Path::circle(c, DIAL_R),
-                Stroke::default().with_width(2.0).with_color(Color { a: 0.5, ..BEZEL }),
+                Stroke::default().with_width(2.0).with_color(Color { a: 0.5, ..self.skin.bezel }),
             );
 
             // An arc of the scale, at whatever radius, in whatever colour.
@@ -1001,7 +1018,7 @@ impl Chart {
                 frame.stroke(&arc, Stroke::default().with_width(width).with_color(tint));
             };
 
-            // THE FIVE BANDS, PAINTED ON THE FACE. Each runs from its own
+            // THE FIVE BANDS, PAINTED ON THE self.skin.face. Each runs from its own
             // floor to the next one's, so the colour under the needle is the
             // colour of the word for where the needle is -- attenuated,
             // nominal, advisory, warning, deadly -- and the dial agrees with
@@ -1010,7 +1027,7 @@ impl Chart {
             for (i, b) in bands.iter().enumerate() {
                 let to = bands.get(i + 1).map(|n| n.floor()).unwrap_or(full);
                 arc_at(frame, b.floor(), to.min(full), 0.82, 5.0,
-                       Color { a: 0.55, ..colour(*b) });
+                       Color { a: 0.75, ..self.skin.face_colour(*b) });
             }
 
             // Ticks: eleven majors across the sweep, four minors between.
@@ -1026,7 +1043,7 @@ impl Chart {
                     &Path::line(p1, p2),
                     Stroke::default()
                         .with_width(if major { 2.0 } else { 1.0 })
-                        .with_color(Color { a: if major { 0.75 } else { 0.35 }, ..FG }),
+                        .with_color(Color { a: if major { 0.75 } else { 0.35 }, ..self.skin.fg }),
                 );
             }
 
@@ -1047,7 +1064,7 @@ impl Chart {
                         iced::Point::new(cx + r0 * a.cos(), cy + r0 * a.sin()),
                         iced::Point::new(cx + r1 * a.cos(), cy + r1 * a.sin()),
                     ),
-                    Stroke::default().with_width(width).with_color(colour(band(value))),
+                    Stroke::default().with_width(width).with_color(self.skin.face_colour(band(value))),
                 );
             };
             for (range, radius, width, alpha) in [
@@ -1055,12 +1072,12 @@ impl Chart {
                 (face.range30, 0.91f32, 3.0f32, 0.55f32),
             ] {
                 let Some((lo, hi)) = range else { continue };
-                arc_at(frame, lo, hi, radius, width, Color { a: alpha, ..HUD });
+                arc_at(frame, lo, hi, radius, width, Color { a: alpha, ..self.skin.hud });
                 bug(frame, lo, radius, width + 0.5);
                 bug(frame, hi, radius, width + 0.5);
             }
 
-            // A NEEDLE PER TUBE ON THIS FACE, each in its own colour and each
+            // A NEEDLE PER TUBE ON THIS self.skin.face, each in its own colour and each
             // a little shorter than the one before, so two tubes reading the
             // same number are two needles that can still be told apart
             // instead of one that has swallowed the other.
@@ -1081,14 +1098,14 @@ impl Chart {
                     Stroke::default()
                         .with_width(if n > 3 { 1.8 } else { 2.5 })
                         .with_color(if *tube == usize::MAX {
-                            colour(band(*v))
+                            self.skin.face_colour(band(*v))
                         } else {
-                            tube_colour(*tube)
+                            self.skin.face_tube(*tube)
                         }),
                 );
             }
-            frame.fill(&Path::circle(c, 4.0), BEZEL);
-            frame.fill(&Path::circle(c, 2.0), Color { a: 0.9, ..FACE });
+            frame.fill(&Path::circle(c, 4.0), self.skin.bezel);
+            frame.fill(&Path::circle(c, 2.0), Color { a: 0.9, ..self.skin.face });
         }
     }
 
@@ -1123,7 +1140,7 @@ impl Chart {
                 frame.fill_rectangle(
                     iced::Point::new(x0, top + tick),
                     iced::Size::new(w, height),
-                    Color { a: 0.05, ..FG },
+                    self.skin.tier_wash(),
                 );
             }
             // THE FINEST TIER IS THE ONE THAT KNOWS WHO SAID WHAT. Every bar
@@ -1143,14 +1160,14 @@ impl Chart {
                     // The sources run to the newest sample, as the tier does.
                     let back = tier.columns - i;
                     match self.sources.len().checked_sub(back).and_then(|j| self.sources.get(j)) {
-                        Some(t) => tube_colour(*t as usize),
-                        None => DIM,
+                        Some(t) => self.skin.tube(*t as usize),
+                        None => self.skin.dim,
                     }
                 } else {
                     // Coloured by the rate a whole minute at that height
                     // would be, so the strip and the number above it agree
                     // about what "raised" means.
-                    colour(band(*v * 60.0))
+                    self.skin.colour(band(*v * 60.0))
                 };
                 frame.fill_rectangle(
                     iced::Point::new(x0 + i as f32 * bar, top + tick + height - h),
@@ -1167,7 +1184,7 @@ impl Chart {
                         frame.fill_rectangle(
                             iced::Point::new(x0 + j as f32 * bar, top),
                             iced::Size::new(1.0, tick),
-                            DIM,
+                            self.skin.dim,
                         );
                     }
                 }
@@ -1193,7 +1210,10 @@ impl Chart {
     fn spectrum(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
         let rest = (bounds.height - self.cluster - 4.0).max(40.0);
         let top = self.cluster + rest * CASCADE_SHARE + 4.0;
-        let h = (bounds.height - top - 1.0).max(1.0);
+        // A MARGIN AT THE FOOT. The canvas fills its share and the readouts
+        // sit under it, so a spectrum drawn to the last pixel puts its tallest
+        // bars through the emission line on a squeezed window.
+        let h = (bounds.height - top - 6.0).max(1.0);
         let live: Vec<&Layer> = self.layers.iter().filter(|l| !l.rel.is_empty()).collect();
         if live.is_empty() {
             return;
@@ -1235,7 +1255,7 @@ impl Chart {
             frame.fill_rectangle(
                 iced::Point::new(0.0, y),
                 iced::Size::new(bounds.width, 1.0),
-                Color { a: 0.30, ..DIM },
+                Color { a: 0.30, ..self.skin.dim },
             );
         }
 
@@ -1245,7 +1265,7 @@ impl Chart {
                 .iter()
                 .position(|x| x.window == l.window)
                 .unwrap_or(0);
-            let tint = LAYER[idx.min(LAYER.len() - 1)];
+            let tint = self.skin.layers[idx.min(self.skin.layers.len() - 1)];
             // Bins are dense at the short-period end of a log axis, so fold
             // them onto columns and keep the LOUDEST in each: a single sharp
             // line is what is being looked for, and averaging it with its
@@ -1273,7 +1293,7 @@ impl Chart {
                 frame.fill_rectangle(
                     iced::Point::new(x as f32, top + h - bh),
                     iced::Size::new(1.0, bh),
-                    Color { a: 0.55, ..tint },
+                    Color { a: self.skin.layer_alpha, ..tint },
                 );
             }
         }
@@ -1570,70 +1590,245 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
     })
 }
 
-// ----------------------------------------------------------------- colours ---
 
-const FG: Color = Color::from_rgb(0.80, 0.84, 0.92);
-/// The dial face and its bezel: a black-faced instrument, lit from nowhere.
-const FACE: Color = Color::from_rgb(0.04, 0.05, 0.08);
-const BEZEL: Color = Color::from_rgb(0.62, 0.66, 0.74);
-const DIM: Color = Color::from_rgb(0.62, 0.64, 0.72);
-const FAINT: Color = Color::from_rgb(0.45, 0.47, 0.55);
-/// THE NAMED SCALE, IN COLOUR. Five bands, and the low one is not green:
-/// under 30 CPM a counter is not reporting a clean room, it is reporting
-/// itself -- shielded, unplugged or dying -- and a reassuring colour there
-/// would be the most dangerous thing on the panel. It gets the cold blue that
-/// every other instrument uses for "this reading is not to be trusted".
-const ATTENUATED: Color = Color::from_rgb(0.45, 0.62, 0.85);
-const NOMINAL: Color = Color::from_rgb(0.40, 0.85, 0.55);
-const ADVISORY: Color = Color::from_rgb(0.95, 0.85, 0.35);
-const WARNING: Color = Color::from_rgb(0.98, 0.62, 0.25);
-const DEADLY: Color = Color::from_rgb(0.97, 0.32, 0.34);
-const WARN: Color = Color::from_rgb(0.98, 0.79, 0.35);
-/// The instrument's own markings: the range arcs and their bugs, in the
-/// colour every head-up display puts its bugs in.
-const HUD: Color = Color::from_rgb(0.55, 0.95, 0.90);
-const CYAN: Color = Color::from_rgb(0.45, 0.82, 0.92);
-/// A COLOUR PER TUBE, because colour is the only legend this panel has. Ten
-/// of them, distinguishable on a dark face, and they cycle: a rig with more
-/// than ten counters gets repeats, which is better than running out and
-/// better than inventing shades nobody can tell apart.
-const TUBES: [Color; 10] = [
-    Color::from_rgb(0.55, 0.80, 0.98), // blue
-    Color::from_rgb(0.85, 0.70, 0.98), // violet
-    Color::from_rgb(0.55, 0.92, 0.65), // green
-    Color::from_rgb(0.99, 0.75, 0.45), // orange
-    Color::from_rgb(0.45, 0.92, 0.92), // cyan
-    Color::from_rgb(0.99, 0.62, 0.78), // pink
-    Color::from_rgb(0.82, 0.90, 0.50), // lime
-    Color::from_rgb(0.98, 0.55, 0.52), // red
-    Color::from_rgb(0.50, 0.78, 0.72), // teal
-    Color::from_rgb(0.76, 0.76, 0.96), // lavender
-];
+// ------------------------------------------------------------------- skin ---
 
-fn tube_colour(k: usize) -> Color {
-    TUBES[k % TUBES.len()]
+/// The panel's colours, which follow the desktop's.
+///
+/// COPAL WRITES DOWN WHICH THEME IS ON, so this asks rather than guesses:
+/// `~/.config/copal/current/theme/theme.conf` is the active theme's own file,
+/// carrying its NAME and whether it is a light or a dark one. A desktop that
+/// does not have it falls back to dark, which is what an instrument panel is
+/// by default.
+///
+/// THE DIAL FACES STAY DARK IN BOTH. Antiquity's own note about itself is that
+/// it is "dark chrome around light paper", and a black-faced gauge on paper is
+/// what the instruments this borrows from actually look like. Inverting the
+/// faces to match the page would make them worse, not more consistent.
+#[derive(Debug, Clone)]
+struct Skin {
+    name: String,
+    dark: bool,
+    bg: Color,
+    fg: Color,
+    dim: Color,
+    faint: Color,
+    face: Color,
+    bezel: Color,
+    hud: Color,
+    bands: [Color; 5],
+    tubes: [Color; 10],
+    layers: [Color; 3],
+    cyan: Color,
+    warn: Color,
+    /// THE MARKS ON A DIAL FACE ARE NOT THE MARKS ON THE PAGE. The face is
+    /// dark in both skins -- a black-faced gauge is what the instruments this
+    /// borrows from look like, and Antiquity's own note about itself is that
+    /// it is dark chrome around light paper. So a light skin needs two sets:
+    /// dark colours for text on paper, and bright ones for needles and bands
+    /// on the face. A single set cannot serve both; the first attempt drew
+    /// near-black bands on a near-black face.
+    face_bands: [Color; 5],
+    face_tubes: [Color; 10],
+    /// How solidly the spectrum layers are laid over one another. Paper takes
+    /// more than a dark panel does before a colour reads as a colour.
+    layer_alpha: f32,
 }
 
+fn rgb(hex: u32) -> Color {
+    Color::from_rgb8(
+        ((hex >> 16) & 0xff) as u8,
+        ((hex >> 8) & 0xff) as u8,
+        (hex & 0xff) as u8,
+    )
+}
 
-/// PRIMARIES, one per spectrum window, because the overlay is read by colour
-/// and nothing else. Red is the long view, green the middle, blue the short.
-const LAYER: [Color; 3] = [
-    Color::from_rgb(0.40, 0.75, 1.00),
-    Color::from_rgb(0.45, 0.95, 0.55),
-    Color::from_rgb(1.00, 0.45, 0.45),
-];
+impl Skin {
+    /// The instrument at night: what this panel has always looked like.
+    fn dark() -> Skin {
+        Skin {
+            name: "dark".into(),
+            dark: true,
+            bg: rgb(0x1e1e2e),
+            fg: rgb(0xccd6eb),
+            dim: rgb(0x9ea3b8),
+            faint: rgb(0x73788c),
+            face: rgb(0x0a0d14),
+            bezel: rgb(0x9ea8bd),
+            hud: rgb(0x8cf2e6),
+            bands: [
+                rgb(0x739ed9), // attenuated -- cold, and deliberately not green
+                rgb(0x66d98c), // nominal
+                rgb(0xf2d859), // advisory
+                rgb(0xfa9e40), // warning
+                rgb(0xf75257), // deadly
+            ],
+            tubes: [
+                rgb(0x8ccbfa), rgb(0xd9b3ff), rgb(0x8ceda6), rgb(0xfcbf73),
+                rgb(0x73ebeb), rgb(0xfc9ec7), rgb(0xd1e680), rgb(0xfa8c85),
+                rgb(0x80c7b8), rgb(0xc2c2f5),
+            ],
+            layers: [rgb(0x66bfff), rgb(0x73f28c), rgb(0xff7373)],
+            cyan: rgb(0x73d1eb),
+            warn: rgb(0xfac959),
+            face_bands: [
+                rgb(0x739ed9), rgb(0x66d98c), rgb(0xf2d859),
+                rgb(0xfa9e40), rgb(0xf75257),
+            ],
+            face_tubes: [
+                rgb(0x8ccbfa), rgb(0xd9b3ff), rgb(0x8ceda6), rgb(0xfcbf73),
+                rgb(0x73ebeb), rgb(0xfc9ec7), rgb(0xd1e680), rgb(0xfa8c85),
+                rgb(0x80c7b8), rgb(0xc2c2f5),
+            ],
+            layer_alpha: 0.55,
+        }
+    }
 
-/// The same five bands everywhere, so one counter cannot look nominal in one
-/// place and advisory in another.
-fn colour(b: Band) -> Color {
-    match b {
-        Band::Attenuated => ATTENUATED,
-        Band::Nominal => NOMINAL,
-        Band::Advisory => ADVISORY,
-        Band::Warning => WARNING,
-        Band::Deadly => DEADLY,
+    /// Antiquity's helios: dark instruments on light paper.
+    fn antiquity() -> Skin {
+        Skin {
+            name: "antiquity".into(),
+            dark: false,
+            bg: rgb(0xfce2ab),
+            fg: rgb(0x1e2a3a),
+            dim: rgb(0x6b5a30),
+            faint: rgb(0x8a7748),
+            face: rgb(0x1c1c1c),
+            bezel: rgb(0x87704f),
+            hud: rgb(0x1e6b63),
+            // Darker and more saturated than the dark skin's: these are read
+            // against paper, where a pale green is no colour at all.
+            bands: [
+                rgb(0x2d5a8a), // attenuated
+                rgb(0x3d7a2e), // nominal
+                rgb(0x8a6a12), // advisory
+                rgb(0xa33b20), // warning
+                rgb(0x7b2d3e), // deadly
+            ],
+            tubes: [
+                rgb(0x1e4d7a), rgb(0x6b3a7a), rgb(0x2e6b3a), rgb(0x9e5a12),
+                rgb(0x1e6b6b), rgb(0x94304f), rgb(0x5c6b1f), rgb(0xa33b20),
+                rgb(0x2d5c52), rgb(0x4a4a8a),
+            ],
+            layers: [rgb(0x1e4d8a), rgb(0x2e6b2e), rgb(0xa33b20)],
+            cyan: rgb(0x1e5c6b),
+            warn: rgb(0x8a5a12),
+            // On the face, where the background is near-black in both skins.
+            face_bands: [
+                rgb(0x8ab4e6), rgb(0x7ad991), rgb(0xf0cf6b),
+                rgb(0xf5a259), rgb(0xf26d72),
+            ],
+            face_tubes: [
+                rgb(0x9ccbf5), rgb(0xd4b0f0), rgb(0x9ae0a8), rgb(0xf5c581),
+                rgb(0x84dede), rgb(0xf2a3c4), rgb(0xd6e089), rgb(0xf29a94),
+                rgb(0x93c9bd), rgb(0xc4c4ef),
+            ],
+            layer_alpha: 0.78,
+        }
+    }
+
+    /// What the desktop is wearing, or dark if it will not say.
+    fn detect() -> Skin {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let conf = std::path::PathBuf::from(home)
+            .join(".config/copal/current/theme/theme.conf");
+        let Ok(text) = std::fs::read_to_string(&conf) else {
+            return Skin::dark();
+        };
+        let field = |key: &str| -> Option<String> {
+            text.lines()
+                .find_map(|l| l.trim().strip_prefix(key)?.strip_prefix('='))
+                .map(|v| {
+                    v.split('#')
+                        .next()
+                        .unwrap_or("")
+                        .trim()
+                        .trim_matches('"')
+                        .to_string()
+                })
+        };
+        let mut skin = match field("VARIANT").as_deref() {
+            Some("light") => Skin::antiquity(),
+            _ => Skin::dark(),
+        };
+        if let Some(n) = field("NAME").filter(|n| !n.is_empty()) {
+            skin.name = n;
+        }
+        skin
+    }
+
+    fn named(what: &str) -> Skin {
+        match what {
+            "dark" => Skin::dark(),
+            "light" | "antiquity" => Skin::antiquity(),
+            _ => Skin::detect(),
+        }
+    }
+
+    /// A band as it reads on a dial face.
+    fn face_colour(&self, b: Band) -> Color {
+        match b {
+            Band::Attenuated => self.face_bands[0],
+            Band::Nominal => self.face_bands[1],
+            Band::Advisory => self.face_bands[2],
+            Band::Warning => self.face_bands[3],
+            Band::Deadly => self.face_bands[4],
+        }
+    }
+
+    /// A tube's colour as it reads on a dial face.
+    fn face_tube(&self, k: usize) -> Color {
+        self.face_tubes[k % self.face_tubes.len()]
+    }
+
+    fn colour(&self, b: Band) -> Color {
+        match b {
+            Band::Attenuated => self.bands[0],
+            Band::Nominal => self.bands[1],
+            Band::Advisory => self.bands[2],
+            Band::Warning => self.bands[3],
+            Band::Deadly => self.bands[4],
+        }
+    }
+
+    fn tube(&self, k: usize) -> Color {
+        self.tubes[k % self.tubes.len()]
+    }
+
+    /// The wash behind every other cascade tier, which marks the hand-over
+    /// from one resolution to the next.
+    ///
+    /// LIGHTER ON A DARK PANEL AND DARKER ON A LIGHT ONE. A fixed tint that
+    /// reads as a panel on one theme reads as a stain on the other, and this
+    /// is the one place the two skins need opposite treatment rather than
+    /// different values.
+    fn tier_wash(&self) -> Color {
+        if self.dark {
+            Color { a: 0.05, ..self.fg }
+        } else {
+            Color { a: 0.07, ..rgb(0x3a2f18) }
+        }
+    }
+
+    /// An iced theme carrying this skin's page colours, so the widgets that
+    /// draw their own background agree with the ones that do not.
+    fn theme(&self) -> Theme {
+        Theme::custom(
+            self.name.clone(),
+            iced::theme::Palette {
+                background: self.bg,
+                text: self.fg,
+                primary: self.bands[1],
+                success: self.bands[1],
+                warning: self.bands[2],
+                danger: self.bands[4],
+            },
+        )
     }
 }
+
+// ----------------------------------------------------------------- colours ---
+
 
 // ------------------------------------------------------------------- tests ---
 #[cfg(test)]
