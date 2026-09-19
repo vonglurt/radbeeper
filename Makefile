@@ -166,10 +166,24 @@ release-check:
 # so what was skipped is printed rather than passed over.
 release-media:
 	@echo "== recordings and screenshots =="
+	@# THE CLIP STARTS ITS OWN WINDOW IF THERE IS NOT ONE. This used to
+	@# require a radbeeper-gui to already be open and skipped with a note
+	@# if there was not -- and a note in the middle of a twenty-minute
+	@# release is a note nobody reads. v0.4.1 was tagged with the hero clip
+	@# from the build BEFORE it: the version in its corner was wrong and
+	@# the dial in it was the one whose scale had just been fixed. A
+	@# release that quietly ships last build's picture of the thing it
+	@# just changed is worse than one that fails.
+	@#
+	@# `guishots` already opens its own window per theme, for the same
+	@# reason, so this is the rule and not the exception.
 	@command -v grim >/dev/null && test -n "$$WAYLAND_DISPLAY" \
 	  && { pgrep -x radbeeper-gui >/dev/null \
-	       && $(MAKE) --no-print-directory gui-gif \
-	       || echo "  SKIPPED gui.gif -- no radbeeper-gui running (make gui)"; } \
+	         || { echo "  no window open -- starting one for the clip"; \
+	              ./$(GUIBIN) >/dev/null 2>&1 & sleep 25; }; \
+	       pgrep -x radbeeper-gui >/dev/null \
+	         && $(MAKE) --no-print-directory gui-gif \
+	         || echo "  SKIPPED gui.gif -- the window would not start"; } \
 	  || echo "  SKIPPED gui.gif -- no Wayland compositor with grim"
 	@command -v grim >/dev/null && test -n "$$WAYLAND_DISPLAY" \
 	  && $(PYTHON) tools/guishots.py $(if $(GIFWS),--workspace $(GIFWS),) \
