@@ -37,16 +37,30 @@ GIF    ?= docs/screenshots/watch-hero.gif
 GIFOUT ?= docs/screenshots/gui.gif
 GIFSECS ?= 24
 GIFFPS  ?= 2
+# The window is maximised for the recording and put back afterwards. The panel
+# drops the log table, then the verdicts, then the axis as it runs out of
+# height, so a clip taken in a quarter of a screen is a recording of the panel
+# with its best parts missing.
+GIFFULL ?= 1
+# The workspace the window is moved to for the recording, and switched back
+# from afterwards. A screen grab cannot grab a window nobody is looking at,
+# and an empty workspace is the only way to be sure nothing is sitting on top
+# of it. Empty to record it where it is.
+GIFWS ?= 2
+# What the README's own download is allowed to cost. guicast re-encodes
+# narrower until it fits rather than shipping something over budget.
+GIFMAXMB ?= 9
 # Played faster than captured, for a long session in a short clip. Equal to
 # GIFFPS is real time.
 GIFPLAY ?= 2
-# How wide the frames are scaled before they become a GIF.
-GIFWIDTH ?= 540
+# How wide the frames are scaled before they become a GIF. The starting
+# point, not the answer: GIFMAXMB is what decides.
+GIFWIDTH ?= 1100
 
 .PHONY: all build test check clippy install uninstall package publish-dry \
-        release-check release probe watch sim service gui gui-build \
-        gui-install gui-gif py-test py-check py-install promo promo-fast \
-        play clean help
+        release-check release release-media release-verify bump probe watch \
+        sim service gui gui-build gui-install gui-gif site site-serve \
+        py-test py-check py-install promo promo-fast play clean help
 
 all: build
 
@@ -97,6 +111,36 @@ package:
 publish-dry:
 	$(CARGO) publish --locked --dry-run
 
+## bump: print the next version -- V=x.y.z overrides, otherwise the minor rises
+# THE MINOR, NOT THE PATCH, and worked out rather than typed. A release that
+# carries new recordings, a new file format or a new flag is not a patch, and
+# the version somebody reads off a screenshot has to be the one that drew it.
+# `make release V=1.2.3` still says exactly what it means.
+NEXTV = $(shell $(PYTHON) -c "import re;v=re.search(r'^version = \"([0-9]+)\.([0-9]+)\.([0-9]+)', open('Cargo.toml').read(), re.M);print('%s.%d.0' % (v.group(1), int(v.group(2))+1))")
+bump:
+	@echo "$(VERSION) -> $(if $(V),$(V),$(NEXTV))"
+
+## release-verify: nothing uncommitted, nothing untracked, and in step with the remote
+# A RELEASE IS A CLAIM ABOUT A COMMIT. Anything in the working tree that is not
+# in it -- a stale screenshot, a half-finished doc, a generated page nobody
+# added -- ships in the tarball and not in the repository, and the difference
+# only ever surfaces months later when somebody cannot reproduce the build.
+release-verify:
+	@git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+	  || { echo "not a git checkout"; exit 1; }
+	@git diff --quiet || { echo "uncommitted changes:"; git diff --stat; exit 1; }
+	@git diff --cached --quiet \
+	  || { echo "staged but uncommitted:"; git diff --cached --stat; exit 1; }
+	@test -z "$$(git ls-files --others --exclude-standard)" \
+	  || { echo "untracked files -- add them or ignore them:"; \
+	       git ls-files --others --exclude-standard; exit 1; }
+	@git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1 && { \
+	   git fetch --quiet || true; \
+	   test -z "$$(git log @{u}..HEAD --oneline)" \
+	     || echo "  note: $$(git log @{u}..HEAD --oneline | wc -l) commit(s) not pushed"; \
+	 } || echo "  note: no upstream set for this branch"
+	@echo "  tree is clean at $$(git rev-parse --short HEAD)"
+
 ## release-check: is the tree ready to be tagged V=x.y.z
 release-check:
 	@test -n "$(V)" || { echo "usage: make release-check V=0.2.0"; exit 1; }
@@ -111,25 +155,71 @@ release-check:
 	$(CARGO) test --locked
 	@echo "ready to release $(V)"
 
-## release: bump, commit, tag V=x.y.z -- the workflow does the rest
-release: release-check
+## release-media: every recording and screenshot, when this machine can make them
+# SKIPS WHAT IT CANNOT DO, AND SAYS WHICH. The terminal shots need a counter
+# (or a fake one on a pty); the window shots need a compositor and a running
+# radbeeper-gui. A release from a headless box is a legitimate thing to want,
+# and it should not be a release that silently ships last month's pictures --
+# so what was skipped is printed rather than passed over.
+release-media:
+	@echo "== recordings and screenshots =="
+	@command -v grim >/dev/null && test -n "$$WAYLAND_DISPLAY" \
+	  && { pgrep -x radbeeper-gui >/dev/null \
+	       && $(MAKE) --no-print-directory gui-gif \
+	       || echo "  SKIPPED gui.gif -- no radbeeper-gui running (make gui)"; } \
+	  || echo "  SKIPPED gui.gif -- no Wayland compositor with grim"
+	@$(PYTHON) tools/promo.py $(if $(SHOTS),--only $(SHOTS)) \
+	  || echo "  SKIPPED the terminal shots -- promo.py could not run"
+	@echo "  media done"
+
+## release: bump, build, test, record, publish the site, commit and tag
+#
+# ONE COMMAND, AND IT CHECKS ITS OWN WORK. The order is the one that matters:
+# the version is bumped BEFORE the recordings, because the panel now prints its
+# own version in the corner and a screenshot has to be of the build it is
+# published as; the site is rebuilt after that, because it embeds the version;
+# and the tree is verified clean at the end, because everything above it writes
+# files that belong in the commit.
+#
+#   make release              0.3.1 -> 0.4.0, the minor rises
+#   make release V=1.0.0      say exactly what it is
+#   make release NOMEDIA=1    skip the recordings, keep what is on disk
+release:
+	@# The version is settled first, because everything below it is stamped
+	@# with the answer -- the binary, the panel's corner, the site's footer.
+	$(eval RV := $(if $(V),$(V),$(NEXTV)))
+	@echo "$(RV)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$$' \
+	  || { echo "not a semver version: $(RV)"; exit 1; }
+	@git rev-parse -q --verify "refs/tags/v$(RV)" >/dev/null \
+	  && { echo "tag v$(RV) already exists"; exit 1; } || true
+	@echo "== radbeeper $(VERSION) -> $(RV) =="
 	@grep -c '^version = ' Cargo.toml | grep -qx 1 \
 	  || { echo "Cargo.toml: expected exactly one version line"; exit 1; }
-	sed -i 's|^version = ".*"|version = "$(V)"|' Cargo.toml
+	sed -i 's|^version = ".*"|version = "$(RV)"|' Cargo.toml
+	sed -i 's|^version = ".*"|version = "$(RV)"|' gui/Cargo.toml
+	@# The README's own badge line says the version too, and a page that
+	@# disagrees with the binary it documents is the cheapest kind of wrong.
+	sed -i 's|^MIT · `[0-9][^`]*`|MIT · `$(RV)`|' README.md
 	$(CARGO) update --workspace --offline
-	git add Cargo.toml Cargo.lock
-	@# The bump is usually this target's own commit. It is not when the
-	@# screen itself shows the version: the recording has to be made
-	@# against the version it will be published as, so the manifest is
-	@# bumped before the shots and committed with them.
-	@git diff --cached --quiet -- Cargo.toml Cargo.lock \
-	  && echo "  Cargo.toml already says $(V), and is committed" \
-	  || git commit -m "radbeeper $(V)"
+	@cd gui && $(CARGO) update --workspace --offline >/dev/null 2>&1 || true
+	@echo "== build and test =="
+	@$(MAKE) --no-print-directory check
+	@$(MAKE) --no-print-directory gui-build
+	@cd gui && $(CARGO) test --release
+	$(if $(NOMEDIA),@echo "== media skipped (NOMEDIA) ==",@$(MAKE) --no-print-directory release-media)
+	@echo "== the site =="
+	@$(MAKE) --no-print-directory site
+	@echo "== commit =="
+	git add -A
+	@git diff --cached --quiet \
+	  && echo "  nothing changed" \
+	  || git commit -m "radbeeper $(RV)"
+	@$(MAKE) --no-print-directory release-verify
 	@$(MAKE) --no-print-directory publish-dry
-	git tag -a "v$(V)" -m "radbeeper $(V)"
+	git tag -a "v$(RV)" -m "radbeeper $(RV)"
 	@echo
-	@echo "  tagged v$(V). Push it and the release workflow takes over:"
-	@echo "      git push origin main && git push origin v$(V)"
+	@echo "  tagged v$(RV). Push it and the release workflow takes over:"
+	@echo "      git push origin main && git push origin v$(RV)"
 
 ## probe: what is on the USB right now
 probe: build
@@ -165,11 +255,14 @@ gui-install: gui-build
 #
 #   make gui-gif                        24 seconds of it, in real time
 #   make gui-gif GIFSECS=300 GIFFPS=1 GIFPLAY=12    five minutes at 12x
+#   make gui-gif GIFFULL=              leave the window where it is
 gui-gif:
 	@pgrep -x radbeeper-gui >/dev/null \
 	  || { echo "no radbeeper-gui running -- start it first: make gui"; exit 1; }
 	$(PYTHON) tools/guicast.py -o $(GIFOUT) --seconds $(GIFSECS) \
-	  --fps $(GIFFPS) --play-fps $(GIFPLAY) --width $(GIFWIDTH)
+	  --fps $(GIFFPS) --play-fps $(GIFPLAY) --width $(GIFWIDTH) \
+	  --max-mb $(GIFMAXMB) $(if $(GIFFULL),--fullscreen,) \
+	  $(if $(GIFWS),--workspace $(GIFWS),)
 
 ## service: what the boot service runs, in the foreground
 service: build
@@ -205,6 +298,22 @@ play:
 	mpv --vo=x11 --loop-file=inf --no-osc \
 	    --title="$(NAME) $(VERSION) -- $(notdir $(GIF))" "$(GIF)" \
 	  || feh --title "$(NAME) $(VERSION)" "$(GIF)"
+
+## site: the GitHub Pages site -- landing page, lab reports, counter report
+# WHAT IS SERVED AT THE ROOT. `index.html` is the landing page, rendered from
+# README.md, because somebody arriving from a search needs to be told what this
+# is before they are shown a table of counts. `monitor.html` is the counter's
+# own report, which is what used to be at the root. Both are committed, so
+# Pages serves them with no build step.
+site:
+	$(PYTHON) tools/landing.py
+	@test -d logs && $(PYTHON) radbeeper export --logs logs -o monitor.html \
+	  || echo "  (no logs/ -- monitor.html left alone)"
+
+## site-serve: look at it before pushing it
+site-serve: site
+	@echo "  http://127.0.0.1:8765/"
+	$(PYTHON) -m http.server 8765 --bind 127.0.0.1
 
 ## promo: re-record every screenshot in docs/ from the real program
 promo:

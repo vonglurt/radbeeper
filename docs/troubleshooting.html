@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Troubleshooting — RadBeeper</title>
+<meta name="description" content="1. No serial node. /dev/ttyUSB does not exist. Four causes, in the order they are worth checking — the first three are the counter&#x27;s end and cost nothing to rule out (what you need):">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/troubleshooting.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Troubleshooting — RadBeeper">
+<meta property="og:description" content="1. No serial node. /dev/ttyUSB does not exist. Four causes, in the order they are worth checking — the first three are the counter&#x27;s end and cost nothing to rule out (what you need):">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/troubleshooting.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="troubleshooting">Troubleshooting</h1>
+<p><strong>1. No serial node.</strong> <code>/dev/ttyUSB*</code> does not exist. Four causes, in the order they are worth checking — the first three are the counter's end and cost nothing to rule out (<a href="../index.html#what-you-need">what you need</a>):</p>
+<ul><li><strong>The counter is switched off.</strong> Its USB-serial chip runs off the counter's own battery, not the bus, so a flat or powered-down 320 enumerates as nothing.</li><li><strong>A charge-only USB cable.</strong> Very common, and indistinguishable from a dead port until you try another cable. <code>dmesg</code> stays silent.</li><li><strong>Nothing is actually plugged in.</strong> Worth the glance.</li><li><strong>The running kernel has no USB-serial driver.</strong> Alpine's <code>linux-virt</code> ships none — no <code>ch341</code>, no <code>usbserial</code> — so a counter plugged into a VM running it can never appear as <code>/dev/ttyUSB0</code>, and <code>dmesg</code> is silent because nothing ever claims the device. <code>linux-lts</code> and <code>linux-rpi</code> carry the drivers, and Copal installs <code>linux-lts</code>, so this case does not arise there: <code>apk add linux-lts</code> and reboot is the fix on a plain Alpine that has it wrong.</li></ul>
+<p><code>dmesg | tail</code> separates them: a working cable into a switched-on counter on a kernel with <code>ch341</code> says <code>ch341-uart converter now attached to ttyUSB0</code>. Silence means the device was never seen; a <code>ch341</code> line with no node means the driver is missing.</p>
+<p><strong>2. Permission denied.</strong> The node is <code>root:dialout</code>. <code>doas adduser $USER dialout</code>, then log in again.</p>
+<p><strong>3. Something is there but is not a GMC.</strong> A CH340 is a generic USB-serial cable and plenty of things that are not Geiger counters use one.</p>
+<p><strong>4. The port is busy.</strong> Only one program can read a serial device sensibly — two readers share the bytes between them and neither is told — so RadBeeper locks the port. <strong>That is no longer a reason to stop anything.</strong> The process holding the port serves what it reads on <code>/var/lib/radbeeper/sock</code>, and <code>watch</code>, <code>probe</code> and <code>radbeeper-gui</code> all ask that socket before they ask <code>/dev</code>: with the service logging, they attach to it, and the log does not skip a second.</p>
+<p>So <code>port busy</code> now means the holder is <em>not</em> sharing — a <code>random</code>, a <code>backfill</code> or a <code>log pull</code>, each of which wants the counter to itself, or a build older than the socket. Those finish on their own; <code>--wait</code> waits for them. A command that genuinely needs the port rather than the stream — <code>clock --set</code>, <code>log pull</code>, <code>backfill</code> — still needs the service stopped: <code>doas rc-service radbeeper stop</code>, and <code>start</code> gives it back.</p>
+<p>The lock is an <code>flock</code>, which is the kernel's and belongs to a <em>process</em>: no terminal multiplexer, no session and no desktop changes it, and the answer is the same in <code>tmux</code>, in <code>screen</code> and on a bare console. There is no handover request to send either — the holder has to let go. What the native build does have is <code>--wait</code>, which waits for the port instead of giving up:</p>
+<pre><code class="language-sh">radbeeper --wait watch          # take the port the moment it is free
+radbeeper --wait 30 watch       # or give up after thirty seconds</code></pre>
+<p>Run it, then stop the service in the other window; the monitor catches the port within half a second of it coming free, and Ctrl-C stops the waiting. Only a <em>busy</em> port is waited on — an unplugged counter or a misspelt <code>--device</code> still fails at once, because no amount of waiting fixes either. And if the service is <code>restart</code>ed rather than stopped, both are asking for the same port: whichever gets there first wins, so stop it, start the monitor, and start the service again after.</p>
+<hr>
+<p><a href="../index.html">← back to the README</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>

@@ -22,7 +22,7 @@
 //
 // No plotting library, for the same reason there is no pyserial in the
 // Python: a line and some axes are not worth a dependency.
-use crate::{clock, entropy, log};
+use crate::{analysis, clock, entropy, log};
 use std::collections::BTreeMap;
 use std::fs;
 use std::hint::black_box;
@@ -373,6 +373,105 @@ pub fn summarise(directory: &Path, cpm_per_usvh: f64) -> BTreeMap<String, Counte
     counters
 }
 
+
+/// The merged record: the room, at the precision the per-counter files round
+/// away.
+///
+/// READ FROM ITS OWN FILE, NOT RECONSTRUCTED FROM THEIRS. `together` below
+/// does the reconstruction -- it adds up the per-counter totals and reports
+/// the pair -- and it is exactly as good as the rounded figures it is adding.
+/// What it cannot recover at all is the INTERLEAVE: whether the tubes took
+/// turns or fired together is a fact about arrival times that no per-counter
+/// row records, and it is the difference between n tubes buying time
+/// resolution and n tubes buying only precision. That is measured as it
+/// happens and written down in `cpm-merged-*.tsv`; here it is read back.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Merged {
+    pub rows: u64,
+    /// RAW: every arrival off every tube, as integers, lossless.
+    pub counts: i64,
+    /// Wall seconds the rows cover, and the instrument-seconds behind them.
+    /// With n tubes the second is n times the first, which is the whole
+    /// arithmetic of a merge in two numbers.
+    pub seconds: f64,
+    pub tube_seconds: f64,
+    /// The most tubes any row was written under.
+    pub tubes: usize,
+    /// MERGED: counts over tube-seconds, which is the rate of the ROOM and
+    /// not the sum of the instruments.
+    pub cpm: f64,
+    pub usvh: f64,
+    pub sigma: f64,
+    /// INTERLEAVED: the mean gap between one tube's sample and the next
+    /// tube's, weighted by the rows that measured it.
+    pub interleave: Option<f64>,
+    pub first: Option<f64>,
+    pub last: Option<f64>,
+    /// The last rows, oldest first, for the table.
+    pub latest: Vec<(f64, Vec<String>)>,
+}
+
+/// The columns the page reads out of a merged log, by name.
+const MERGED_COLUMNS: [&str; 10] = [
+    "time", "tubes", "interleave", "counts", "seconds", "tube_seconds",
+    "cps", "cps_raw", "cpm_30", "sigma_30",
+];
+
+/// The merged logs in a directory, folded into one summary.
+///
+/// None when there are none, which is every directory written before this
+/// existed and every one written by the Python. The page simply leaves the
+/// section out rather than drawing an empty one.
+pub fn merged(directory: &Path, cpm_per_usvh: f64) -> Option<Merged> {
+    let names: Vec<String> = MERGED_COLUMNS.iter().map(|s| s.to_string()).collect();
+    let mut m = Merged::default();
+    let mut gap = (0.0f64, 0u64);
+    for path in log::merged_files(directory) {
+        for (when, cells) in log::read_table(&path, &names) {
+            let (counts, seconds) = match (
+                cells.get(3).and_then(|s| int_cell(s)),
+                cells.get(4).and_then(|s| float_cell(s)),
+            ) {
+                (Some(n), Some(s)) => (n, s),
+                _ => continue,
+            };
+            m.rows += 1;
+            m.counts += counts;
+            m.seconds += seconds;
+            m.tube_seconds += cells.get(5).and_then(|s| float_cell(s)).unwrap_or(seconds);
+            if let Some(t) = cells.get(1).and_then(|s| int_cell(s)) {
+                m.tubes = m.tubes.max(t.max(0) as usize);
+            }
+            // ROWS, NOT SECONDS, IS THE WEIGHT. Every row measured its own
+            // interval's interleave over a similar number of hand-overs, and
+            // a row that saw none contributes none rather than a zero -- a
+            // zero gap means the tubes fired together, which is a real and
+            // very different reading.
+            if let Some(g) = cells.get(2).filter(|c| !c.is_empty()).and_then(|s| float_cell(s)) {
+                gap.0 += g;
+                gap.1 += 1;
+            }
+            m.first = Some(m.first.map_or(when, |f| if when < f { when } else { f }));
+            m.last = Some(m.last.map_or(when, |l| if when > l { when } else { l }));
+            m.latest.push((when, cells));
+        }
+    }
+    if m.rows == 0 {
+        return None;
+    }
+    m.latest.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let keep = m.latest.len().saturating_sub(20);
+    m.latest.drain(..keep);
+    m.cpm = if m.tube_seconds > 0.0 {
+        m.counts as f64 * 60.0 / m.tube_seconds
+    } else {
+        0.0
+    };
+    m.usvh = if cpm_per_usvh != 0.0 { m.cpm / cpm_per_usvh } else { 0.0 };
+    m.sigma = if m.counts > 0 { m.cpm / (m.counts as f64).sqrt() } else { 0.0 };
+    m.interleave = (gap.1 > 0).then(|| gap.0 / gap.1 as f64);
+    Some(m)
+}
 
 /// What two or more tubes in one room measured, taken together.
 ///
@@ -837,6 +936,7 @@ const STYLE: &[&str] = &[
 // -------------------------------------------------------------- index.html ---
 
 /// One self-contained page: no scripts, no fetches, no web fonts.
+#[allow(clippy::too_many_arguments)]
 pub fn render_html(
     counters: &BTreeMap<String, Counter>,
     sites: &[(String, f64, String)],
@@ -845,6 +945,11 @@ pub fn render_html(
     shots: &BTreeMap<String, String>,
     // `randoms`: one audit page per counter that has emissions, by serial.
     randoms: &BTreeMap<String, String>,
+    // The merged record, when the directory has one. Read by the caller
+    // rather than here, because this function is handed summaries and not a
+    // directory -- which is what lets a test render a page from nothing but
+    // structs.
+    merge: Option<&Merged>,
 ) -> String {
     // The lede links the first, because the paragraph is about the idea
     // rather than about any one tube. Each counter's own section links its
@@ -951,6 +1056,125 @@ pub fn render_html(
                 Two tubes in one room draw the same shape; where they stop being \
                 parallel is where something is wrong with a tube, a cable or a \
                 pass-through, and no table of averages shows that as quickly.</p>");
+        }
+    }
+
+    // ---- the merged record, between the pair and the tubes -------------
+    //
+    // WHERE IT SITS AND WHY. "Both counters" above is arithmetic done HERE,
+    // on the rounded per-counter totals; this is arithmetic done at the time,
+    // by the process that held the ports, and written down at full precision.
+    // The two should agree, and where they do not the merged file is the one
+    // that was there. It also carries the one fact the per-counter files
+    // cannot hold between them, which is the interleave.
+    if let Some(m) = merge {
+        a!("<h2>The merged record</h2>");
+        a!("<div class=\"cards\">");
+        let card = |k: &str, v: &str, n: &str| {
+            format!(
+                "<div class=\"card\"><div class=\"k\">{}</div><div class=\"v\">{}</div>{}</div>",
+                esc(k),
+                esc(v),
+                if n.is_empty() { String::new() } else { format!("<div class=\"n\">{}</div>", esc(n)) }
+            )
+        };
+        out.push(card(
+            "The room",
+            &format!("{} CPM", f(3, m.cpm)),
+            &format!("\u{b1}{} CPM \u{b7} {} uSv/h", f(3, m.sigma), f(4, m.usvh)),
+        ));
+        out.push(card(
+            "Raw arrivals",
+            &commas(m.counts),
+            &format!(
+                "{} tube-hours over {} hours of room",
+                f(2, m.tube_seconds / 3600.0),
+                f(2, m.seconds / 3600.0)
+            ),
+        ));
+        out.push(match m.interleave {
+            Some(g) => card(
+                "Interleave",
+                &format!("{} s", f(3, g)),
+                &format!(
+                    "{}% of what {} tubes could manage",
+                    f(0, 100.0 * analysis::interleave_quality(g, m.tubes)),
+                    m.tubes
+                ),
+            ),
+            None => card("Interleave", "--", "one tube has nothing to interleave with"),
+        });
+        out.push(card(
+            "Merged rows",
+            &commas(m.rows as i64),
+            &match (m.first, m.last) {
+                (Some(a), Some(b)) => format!("{} to {}", when(a), when(b)),
+                _ => String::new(),
+            },
+        ));
+        a!("</div>");
+        a!(
+            "<p class=\"note\">Every counter keeps its own file and nothing is \
+             ever merged into it &mdash; a row that blended two instruments \
+             could not be taken apart again, and whether the two agree is the \
+             one question a second tube exists to answer. So the merge is a \
+             file of its own, <code>cpm-merged-YYYY-MM.tsv</code>, written \
+             beside them as the counters are read. It carries both halves of \
+             every interval: the <strong>raw</strong> arrivals as integers, \
+             with the tube-seconds behind them and a per-tube breakdown, and \
+             the <strong>merged</strong> rate of the room &mdash; counts over \
+             tube-seconds, which is the mean the tubes agree on and emphatically \
+             not their sum. Its numbers are written so that reading them back \
+             gives the same number: the per-counter files round to a tenth of a \
+             CPM, and this one does not.</p>"
+        );
+        a!(
+            "<p class=\"note\">The <strong>interleave</strong> is the fact no \
+             per-counter file can hold. Each tube has its own clock and its own \
+             phase and none can be steered, so the gap between one tube\u{2019}s \
+             sample and the next tube\u{2019}s is whatever it is &mdash; and the \
+             ideal is 1/n of a second, not half of one. Near it, the tubes are \
+             taking turns and the pair resolves time n times as finely as one \
+             of them could. Near zero they are firing together, which still \
+             multiplies the counts and still buys the precision above, and adds \
+             no time resolution at all.</p>"
+        );
+        if !m.latest.is_empty() {
+            a!("<h3>The last merged rows</h3>");
+            a!("<div class=\"tablewrap\"><table><thead><tr>");
+            for h in ["Time", "Tubes", "Interleave", "Raw counts", "Room s",
+                      "Tube s", "Room CPM", "Arrivals/s", "CPM 30s"] {
+                a!("<th>{}</th>", esc(h));
+            }
+            a!("</tr></thead><tbody>");
+            for (_, cells) in m.latest.iter().rev() {
+                a!("<tr>");
+                // RAW AND MERGED IN ONE ROW, side by side and labelled, which
+                // is the only way to see that they are two readings of the
+                // same seconds rather than two different measurements.
+                for (i, places) in [
+                    (0usize, usize::MAX), (1, 0), (2, 3), (3, 0), (4, 0),
+                    (5, 0), (6, 3), (7, 3), (8, 3),
+                ] {
+                    let raw = cells.get(i).map(String::as_str).unwrap_or("");
+                    let text = if places == usize::MAX {
+                        raw.replace('T', " ")
+                    } else if raw.is_empty() {
+                        "\u{2014}".to_string()
+                    } else {
+                        match float_cell(raw) {
+                            // cps is per tube-second; a reader wants it a
+                            // minute at a time, as everything else here is.
+                            Some(v) if i == 6 => f(places, v * 60.0),
+                            Some(v) => f(places, v),
+                            None => raw.to_string(),
+                        }
+                    };
+                    a!("<td>{}</td>", esc(&text));
+                }
+                a!("</tr>");
+            }
+            a!("</tbody></table></div>");
         }
     }
 
@@ -1866,7 +2090,9 @@ pub fn export(
         .iter()
         .map(|(serial, p, _)| (serial.clone(), relpath(p, &out_dir)))
         .collect();
-    let html = render_html(&counters, &sites, cpm_per_usvh, title, &shots, &links);
+    let merge = merged(logs, cpm_per_usvh);
+    let html = render_html(&counters, &sites, cpm_per_usvh, title, &shots, &links,
+                           merge.as_ref());
     fs::write(output, html)?;
     Ok(Report {
         index: output.to_path_buf(),
@@ -1919,6 +2145,70 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE MERGED RECORD SURVIVES THE ROUND TRIP: written by the service,
+    /// read back by the page, and the two halves of every interval still
+    /// distinguishable at the other end.
+    ///
+    /// The raw arrivals are integers and stay integers; the room's rate is
+    /// counts over TUBE-seconds and not over the wall clock, which is the one
+    /// arithmetic mistake a second instrument makes easy; and the interleave
+    /// -- the fact no per-counter file can hold -- comes back as it went in.
+    #[test]
+    fn the_merged_record_is_written_and_read_back_whole() {
+        let spans = [3.0, 30.0, 300.0];
+        let dir = std::env::temp_dir()
+            .join(format!("radbeeper-export-merged-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let mut text = log::merged_header(&spans);
+        // Three rows: thirty seconds of room each, two tubes, so sixty
+        // tube-seconds behind every one of them.
+        for (i, counts) in [30u64, 60, 90].iter().enumerate() {
+            text.push('\n');
+            text.push_str(&log::merged_row(
+                1_700_000_000.0 + 30.0 * i as f64,
+                2,
+                Some(0.5),
+                *counts,
+                30.0,
+                60.0,
+                &[Some(*counts as f64), Some(*counts as f64), None],
+                Some(1.0),
+                &[None, None, None],
+                &[("AAA".into(), counts / 2), ("BBB".into(), counts / 2)],
+                log::SRC_LIVE,
+                "",
+            ));
+        }
+        fs::write(dir.join("cpm-merged-2023-11.tsv"), text).unwrap();
+
+        let m = merged(&dir, 100.0).expect("a merged log was written");
+        assert_eq!(m.rows, 3);
+        assert_eq!(m.tubes, 2);
+        // RAW: every arrival, as an integer, none of them lost.
+        assert_eq!(m.counts, 180);
+        // Ninety seconds of room, from a hundred and eighty tube-seconds.
+        assert_eq!(m.seconds, 90.0);
+        assert_eq!(m.tube_seconds, 180.0);
+        // MERGED: 180 arrivals over 180 tube-seconds is sixty a minute --
+        // the rate of the ROOM. Over the wall clock it would read 120, which
+        // is the pair reported as twice the background.
+        assert!((m.cpm - 60.0).abs() < 1e-9, "{}", m.cpm);
+        assert!((m.usvh - 0.6).abs() < 1e-9);
+        // Poisson: 180 arrivals know the rate to 1/sqrt(180).
+        assert!((m.sigma - 60.0 / 180.0f64.sqrt()).abs() < 1e-9, "{}", m.sigma);
+        // INTERLEAVED: half a second, which for a pair is a perfect grid.
+        assert_eq!(m.interleave, Some(0.5));
+        assert!((analysis::interleave_quality(m.interleave.unwrap(), m.tubes) - 1.0).abs() < 1e-9);
+
+        // And it is not a counter. The directory has no per-counter file in
+        // it at all, so the report has nothing to double-count.
+        assert!(summarise(&dir, 100.0).is_empty());
+        assert!(merged(&dir.join("nowhere"), 100.0).is_none());
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// TWO TUBES DO NOT DOUBLE THE DOSE. Two identical counters, each a
     /// thousand counts in a thousand seconds, read sixty CPM together and not

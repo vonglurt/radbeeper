@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The log — RadBeeper</title>
+<meta name="description" content="A lab report on the files RadBeeper writes: what is in a row, why an empty field is not a zero, where the bytes live, and the second file that records the room rather than any one instrument.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/the-log.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="The log — RadBeeper">
+<meta property="og:description" content="A lab report on the files RadBeeper writes: what is in a row, why an empty field is not a zero, where the bytes live, and the second file that records the room rather than any one instrument.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/the-log.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><strong>The log</strong></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-log">The log</h1>
+<p><em>A lab report on the files RadBeeper writes: what is in a row, why an empty field is not a zero, where the bytes live, and the second file that records the room rather than any one instrument.</em></p>
+<p><strong>The format is owned by the reference implementation</strong> — the one-file Python <code>radbeeper</code> at the root of this repository — and the Rust build produces the same characters. Not "equivalent": identical, checked byte for byte by <code>tests/test_differential.py</code> on the same inputs. Two dialects of one file format is the failure this arrangement exists to prevent, and it is only worth anything because somebody checks.</p>
+<hr>
+<h2 id="the-per-counter-log">The per-counter log</h2>
+<p>One row every 30 seconds into a dated file per counter, <code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code>. <code>watch</code> writes the same rows while it is open, so it does not matter which of the two has the port.</p>
+<table><thead><tr><th>Column</th><th></th></tr></thead><tbody><tr><td><code>time</code></td><td>first and big-endian, so <code>sort cpm-*.tsv</code> is chronological with no flags</td></tr><tr><td><code>cps</code></td><td>counts per <strong>one</strong> second, whatever the row spacing</td></tr><tr><td><code>counts</code>, <code>seconds</code></td><td>so the division can be checked, and a short row is obviously short</td></tr><tr><td><code>cpm_3</code> … <code>cpm_3000</code></td><td>one column per window, empty until that window is full</td></tr><tr><td><code>peak_3</code> … <code>peak_3000</code></td><td>the highest each window reached <strong>since the last row</strong></td></tr><tr><td><code>src</code></td><td><code>live</code> if this machine measured it, <code>flash</code> if reconstructed</td></tr><tr><td><code>site</code></td><td>where the counter was at that row's own time</td></tr></tbody></table>
+<p><strong>The peaks are the point.</strong> A row carrying only the averages as they stood at the instant it was written would miss a source that came and went between two rows — which is the one event actually worth having a log for.</p>
+<p>Tabs are invisible and that matters here, because an <strong>empty field is not a zero</strong> — it is a window that was not full yet:</p>
+<p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/log-tabs.png" alt="the log with its tabs shown" loading="lazy"></p>
+<hr>
+<h2 id="and-a-second-file-for-the-room">And a second file, for the room</h2>
+<p><strong>Nothing is ever merged into a counter's own file.</strong> A row that blended two instruments could not be taken apart again, and whether the two agree is the one question a second tube exists to answer. So the merge is written <em>beside</em> them, as <code>cpm-merged-YYYY-MM.tsv</code>, by whichever process holds the ports — <strong>and only when there is more than one counter</strong>, because with one there is nothing to merge and nothing to interleave. Plug a second tube into a running service and the merged record starts then, which is exactly when it becomes worth keeping.</p>
+<table><thead><tr><th>Column</th><th></th></tr></thead><tbody><tr><td><code>time</code>, <code>unix</code></td><td>the stamp a person reads, and the epoch that survives it — a sample is not on a whole second</td></tr><tr><td><code>tubes</code>, <code>interleave</code></td><td>how many were reporting, and the mean gap between one tube's sample and <strong>the next tube's</strong></td></tr><tr><td><code>counts</code></td><td><strong>raw</strong>: every arrival off every tube, as an integer</td></tr><tr><td><code>seconds</code>, <code>tube_seconds</code></td><td>the wall clock the row covers, and the instrument-time behind it — with <em>n</em> tubes the second is <em>n</em> times the first, which is the whole arithmetic of a merge in two numbers</td></tr><tr><td><code>cps</code></td><td><strong>merged</strong>: counts over <em>tube</em>-seconds, the rate of the room</td></tr><tr><td><code>cps_raw</code></td><td>counts over wall seconds, the arrival rate at the machine</td></tr><tr><td><code>cpm_3</code> … , <code>sigma_30</code>, <code>peak_*</code></td><td>the combined windows, and what a second tube actually buys</td></tr><tr><td><code>per_tube</code></td><td><code>SERIAL=counts</code> for each, so the merge can be taken apart again</td></tr></tbody></table>
+<p><strong>Two tubes do not double the dose — what doubles is the evidence.</strong> <code>cps</code> is therefore counts over tube-seconds and not over the wall clock; dividing by the wall clock would report a pair as twice the background, which is the one arithmetic mistake a second instrument makes easy.</p>
+<p><strong>The interleave is the fact no per-counter file can hold.</strong> Each tube has its own clock and its own phase and none can be steered, so the gap is whatever it is — and the ideal is 1/<em>n</em> of a second, not half of one. Near it, the tubes are taking turns and the pair resolves time <em>n</em> times as finely as one of them could; near zero they fire together, which still buys the precision above and no time resolution at all.</p>
+<p><strong>Its numbers read back as the numbers that were written.</strong> The per-counter file rounds to a tenth of a CPM, because its characters are the Python's to the byte; this one writes the shortest string that parses back to identical bits — which is simultaneously the most precise form there is and, for ordinary values, the shortest. <code>radbeeper export</code> reads both and puts them on the page side by side, under <strong>The merged record</strong>.</p>
+<hr>
+<h2 id="where-the-bytes-live">Where the bytes live</h2>
+<p>State lives in <code>/var/lib/radbeeper</code> when that is writable, <code>/var/log/radbeeper</code> when only that is, and <code>~/.local/share/radbeeper</code> otherwise.</p>
+<p><strong><code>/var/lib</code>, not <code>/var/log</code>, because <code>/var/log</code> is often in RAM.</strong> On Alpine desktops it is commonly a tmpfs — it was on the machine these logs came from — and every reboot emptied the log, leaving only what the counter's flash still held to backfill from. A measurement record is state, not a log to rotate away.</p>
+<hr>
+<h2 id="rotation-by-construction">Rotation, by construction</h2>
+<p>Files rotate by month and by counter, <code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code>, and there is no rotation code because there is no rotation event. A row is written to the file for <strong>its own month</strong>, so a month ending is not something that happens to a file: that one stops growing and the next one starts. Nothing is scheduled, and nothing renames a file while a service is appending to it.</p>
+<p>Two things the writer watches for, both once per row and so once every thirty seconds, against the two syscalls the row itself costs:</p>
+<ul><li><strong>The month turning over</strong>, which is the whole of rotation.</li><li><strong>The file being replaced underneath it.</strong> A backfill merges by writing a new file and renaming it over the old one, which leaves an appender holding a descriptor onto an orphaned inode: it goes on writing, to nothing anybody will ever read. Comparing the inode catches that and reopens.</li></ul>
+<hr>
+<h2 id="reading-a-log-back">Reading a log back</h2>
+<p>Columns are matched <strong>by name, never by position.</strong> Adding a span inserts <code>cpm_3000</code> after <code>cpm_300</code> and <code>peak_3000</code> after <code>peak_300</code> — in the middle of the row, twice. Padding such a row on the right slides every value after the insertion point one column left and writes a counter's <code>src</code> into a <code>peak</code> column. The row still parses; it is just wrong.</p>
+<p>A file may therefore carry <strong>more than one header</strong>. A four-window logger replaced mid-month by a five-window one writes a second <code>#</code> line, and both readers take the last header above a row as that row's. A file with no header at all is read as the three-window layout the positions were written for.</p>
+<hr>
+<h2 id="backfill-from-the-counters-own-memory">Backfill from the counter's own memory</h2>
+<p>The counter records to its flash whether or not anything is listening. When the service starts it reads the tail of that flash and fills the log's gaps.</p>
+<pre><code class="language-sh">radbeeper backfill                          # from the counter
+radbeeper backfill --image hist.bin --serial ABC123
+radbeeper --clock-offset 2180 backfill      # if you have since set its clock</code></pre>
+<ul><li><strong>One row per slot.</strong> A row is identified by the log interval it falls in, so a backfill can never write over a live measurement, and a slot with no evidence stays absent. Nothing is interpolated across a gap.</li><li><strong>The counter's second is measured, not assumed.</strong> It is 1.011 of ours on the unit this was written against — 39 seconds of drift an hour — so the spacing is taken from each pair of timestamps in the recording.</li><li><strong>The flash is a ring.</strong> On a counter that has been running a while there is no unwritten byte in it: the newest sample sits just <em>before</em> the write pointer. Reading the physical tail would hand back the oldest hours while claiming they were the newest.</li></ul>
+<hr>
+<h2 id="where-a-counter-is-and-where-it-has-been">Where a counter is, and where it has been</h2>
+<pre><code class="language-sh">radbeeper site                        # where is it, and where has it been
+radbeeper site --name "The garage"    # it moved, from now</code></pre>
+<p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/commands.png" alt="site, log info and export" loading="lazy"></p>
+<p>A reading without a place is half a measurement, and these get carried about — so the place is a property of a <strong>serial number over time</strong>, appended to <code>sites.tsv</code> and never overwritten. A reading from last Tuesday resolves to where the counter was last Tuesday.</p>
+<p>It records a <strong>name and nothing finer, on purpose</strong>. These logs get published; a place name is what a reader needs, while a decimal fix is a street address for whoever is holding the counter. Nothing is assumed either: until you record a place, the column is empty.</p>
+<hr>
+<h2 id="further-reading">Further reading</h2>
+<ul><li><a href="the-stream.html">The stream</a> — how several counters become one record, and why the interleave is the fact no per-counter file can hold.</li><li><a href="cascade.html">The cascade strip</a> — the counts strip the log rows tick under.</li><li><a href="reference.html">Reference</a> — the tube factor, the protocol, the tests.</li></ul>
+<hr>
+<p>MIT License — Copyright (c) 2026 Paul Richeson</p>
+<hr>
+<p><a href="../index.html">← back to the README</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><strong>The log</strong></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>

@@ -4,7 +4,7 @@
 
 **1. No serial node.** `/dev/ttyUSB*` does not exist. Four causes, in the order
 they are worth checking — the first three are the counter's end and cost nothing
-to rule out ([§1](#1-what-you-need)):
+to rule out ([what you need](../README.md#what-you-need)):
 
 - **The counter is switched off.** Its USB-serial chip runs off the counter's
   own battery, not the bus, so a flat or powered-down 320 enumerates as nothing.

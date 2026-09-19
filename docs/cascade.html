@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The cascade strip — RadBeeper</title>
+<meta name="description" content="Chained dyadic time compression: one row of a terminal that holds ten minutes of a Geiger counter and still shows this second.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/cascade.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="The cascade strip — RadBeeper">
+<meta property="og:description" content="Chained dyadic time compression: one row of a terminal that holds ten minutes of a Geiger counter and still shows this second.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/cascade.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><strong>The cascade</strong></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-cascade-strip">The cascade strip</h1>
+<p><strong>Chained dyadic time compression: one row of a terminal that holds ten minutes of a Geiger counter and still shows this second.</strong></p>
+<p><em>A lab report in the IEEE style, on the counts strip RadBeeper draws across the middle of <code>radbeeper watch</code>. Written against radbeeper 0.3.0, 17 September 2026. The technique is described first and named last, in <a href="#viii-naming">§VIII</a>; the short answer is that this document calls it a <strong>cascade strip</strong>, and the mechanism <strong>chained dyadic time compression</strong>.</em></p>
+<hr>
+<h2 id="abstract">Abstract</h2>
+<p>A live monitor has one row of a terminal -- on the order of 160 cells -- and two demands on it that ordinarily contradict each other: show what is happening now, at the resolution it is happening, and show enough of the past to say whether now is unusual. At one sample a cell, 160 cells is two minutes and forty seconds of history. This report describes the arrangement RadBeeper uses instead: four fixed-width panels drawn edge to edge in a single row, each holding <em>k</em> times as much time per cell as the panel on its right, with completed cells handed leftward across the panel boundaries as they age. At <em>k</em> = 2 and four panels of 39 to 42 columns, the row reaches back 588 seconds -- 3.7 times what a linear strip of the same width reaches -- while its rightmost cell is still one second wide. The arrangement is a visual analogue of a chain of decimating shift registers, and the report gives its invariants, its cost, the properties that make it readable, and an honest account of what in it is old and what appears not to be.</p>
+<p><strong>Index terms</strong> -- information visualisation, time-series display, focus+context, multi-resolution aggregation, streaming data, radiation monitoring, terminal user interfaces.</p>
+<hr>
+<h2 id="i-introduction">I. Introduction</h2>
+<h3 id="a-the-problem">A. The problem</h3>
+<p>RadBeeper reads a GQ GMC-320 Plus Geiger-Müller counter once a second and draws the result in a terminal. Radioactive decay is a Poisson process, so a single second of counts is mostly noise: at a background of 40 CPM, a one-second sample is 0 counts about half the time and 1 count most of the rest. A reading is only a reading against its own history. The display therefore has to answer two questions at once:</p>
+<ol><li><em>What is the counter doing this second?</em> -- which needs one second of resolution, because the arrival of an individual count is the event.</li><li><em>Is this second unusual?</em> -- which needs minutes to tens of minutes of context, because that is the timescale on which background drifts, somebody walks past with a source, or a rain shower washes radon daughters out of the air.</li></ol>
+<p>The display budget for both is one band of a text terminal: 160 columns wide and five rows tall in the reference layout, sharing the screen with five averaging windows, a log table and a periodicity estimate.</p>
+<h3 id="b-what-does-not-work">B. What does not work</h3>
+<p><strong>One second a column.</strong> 160 seconds of history, at full resolution, and no answer to question 2. The band shows a spike and cannot say whether an identical spike happened four minutes ago.</p>
+<p><strong>One minute a column.</strong> 160 minutes of history, and no answer to question 1. The second-by-second arrival structure -- which is what makes a Geiger counter interesting to watch, and what the spectrum panel below it analyses -- is averaged away before it is drawn.</p>
+<p><strong>Two separate charts.</strong> This is what monitoring systems built on RRDtool [1] conventionally do: a "last hour" graph and a "last day" graph, side by side or on separate pages. It answers both questions, at the cost of the reader's eye having to leave one chart, find the other, and re-establish where in it "now" is. In a band five rows tall there is no room for two charts with two axes and two scales.</p>
+<p><strong>Distortion of a single axis.</strong> Fisheye and bifocal treatments [2], [3] compress the context continuously, so that a column's width in time is a smooth function of its age. This works, and is the closest published relative of what is described here, but a continuously varying cell width is awkward in a character grid, where a cell is one column or it is nothing, and it makes a bar's meaning ("how much time is this?") a per-column question.</p>
+<h3 id="c-what-this-report-describes">C. What this report describes</h3>
+<p>The counts strip is four panels of roughly equal width, drawn edge to edge in one band, sharing one vertical scale and one colour scale:</p>
+<pre><code> 8s/bar · 5m          F 4s/bar · 3m         F 2s/bar · 78s        F 1s/bar · 42s
+└─────── 312 s ──────┘└────── 156 s ───────┘└───── 78 s ─────────┘└──── 42 s ────┘
+          oldest  ←──────── time flows right to left ────────→  now, one second a bar</code></pre>
+<p>Each panel holds twice as much time in a bar as the panel to its right. A second arrives at the right edge of the rightmost panel. As it ages it marches left, one column a second, until it falls off the left edge of that panel -- at which point it does not disappear: it is merged with its neighbour into a single two-second bar entering the right edge of the next panel along. Two of <em>those</em> bars in turn become one four-second bar in the third panel, and two of those become one eight-second bar in the fourth. Each boundary is a halving, and the halvings chain.</p>
+<p>The result reaches back 588 seconds in 159 columns, with a rightmost bar one second wide. A linear strip of the same width reaches 159 seconds. Adding a fifth panel of the same width would reach 1212 seconds, a sixth 2460; the reach grows geometrically in the number of panels while the display cost grows linearly.</p>
+<hr>
+<h2 id="ii-related-work">II. Related work</h2>
+<p>The cascade strip sits at the junction of two literatures that rarely cite each other: the storage-side one, concerned with keeping a bounded summary of an unbounded stream, and the display-side one, concerned with showing a detail and its context at once.</p>
+<h3 id="a-storage-side-aging-summaries-of-a-stream">A. Storage-side: aging summaries of a stream</h3>
+<p><strong>Round-robin archives.</strong> RRDtool [1] is the canonical instance and the direct ancestor of every monitoring system's retention policy. A round-robin database holds several <em>round-robin archives</em> over the same stream, each with its own consolidation factor: 600 samples at 1 minute, 700 at 5 minutes, 775 at 30 minutes, 797 at 2 hours. Primary data points are consolidated -- by mean, minimum or maximum -- into the coarser archives as they arrive, and each archive is a circular buffer, so the file never grows. The storage structure of the cascade strip is exactly an RRA set with consolidation factor 2 between neighbours; what is different is that RRDtool's archives are <em>drawn separately</em>, one graph per timescale, and the cascade strip draws them adjacent, in one row, as one picture.</p>
+<p><strong>Exponential histograms.</strong> Datar, Gionis, Indyk and Motwani [4] give the sliding-window counting structure that underlies much of the streaming literature: buckets whose sizes grow exponentially with age (1, 1, 2, 4, 8, ...), merged pairwise as they age out, answering a windowed count within a 1 + ε factor in O(ε⁻¹ log² N) bits. The pairwise merge-on-aging is precisely the hand-off across a cascade boundary. The difference is one of purpose: an exponential histogram is a data structure with an error bound, from which no particular picture follows; the cascade strip is a picture, in which the merge happens at a boundary the reader can see and the bucket sizes are chosen to be legible rather than optimal.</p>
+<p><strong>Wavelets and pyramids.</strong> Successive halving of resolution is the Haar pyramid, and multi-resolution analysis is the standard signal-processing frame for it. A cascade strip is a Haar approximation pyramid in which each level is shown as a strip of its own, with the levels laid end to end in their natural temporal order rather than stacked.</p>
+<h3 id="b-display-side-detail-and-context-in-one-picture">B. Display-side: detail and context in one picture</h3>
+<p><strong>Bifocal display.</strong> Spence and Apperley [2] gave the first focus+context visualisation: a detailed strip with the material on either side horizontally compressed into narrow bands, described through a metaphor of paper stretched over four rollers. The cascade strip is a one-sided bifocal display with the compression quantised into discrete steps instead of applied continuously -- a bifocal display for a character grid.</p>
+<p><strong>Fisheye and generalised focus+context.</strong> Furnas's degree-of-interest function and the distortion-oriented surveys that followed [3] formalise the allocation of display space in proportion to interest. The cascade strip's degree-of-interest function is recency, and its space allocation is a step function of it: constant within a panel, halving at each boundary.</p>
+<p><strong>Space-efficient time series.</strong> Horizon graphs [5] attack the same budget problem in the other dimension -- vertical rather than horizontal -- by layering bands of value range, and Heer, Kong and Agrawala's experiments establish that readers tolerate substantial compression before accuracy falls off. The cascade strip is that argument applied to the time axis, and the two compose: nothing prevents a cascade strip whose panels are drawn as horizon graphs.</p>
+<p><strong>Multi-resolution aggregation.</strong> Hao, Dayal, Keim and Schreck [6] allocate display space to sub-intervals of a long series in proportion to their degree of interest, with the recent data at the highest resolution and older intervals progressively aggregated. This is the closest published relative in the visualisation literature. It differs in being an interactive exploration tool for a stored series, with data-dependent interval boundaries, where the cascade strip is a live monitor with fixed, arithmetically-defined boundaries that never move.</p>
+<h3 id="c-patent-literature">C. Patent literature</h3>
+<p><strong>This idea has been claimed.</strong> A continuation family assigned to Trading Technologies International, with a priority date of 31 March 2004 [7], claims a time axis divided into regions each with its own linear scale -- a recent region and one or more older regions, together forming a non-linear axis -- where new data enters the recent region and the oldest data previously in it is automatically shifted into the older region as it ages. Stated that generally, it is the mechanism described in this report, arrived at for financial charting rather than instrument monitoring. Related claims cover time-relevance-based nonlinear distortion of a series [8].</p>
+<p>Anyone intending to build a product on this should read [7] properly. What we did not find in the claims we read is the specific chain of equal-width panels at a constant factor with a drawn, labelled hand-over -- but the absence of a thing from a patent's claims is a question for a lawyer, and this report is not one. The technique is old enough and obvious enough to have been independently invented repeatedly, which is itself evidence that it is the right answer to the problem.</p>
+<hr>
+<h2 id="iii-the-technique">III. The technique</h2>
+<h3 id="a-definition">A. Definition</h3>
+<p>A cascade strip of <em>T</em> tiers over a stream of per-second samples is defined by a compression factor <em>k</em> ≥ 2 and a column count *c*ᵢ for each tier, numbered from the finest, <em>i</em> = 0, at the right:</p>
+<ul><li>tier <em>i</em> draws *c*ᵢ bars;</li><li>each bar of tier <em>i</em> covers *k*ⁱ consecutive samples;</li><li>tier <em>i</em> therefore spans *c*ᵢ · *k*ⁱ seconds;</li><li>the strip spans Σ *c*ᵢ · *k*ⁱ seconds in Σ *c*ᵢ columns.</li></ul>
+<p>With equal widths *c*ᵢ = <em>c</em>, the strip spans <em>c</em> · (*k*ᵀ − 1)/(<em>k</em> − 1) seconds: geometric in <em>T</em>, linear in display cost. RadBeeper uses <em>T</em> = 4, <em>k</em> = 2, and <em>c</em> = ⌊<em>w</em>/4⌋ with the remainder given to the finest tier, so at <em>w</em> = 159: 42, 39, 39, 39 columns and 42 + 78 + 156 + 312 = 588 seconds.</p>
+<p><em>k</em> is not fixed at 2 by the technique. RadBeeper chooses the smallest whole <em>k</em> ≥ 2 whose strip reaches back at least as far as the periodicity estimator below it looks, so that the two panels are views of the same stretch of time; in ordinary operation that is 2, and the display says which it is in every tier's label (<code>4s/bar</code>).</p>
+<h3 id="b-invariants">B. Invariants</h3>
+<p>These are what make the picture readable, and they are what the tests in <code>src/analysis.rs</code> assert:</p>
+<ul><li><strong>I1 -- Alignment.</strong> A bar of tier <em>i</em> covers samples [<em>g</em>·*k*ⁱ, (<em>g</em>+1)·*k*ⁱ) for an integer <em>g</em>. Bar edges are fixed to the sample count, not to the screen. A bar therefore does not change as the strip scrolls under it: the only bar in a tier whose value can change is the newest, and only until it is full.</li><li><strong>I2 -- Conservation.</strong> Every second that leaves a tier arrives in the tier to its left. Nothing is dropped at a boundary, and nothing is counted twice: tier <em>i</em>+1's newest group begins exactly where tier <em>i</em>'s oldest drawn bar begins.</li><li><strong>I3 -- Means, not sums.</strong> A bar's value is the arithmetic mean of the counts per second it covers, so that the same bar height means the same rate in every tier. Summing would make an 8-second bar eight times as tall as a 1-second bar of identical intensity, and the strip would read as a ramp.</li><li><strong>I4 -- One scale.</strong> All tiers share one vertical scale and one colour scale, both taken over the whole strip. Nothing in the picture invites the reader to compare a height in one panel against a <em>different</em> scale in the next.</li></ul>
+<h3 id="c-the-shift-register-analogy">C. The shift-register analogy</h3>
+<p>The reader's model of the mechanism, and the one this report recommends teaching, is hardware: each tier is a shift register clocked at 1/*k*ⁱ Hz, and each boundary is a divide-by-<em>k</em> stage. A sample is clocked into stage 0 every second. Every <em>k</em> ticks, stage 0's overflow clocks stage 1; every <em>k</em> ticks of <em>that</em>, stage 1's overflow clocks stage 2. The picture is the contents of all four registers, laid out in the order the data flows through them. What a barrel shifter does to bits in one cycle, this does to seconds over ten minutes.</p>
+<h3 id="d-cost">D. Cost</h3>
+<p>Drawing is O(Σ *c*ᵢ) per frame. A standalone implementation needs Σ *c*ᵢ accumulators plus <em>T</em> partial sums -- under 200 numbers for the layout above -- and no history at all; RadBeeper instead recomputes the strip each frame from the sample buffer its averaging windows already keep, because that buffer exists anyway and recomputation makes I1 trivially true rather than a thing to maintain across a resize.</p>
+<p>The reach of a strip with <em>T</em> equal tiers of <em>c</em> columns is <em>c</em>·(*k*ᵀ−1)/ (<em>k</em>−1); RadBeeper's fine tier carries the three columns that do not divide, so its reach is 42 + 39·(*k*ᵀ−<em>k</em>)/(<em>k</em>−1). At <em>k</em> = 2 that is 42 s for one tier, 120 s for two, 276 s for three, 588 s for four, 1212 s for five and 2460 s for six. The marginal panel always doubles what came before it.</p>
+<hr>
+<h2 id="iv-why-it-reads">IV. Why it reads</h2>
+<p><strong>Recency is spatial.</strong> The eye lands on the right edge -- the newest bar, at the widest resolution the instrument offers -- and everything to the left is older and coarser in the same direction. There is no legend to consult to know which way time runs: the newest bar is under the number it produced.</p>
+<p><strong>The seam is a feature, not an artefact.</strong> At each boundary the bar width in time doubles. The strip does not hide this: each tier is labelled with its own resolution and reach (<code>4s/bar · 3m</code>), and each boundary carries an <code>F</code> where a finer tier hands over. A reader who does not notice the seam will misread a spike's duration by a factor of two; a reader who has noticed it once never misreads it again. Hiding the compression -- drawing it as one continuous axis with no marks -- would be the error.</p>
+<p><strong>Constant ink per second, within a tier.</strong> Because tiers are internally linear, the ordinary strip-chart reading ("this bump is twice as wide as that one, so it lasted twice as long") holds inside a panel. It is only across a boundary that the reader must apply the factor, and the label says what the factor is.</p>
+<p><strong>Variance falls with age, and that is correct.</strong> A one-second bar of a Poisson process at 40 CPM has a standard deviation comparable with its mean; an eight-second bar of the same process has one about 2.8 times smaller relative to it. The coarse end of the strip is quieter than the fine end <em>because it is averaged</em>, which is exactly the property wanted from context: the left of the strip shows the trend, the right shows the arrivals.</p>
+<p><strong>The trade is stated honestly by the picture itself.</strong> A transient shorter than 8 seconds is visible in full at the right and is smeared into a single bar by the time it reaches the left. This is unavoidable in any bounded summary, and the alternative -- dropping the old data entirely -- is worse and less honest.</p>
+<hr>
+<h2 id="v-implementation">V. Implementation</h2>
+<p>In <code>src/analysis.rs</code>, <code>tiers()</code> returns a <code>Vec&lt;Tier&gt;</code> coarsest-first, each tier carrying its column count, its seconds-per-bar and its values as <code>Option&lt;f64&gt;</code> -- <code>None</code>, not zero, where the sample does not exist yet, so that a monitor started 20 seconds ago draws 20 bars and not 588. <code>src/main.rs</code> renders them left to right with one shared peak and one colour ramp, writes each tier's label above its first column, and marks the hand-over columns. Roughly 60 lines for the model and 40 for the drawing, in a program whose only dependency is <code>libc</code>.</p>
+<p>Two details earned their tests:</p>
+<ul><li><strong>Widths.</strong> The fourth tier was taken out of the <em>fine</em> tier's allocation, which had been half the strip. One second a bar for 42 seconds is as much of the present as a reader uses; the columns it gave up bought a doubling of the past. <code>every_tier_leftwards_is_one_more_doubling</code> asserts the property rather than the layout, so the constants can move and the shape cannot.</li><li><strong>The still-filling bar.</strong> The newest bar of every coarse tier is a partial mean, over however many of its *k*ⁱ seconds have arrived. Drawing it as a full bar would make the leftward edge of each panel flicker as it fills; drawing it as <code>None</code> would make the strip appear to have a gap. It is drawn as the mean of what it has, which is also what it will keep.</li></ul>
+<p>The counts strip, four tiers deep, is the wide band across the middle of <a href="screenshots/watch.png"><code>docs/screenshots/watch.png</code></a>; the README's animation shows it filling, tier by tier, over the first ten minutes of a session.</p>
+<hr>
+<h2 id="vi-what-the-recording-shows">VI. What the recording shows</h2>
+<p>The verification run is a single 680-second session against the counter these logs came from, recorded through a pty at 160 × 40 and reproduced by <code>make promo</code>. Read left to right, the strip fills in the order the technique predicts, and the fill times are the arithmetic above, not a tuning:</p>
+<table><thead><tr><th>tier</th><th>bar</th><th>columns</th><th>full after</th><th>what it shows first</th></tr></thead><tbody><tr><td>fine</td><td>1 s</td><td>42</td><td>42 s</td><td>individual counts arriving</td></tr><tr><td>2nd</td><td>2 s</td><td>39</td><td>78 s</td><td>the first hand-over, <code>F</code> marked</td></tr><tr><td>3rd</td><td>4 s</td><td>39</td><td>156 s</td><td>a minute-scale trend</td></tr><tr><td>4th</td><td>8 s</td><td>39</td><td>312 s</td><td>the whole session as context</td></tr></tbody></table>
+<p>No user study was run. This section reports that the implementation behaves as specified, not that readers understand it better than they understand the alternatives; §IX says what such a study would have to measure.</p>
+<hr>
+<h2 id="vii-novelty-honestly">VII. Novelty, honestly</h2>
+<p><strong>Old:</strong> aging a stream through a chain of factor-<em>k</em> consolidations (RRDtool RRAs [1], exponential histograms [4], Haar pyramids); allocating display space by recency (bifocal displays [2], fisheye and degree-of-interest [3], multi-resolution aggregation [6]); dividing a time axis into regions of differing linear scale with data migrating between them as it ages, which is claimed, with a 2004 priority date, in [7].</p>
+<p><strong>What we did not find in the literature we read:</strong> the combination of (a) <em>equal-width</em> panels chained at a constant factor, so that each panel leftwards costs the same columns and buys twice the time; (b) the hand-off boundary drawn as a labelled, visible feature of the picture rather than smoothed away; (c) all panels sharing a single value and colour scale so that the strip reads as one chart; and (d) the whole thing in one row of a character grid, where the quantisation the technique imposes is not a compromise but a match to the medium.</p>
+<p>That is a composition claim, not an invention claim, and the honest summary is: the parts are standard, the assembly appears not to be, and the assembly is what makes it work in 160 columns.</p>
+<hr>
+<h2 id="viii-naming">VIII. Naming</h2>
+<p>The technique needs a name that says what it does, survives being said out loud, and does not overclaim.</p>
+<p><strong>Recommended.</strong></p>
+<ul><li><strong>Cascade strip</strong> -- the picture. Short, says the essential thing (stages, each feeding the next), and "strip" places it in the strip-chart family where a reader should look for it.</li><li><strong>Chained dyadic time compression (CDTC)</strong> -- the mechanism, for a paper's index terms. <em>Dyadic</em> is the standard word for factor-2 subdivision in the wavelet literature and generalises honestly: at <em>k</em> = 3 it is chained triadic compression, and <em>chained geometric time compression</em> covers both.</li></ul>
+<p><strong>Also considered, with what each gets right and wrong.</strong></p>
+<table><thead><tr><th>name</th><th>for</th><th>against</th></tr></thead><tbody><tr><td><em>time-compression cascade</em></td><td>reads as plain English</td><td>buries the word that says it is a chart</td></tr><tr><td><em>dyadic history strip</em></td><td>names the factor and the content</td><td>"history" understates that the right edge is live</td></tr><tr><td><em>barrel-shift chart</em></td><td>the hardware analogy is the clearest teaching model</td><td>a barrel shifter shifts by many positions in one cycle; this shifts by one and <em>divides</em>. Wrong in the detail that specialists would check</td></tr><tr><td><em>decimating strip chart</em></td><td>"decimation" is exactly the DSP operation</td><td>reads as "throwing data away" to a non-DSP audience, and the data is averaged, not dropped</td></tr><tr><td><em>logarithmic time strip</em></td><td>says the reach is exponential in the panel count</td><td>the axis is piecewise linear, not logarithmic; a reader would expect a smooth log scale</td></tr><tr><td><em>waterfall strip</em></td><td>evokes flow</td><td>"waterfall" already means a spectrogram-over-time plot, and the collision would be permanent</td></tr><tr><td><em>recency cascade</em></td><td>names the degree-of-interest function</td><td>says nothing about what happens at the boundaries</td></tr></tbody></table>
+<p>This document uses <strong>cascade strip</strong> throughout, and <strong>chained dyadic time compression</strong> where the mechanism rather than the picture is meant.</p>
+<hr>
+<h2 id="ix-limitations-and-future-work">IX. Limitations and future work</h2>
+<ul><li><strong>No evaluation with readers.</strong> The claims in §IV are design arguments and a Poisson variance calculation, not measurements. The study that would settle it is the horizon-graph study [5] with the time axis as the manipulated factor: accuracy and speed at "how long did that last?" and "when did that happen?" against a linear strip and against two separate charts of the RRDtool kind, at matched display area.</li><li><strong>Short transients at the coarse end.</strong> Bounded and stated, but a reader who needs "was there a one-second spike nine minutes ago?" must go to the log, not the strip. A per-bar maximum drawn behind the mean -- the RRA MAX consolidation [1] as a second, dimmer layer -- would recover it, and is the obvious next experiment.</li><li><strong>Resize.</strong> The tier widths are recomputed from the terminal width, so a resize re-cuts the boundaries and the bars jump once. Fixed alignment (I1) means the <em>data</em> is unchanged; only its grouping moves.</li><li><strong>Colour.</strong> The strip encodes rate in colour bands as well as height, which helps at one and two rows of height and is redundant at five. Its behaviour for colour-blind readers has not been checked.</li><li><strong>Generalisation.</strong> Nothing in the technique is specific to radiation. Any once-a-second scalar -- packets, watts, request latency -- has the same problem in the same width. The parameters worth tuning per domain are <em>k</em> and <em>T</em>, and both are one line.</li></ul>
+<hr>
+<h2 id="references">References</h2>
+<p>[1] T. Oetiker, "RRDtool -- round robin database tool," documentation and source, 1999-present. [Online]. Available: https://oss.oetiker.ch/rrdtool/ -- see the RRA/consolidation model described in <code>rrdcreate(1)</code> and summarised at https://en.wikipedia.org/wiki/RRDtool</p>
+<p>[2] R. Spence and M. Apperley, "Data base navigation: an office environment for the professional," <em>Behaviour and Information Technology</em>, vol. 1, no. 1, pp. 43-54, 1982; and "A bifocal display technique for data presentation," <em>Proc. Eurographics</em>, 1982. [Online]. Available: https://diglib.eg.org/handle/10.2312/eg19821002</p>
+<p>[3] A. Cockburn, A. Karlson and B. B. Bederson, "A review of overview+detail, zooming, and focus+context interfaces," <em>ACM Computing Surveys</em>, vol. 41, no. 1, pp. 1-31, 2008. [Online]. Available: https://www.microsoft.com/en-us/research/wp-content/uploads/2008/01/cockburn-ComputingSurveys09.pdf</p>
+<p>[4] M. Datar, A. Gionis, P. Indyk and R. Motwani, "Maintaining stream statistics over sliding windows," <em>SIAM Journal on Computing</em>, vol. 31, no. 6, pp. 1794-1813, 2002. [Online]. Available: http://www-cs-students.stanford.edu/~datar/papers/sicomp_streams.pdf</p>
+<p>[5] J. Heer, N. Kong and M. Agrawala, "Sizing the horizon: the effects of chart size and layering on the graphical perception of time series visualizations," <em>Proc. ACM CHI</em>, pp. 1303-1312, 2009. [Online]. Available: https://idl.cs.washington.edu/files/2009-TimeSeries-CHI.pdf</p>
+<p>[6] M. C. Hao, U. Dayal, D. A. Keim and T. Schreck, "Multi-resolution techniques for visual exploration of large time-series data," <em>Proc. EuroVis (Eurographics/IEEE-VGTC Symp. on Visualization)</em>, pp. 27-34, 2007, doi:10.2312/VisSym/EuroVis07/027-034. [Online]. Available: https://bib.dbvis.de/uploadedFiles/96.pdf</p>
+<p>[7] "Graphical display with integrated recent period zoom and historical period context data," Trading Technologies International, Inc., priority date 31 March 2004; U.S. Patents 8,269,774; 8,395,625; 8,537,161; 9,542,709; 9,852,530; 10,062,189; 10,275,913; 10,467,784; 10,643,357; 11,010,942 (a continuation family). [Online]. Available: https://patents.google.com/patent/US11010942B2/</p>
+<p>[8] "Time relevance-based visualization of data," U.S. Patent 7,924,283. [Online]. Available: https://patents.google.com/patent/US7924283B1/</p>
+<hr>
+<p>MIT License — Copyright (c) 2026 Paul Richeson</p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><strong>The cascade</strong></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>

@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reference — RadBeeper</title>
+<meta name="description" content="The parts of RadBeeper worth looking up rather than reading: the tube factor, the counter&#x27;s protocol, what it costs to run, how it is tested, and how the screenshots are made.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/reference.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Reference — RadBeeper">
+<meta property="og:description" content="The parts of RadBeeper worth looking up rather than reading: the tube factor, the counter&#x27;s protocol, what it costs to run, how it is tested, and how the screenshots are made.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/reference.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="reference">Reference</h1>
+<p>The parts of RadBeeper worth looking up rather than reading: the tube factor, the counter's protocol, what it costs to run, how it is tested, and how the screenshots are made.</p>
+<h2 id="the-tube-factor">The tube factor</h2>
+<p>µSv/h is CPM divided by a number that belongs to the <strong>tube</strong>, not the counter. The default, 151.5, is the M4011 in a GMC-320. A 500 with a different tube needs a different number, which is why it is <code>--cpm-per-usvh</code> and not a constant buried in the arithmetic.</p>
+<h2 id="protocol">Protocol</h2>
+<p>Commands are ASCII <code>&lt;NAME&gt;&gt;</code>; replies are raw bytes with no framing, so every read asks for an exact count and times out rather than blocking.</p>
+<table><thead><tr><th>Command</th><th>Reply</th></tr></thead><tbody><tr><td><code>&lt;GETVER&gt;&gt;</code></td><td>14 bytes, e.g. <code>GMC-320Re 4.26</code></td></tr><tr><td><code>&lt;GETSERIAL&gt;&gt;</code></td><td>7 bytes</td></tr><tr><td><code>&lt;GETCPM&gt;&gt;</code></td><td>2 bytes, big-endian</td></tr><tr><td><code>&lt;GETCPS&gt;&gt;</code></td><td>2 bytes, mask <code>0x3FFF</code></td></tr><tr><td><code>&lt;HEARTBEAT1&gt;&gt;</code></td><td>then 2 bytes every second until <code>&lt;HEARTBEAT0&gt;&gt;</code></td></tr><tr><td><code>&lt;GETVOLT&gt;&gt;</code></td><td>1 byte, tenths of a volt</td></tr><tr><td><code>&lt;GETDATETIME&gt;&gt;</code></td><td>7 bytes</td></tr><tr><td><code>&lt;SPIR[addr][len]&gt;&gt;</code></td><td><code>len</code> bytes of history flash</td></tr></tbody></table>
+<p>Baud is 115200 on the 320 and 57600 on the 300; RadBeeper tries both.</p>
+<p>There is no <code>pyserial</code>. Alpine packages it, but this runs on a Pi Zero with 512 MB and on a fresh install with no network, and a serial port is thirty lines of <code>termios</code>.</p>
+<p><strong>Two corrections to GQ's published history format</strong>, both measured against a full 1 MiB image from a GMC-320Re 4.26. The datetime record is <strong>nine</strong> bytes, not ten. And <code>55 AA 01</code> is a <strong>three-byte marker carrying no payload</strong>, not a two-byte count: reading it as one invented 1,701 readings between 256 and 21,930 counts per second on a tube that saturates three orders of magnitude below that. <code>log pull</code> writes the raw flash image before decoding it, which is why both were fixable against data already on disk.</p>
+<h2 id="speed">Speed</h2>
+<p>The monitor's budget is one sample a second and it uses a fraction of a percent of it — a 512-point FFT is 0.5 ms, once every few minutes. The one place that ever mattered was <code>backfill</code>, and it turned out to be an algorithm rather than a language: each window re-summed its own tail on every sample, O(samples × window), which cost 16.5 s to turn 850,000 samples into 28,000 rows — 765 million additions. Keeping a running sum and subtracting what falls out the back is O(1) per sample. <strong>Same output, byte for byte, in 2.3 s instead of 16.5.</strong></p>
+<h2 id="tests">Tests</h2>
+<pre><code class="language-sh">make check        # syntax, then 208 tests: no hardware, no network</code></pre>
+<p><code>tests/fake_gmc.py</code> serves a fake GMC-320 on a pseudo-terminal, so the serial path — termios, exact-length reads, command framing, the heartbeat stream, the chunked history download — is tested without a counter on the desk. It also runs standalone:</p>
+<pre><code class="language-sh">python3 tests/fake_gmc.py --cpm 400
+radbeeper -d /dev/pts/N watch</code></pre>
+<p>The full-screen monitor is tested too, on a 132×46 pty, because it only runs when stdout is a terminal and two bugs shipped in the part nothing was executing.</p>
+<h2 id="the-screenshots">The screenshots</h2>
+<p>Every image in <code>docs/screenshots</code> is a recording, not a picture. <code>tools/record.py</code> runs the program under a pseudo-terminal, logs every byte it writes with a timestamp, and replays that through a small VT emulator into a grid of cells, which is then drawn with one rectangle per block glyph and one glyph per character. <code>tools/promo.py</code> drives it.</p>
+<pre><code class="language-sh">make promo                 # all of them: needs the counter plugged in, ~7 min
+make promo-fast            # the same, reusing the last monitor recording
+make promo SHOTS=probe     # just one</code></pre>
+<h3 id="the-window-is-pixels-because-it-has-to-be">The window is pixels, because it has to be</h3>
+<p>That whole apparatus records a <strong>terminal</strong>: it keeps the bytes a program writes to a pty, which is exact, tiny, and no use at all for a window. A Wayland surface has no byte stream to keep. So <code>tools/guicast.py</code> grabs frames with <code>grim</code> and assembles them with <code>ffmpeg</code>, and those are the only two outside programs in <code>tools/</code>.</p>
+<pre><code class="language-sh">make gui                                    # the window has to be open
+make gui-gif                                # 24 s of it, real time, maximised
+make gui-gif GIFSECS=180 GIFFPS=1 GIFPLAY=12
+make gui-gif GIFFULL= GIFWS=                # record it where it is</code></pre>
+<p>The second is three minutes of counter played in fifteen seconds. <strong>Playing faster than it was captured</strong> is how a long session becomes a short clip: frames a second apart on the wall clock are written a twelfth of a second apart in the file. Nothing is dropped and nothing is interpolated -- every frame is a second that really happened, in order.</p>
+<p>Two frames a second, played back at two frames a second: the instrument updates once a second, so the recording is real time and the clock in it can be read. The window is <em>found</em> rather than guessed -- <code>radbeeper-gui</code> sets an application id, so the compositor can be asked where it is -- and <code>--geometry 'X,Y WxH'</code> covers a compositor <code>guicast</code> does not know how to ask. The palette is built from what changes between frames and only the moved rectangle is rewritten, which is what keeps a 48-frame recording of a maximised window under a megabyte.</p>
+<p><strong>Its own workspace, and maximised.</strong> A screen grab cannot grab what is not being composited, so a window on a workspace nobody is looking at records as whatever was last drawn -- and moving it somewhere empty is also the only way to be sure the clip is of the instrument rather than of the instrument with a terminal over one corner of it. <code>GIFWS</code> is the workspace to borrow and <code>guicast</code> switches back afterwards. <code>GIFFULL</code> maximises it first, because the panel drops the log table, then the verdicts, then the axis as it runs out of height: a clip taken in a quarter of a screen is a recording of the panel with its best parts missing.</p>
+<p><strong>The size is a promise the tool keeps.</strong> The clip at the top of the README is the first thing a phone on a train downloads, so <code>GIFMAXMB</code> is a budget rather than a number somebody checks afterwards and forgets to: <code>guicast</code> re-encodes narrower until it fits. Scaling down is the right lever, because dropping frames makes a clock skip and a clock that skips is the one thing a recording of an instrument must not do.</p>
+<p><strong>And every clip says which build it is.</strong> The panel carries its name and version in the top corner, so a screenshot in a bug report or a message asking what changed can be dated from the picture -- which is the form this program is most often seen in.</p>
+<p>Two consequences worth having. <strong>A screenshot cannot claim something the program does not do</strong> — the log-format shot found that busybox <code>sed</code> ignores <code>\x</code> escapes, because the recording showed the escape instead of the arrow. And <strong>the monitor shots are one session</strong>: the hero, the filling shot, the spectrum strip and both animations are moments of the same 240-second run of the native build against the counter, so the numbers in them agree with each other because they are the same numbers.</p>
+<p><code>tools/record.py inventory &lt;cast&gt;</code> prints the escape sequences a recording actually contains. The emulator implements that list and nothing else, so a future ncurses emitting something new shows up there rather than as a quietly wrong pixel.</p>
+<p><strong>And it is tested</strong>, in <code>tests/test_record.py</code>, because a bug in a terminal emulator does not raise an exception — it publishes a picture of something the program never drew. One did: on a screen busy enough for ncurses to decide scrolling was cheaper than redrawing, it emits <code>CSI T</code> inside a scroll region, and an emulator that ignores <code>DECSTBM</code> puts every row below the scroll point in the wrong place. It drew the random line five rows up, on top of the spectrum. The program was correct; the picture of it was not.</p>
+<hr>
+<p>MIT License — Copyright (c) 2026 Paul Richeson</p>
+<hr>
+<p><a href="../index.html">← back to the README</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>

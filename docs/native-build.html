@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The native build — RadBeeper</title>
+<meta name="description" content="This is where new work goes now. The one-file Python is the original, and it is now the archive: it is kept as the differential oracle, as the owner of the parts that have no Rust counterpart yet, and because it runs on a fresh Pi with python3 and nothing else. Every top-level function and class in ">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/native-build.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="The native build — RadBeeper">
+<meta property="og:description" content="This is where new work goes now. The one-file Python is the original, and it is now the archive: it is kept as the differential oracle, as the owner of the parts that have no Rust counterpart yet, and because it runs on a fresh Pi with python3 and nothing else. Every top-level function and class in ">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/native-build.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-native-build">The native build</h1>
+<p><strong>This is where new work goes now.</strong> The one-file Python is the original, and it is now the archive: it is kept as the differential oracle, as the owner of the parts that have no Rust counterpart yet, and because it runs on a fresh Pi with python3 and nothing else. Every top-level function and class in it carries a <code># PORT:</code> line saying which Rust file and which Rust name replaced it, or saying plainly that nothing has:</p>
+<pre><code># PORT: replaced by src/analysis.rs :: Ladder (renamed) -- new/add/best, …
+# PORT: NOT PORTED. `recompute` is still Python.</code></pre>
+<p>The renames all run one way, towards shorter names inside a module that already names the subject — <code>SpectrumLadder</code> → <code>analysis::Ladder</code>, <code>LogWriter</code> → <code>log::Writer</code>, <code>log_header</code> → <code>log::header</code>, <code>write_entropy</code> → <code>entropy::write_record</code>, <code>spans_arg</code> → <code>parse_spans</code>. Everything else kept its name; classes became structs with the same methods. The one shape change worth knowing is <code>Counter.samples()</code>, a generator, becoming <code>Counter::next_sample(timeout)</code>, which is pulled rather than yielded.</p>
+<pre><code class="language-sh">cargo install radbeeper</code></pre>
+<p>That is the whole install: crates.io builds it and drops the binary in <code>~/.cargo/bin/radbeeper</code>, which cargo already put on your PATH. Nothing is installed system-wide and nothing needs root.</p>
+<p>No toolchain on the machine? Take a static binary from the <a href="https://github.com/vonglurt/radbeeper/releases">releases</a> — musl, so one file runs on Alpine, on Debian and on a Pi with no libc to match:</p>
+<pre><code class="language-sh">v=0.3.1; t=aarch64-unknown-linux-musl        # or x86_64-…, armv7-…, arm-… for a Zero
+curl -LO https://github.com/vonglurt/radbeeper/releases/download/v$v/radbeeper-$v-$t.tar.gz
+curl -LO https://github.com/vonglurt/radbeeper/releases/download/v$v/SHA256SUMS
+sha256sum --check --ignore-missing SHA256SUMS
+tar xzf radbeeper-$v-$t.tar.gz
+install -m 0755 radbeeper-$v-$t/radbeeper ~/.local/bin/radbeeper</code></pre>
+<p>Every release is cut from a tag by <code>.github/workflows/release.yml</code> — the tag has to match the version in the manifest or nothing is published, and crates.io is reached over GitHub's OIDC identity rather than an API key stored here. <a href="https://github.com/vonglurt/radbeeper/blob/main/docs/RELEASING.md">RELEASING.md</a> is the procedure.</p>
+<p><strong>This repository is that crate.</strong> <code>Cargo.toml</code>, <code>Cargo.lock</code> and <code>src/</code> sit at the root, which is where <code>copal-build</code> and every other tree in this account put them; the crate carries the <strong>read side</strong> natively: <code>probe</code>, <code>cpm</code> and the full monitor — the same five time constants, coloured counts chart, accumulating spectrum ladder and twelve-row digits. One dependency, <code>libc</code>, because a serial port is termios and termios is libc; the FFT, the digits and the drawing are arithmetic and escape codes.</p>
+<pre><code class="language-sh">make build      # build it, into target/release/radbeeper
+make install    # cargo install --path .
+make package    # exactly what a publish would upload
+make check      # the warning-free build, the tests, clippy and the oracle</code></pre>
+<p>The one-file Python program is still at the root beside it, still runnable, and its own targets are prefixed: <code>make py-test</code>, <code>make py-check</code>, <code>make py-install</code>.</p>
+<p>A full probe against the counter takes <strong>82 ms</strong> and the binary is 400 KB.</p>
+<h2 id="going-native-one-piece-at-a-time">Going native, one piece at a time</h2>
+<p><code>service</code>, <code>backfill</code>, <code>site</code>, <code>random</code>, <code>recompute</code> and <code>hotplug</code> are still Python, and the binary says so if you ask it for one. They are being ported. <strong>Two implementations of a file format is how a file format acquires two dialects</strong>, so the port is arranged around one rule: nothing counts as ported until both programs produce the <em>same characters</em> on the same input.</p>
+<p><code>tests/test_differential.py</code> is that rule. It drives <code>examples/format_oracle.rs</code> and the Python's own functions with identical directives and compares the output byte for byte — not equivalent, identical. It skips rather than fails where there is no Rust toolchain, because the Python suite has to run on a machine with nothing installed.</p>
+<p>There is a second half to it, and it is the one that matters more: the Rust <code>service</code> is run against the counter and <strong>the Python's own reader parses what it wrote</strong> — same header, same columns, same meaning for an empty field, one row per slot across a restart, and the file still chronological under plain <code>sort</code>. Comparing strings tests one end of a format. Reading the file with the other implementation tests both.</p>
+<p><code>radbeeper service --logs DIR</code> is what makes that testable at all; without it the only way to exercise the logger is against the machine's real log.</p>
+<p><strong>The entropy pool was the one place a difference would have been silent.</strong> A log row that disagrees between the two is at least visible in the file; a digest that disagrees is sixty-four characters of hex that look exactly as random either way, and the only thing that would ever notice is somebody running <code>--check</code> a year later and being told their audit trail is a lie. So the Rust recomputes <strong>every line this counter has ever emitted</strong> — real emissions recorded by the Python before any of the Rust existed — and gets the same digests. If its SHA-256, its NUL framing, its integer formatting of the opened second or its nibble packing were off by one byte, not one of them would match.</p>
+<pre><code class="language-sh">diff &lt;(radbeeper random --check logs/random-*.tsv) \
+     &lt;(target/release/radbeeper random --check logs/random-*.tsv)</code></pre>
+<p>is empty, character for character. SHA-256 is written out by hand — sixty lines, no dependency — and checked against the FIPS 180-4 vectors, the million-<code>a</code> vector and the 55/56-byte cases that catch a padding path which has only ever seen one block.</p>
+<p>The Rust monitor also has the random line and its countdown now, which it never had at all.</p>
+<p><strong>The history decoder is where GQ's document is wrong twice</strong>, so it gets the most testing of anything here: thirteen constructed images covering truncation mid-record, corrupt timestamps, notes, erased flash, marker bytes appearing as ordinary counts and the measured-interval median — and then <code>tests/fixtures/flash-gmc320re.bin</code>, <strong>16 KiB cut out of this counter's own flash at a timestamp marker</strong>. 82,084 records off a 96 KiB read decode identically in both. Then the whole chain end to end: <code>backfill --image</code> through both command lines, into a fresh log, and the two files compared byte for byte — 394 rows, decoder to merge, identical.</p>
+<p>It earned its place on the first run. Python's <code>%g</code> — which formats the <code>seconds</code> column and every span in the header, and which Rust has no formatter for — picks scientific notation from the exponent the value has <strong>after</strong> rounding to six significant figures. Taking it from the unrounded value prints <code>999999.5</code> as <code>1000000</code> where C and Python print <code>1e+06</code>. One character, in a column nobody reads, in a file whose one promise is that <code>sort</code> on it is chronological.</p>
+<p><strong><code>export</code> writes the same two pages.</strong> <code>index.html</code> and <code>random.html</code> are what a fork publishes and what the workflow commits back on every push, so a page that changed by a character depending on which binary built it would be a diff in every one of those commits. Both exports are run on this repository's own <code>logs/</code> and on a constructed directory — two counters, a two-hour hole, empty window columns, a site that moves, a night the clocks go back, a 1969 pool — and the files are compared byte for byte. Every coordinate in the charts is printed to a tenth, so the Rust does the arithmetic in the Python's order, calls libm's <code>pow</code> where Python's <code>**</code> does, and sums the variance with CPython's compensated <code>sum()</code>. Both honour <code>SOURCE_DATE_EPOCH</code> for the "generated" line, which is the one thing that would otherwise differ.</p>
+<table><tbody><tr><td><strong>native now</strong></td><td><code>probe</code>, <code>clock</code> and <code>clock --set</code>, <code>cpm</code> (its own 30 s window, not the device's 60 s one), <code>watch</code>, <code>service</code>, <code>random</code>, <code>random --check</code>, <strong><code>backfill</code></strong>, <strong><code>log info</code>/<code>log pull</code></strong> and <strong><code>export</code></strong> (<code>index.html</code> and <code>random.html</code>, byte for byte the Python's); the log format; the entropy pool, the SP 800-90B estimator and SHA-256; the history decoder with both corrections to GQ's published format, the wrapped-ring search and the measured sample intervals; local time, which Rust's standard library does not have at all</td></tr><tr><td><strong>still Python</strong></td><td><code>site</code> (the write side), <code>recompute</code>, <code>--plain</code> and <code>--source sim</code></td></tr><tr><td><strong>native only</strong></td><td><code>--wait</code>, which waits out a busy port rather than refusing it. It is the one place the two programs differ on purpose in the other direction — nothing in the log format turns on it, so the differential tests cannot see it, and this row is what records it</td></tr><tr><td><strong>the rule</strong></td><td>one dependency, still <code>libc</code>. It has <code>strftime</code>, <code>strptime</code> and <code>mktime</code>, so the port does not need a date crate; the one primitive that must be written out is SHA-256</td></tr></tbody></table>
+<p>Nothing about this is a reason to hurry the Python out: it runs on a machine with no toolchain and no network, which is the whole reason it has no dependencies.</p>
+<p><strong>Where the speed actually was.</strong> The monitor's budget is one sample a second and Python used a fraction of a percent of it, so this is about start-up and footprint rather than throughput. The one genuinely slow path was <code>backfill</code>, and that was an algorithm — fixed in the Python for a 7× win before any of this was written.</p>
+<hr>
+<p><a href="../index.html">← back to the README</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>

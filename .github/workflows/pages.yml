@@ -1,19 +1,37 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 Paul Richeson
-# Rebuild index.html from the logs in this repository, on every push that
-# changes them.
+# Build the site GitHub Pages serves, and commit it back.
+#
+# TWO GENERATORS, TWO JOBS OF WORK, ONE SITE.
+#
+#   monitor.html   the counter's own report, built from the rows in logs/ by
+#                  the same one-file program the counter is read with -- so
+#                  the page cannot drift from the row format: a column added
+#                  to the log is a column the export knows about in the same
+#                  commit.
+#
+#   index.html     the landing page, built from README.md by tools/landing.py,
+#                  for the same reason in the other direction. A hand-written
+#                  overview is a second description of the program that goes
+#                  stale the first time the first one changes, so the page IS
+#                  the README -- under a header carrying the things a README is
+#                  the wrong shape for, which is a meta description, OpenGraph
+#                  tags and a JSON-LD record.
+#
+# THE REPORT USED TO BE index.html AND IS NOT ANY MORE. Somebody arriving from
+# a search for "GMC-320 Plus Linux" landed on a table of counts per minute with
+# nothing on the page saying what had produced them. The report is one click
+# along now, and linked from the first screen of the landing page.
 #
 # WHAT A FORK HAS TO DO: fork, copy your own cpm-<serial>-YYYY-MM.tsv files
 # (and random-<serial>.tsv and sites.tsv, if you have them) into logs/, push.
-# That is the whole of it.
-# The pages are regenerated and committed back here, so they are servable from
-# GitHub Pages with no build step and no artifact to expire. random.html is
-# written only when there are emissions in logs/, so a fork with none gets one
-# page and no broken link.
+# That is the whole of it. The pages are regenerated and committed back here,
+# so they are servable from GitHub Pages with no build step and no artifact to
+# expire. random.html is written only when there are emissions in logs/, so a
+# fork with none gets no broken link.
 #
-# The generator is the same one-file program the counter is read with, so the
-# page cannot drift from the row format: a column added to the log is a column
-# the export knows about in the same commit.
+# No pip install, no requirements.txt, no lockfile: both generators are stdlib
+# Python, which is the same reason one of them runs on a Pi Zero.
 name: build the page
 
 on:
@@ -21,11 +39,18 @@ on:
     paths:
       - 'logs/**'
       - 'radbeeper'
+      - 'README.md'
+      - 'docs/**.md'
+      - 'tools/landing.py'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -33,20 +58,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No pip install, no requirements.txt, no lockfile: the program is one
-      # stdlib Python file, which is the same reason it runs on a Pi Zero.
-      - name: Build index.html and random.html
-        run: python3 radbeeper export --logs logs -o index.html
+      - name: Build the counter's report from logs/
+        run: python3 radbeeper export --logs logs -o monitor.html
 
-      - name: Commit it if it changed
+      - name: Build the landing page and the lab reports from the documents
+        run: python3 tools/landing.py
+
+      - name: Commit whatever changed
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add index.html
+          git add index.html monitor.html docs/*.html docs/archive/*.html \
+                  sitemap.xml robots.txt .nojekyll
           # Only when there were emissions to account for: a fork with no
-          # random-*.tsv gets one page, and `git add` on a missing file is
-          # an error rather than a no-op.
+          # random-*.tsv has no random.html, and `git add` on a missing file
+          # is an error rather than a no-op.
           [ -f random.html ] && git add random.html || true
           git diff --cached --quiet && { echo "no change"; exit 0; }
-          git commit -m "rebuild index.html from logs/"
+          git commit -m "rebuild the site"
           git push

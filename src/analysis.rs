@@ -499,6 +499,17 @@ pub struct Tier {
 /// right, then `k`, `k*k` and `k*k*k` as it ages leftwards.
 pub const TIERS: usize = 4;
 
+/// How much wall clock the interleave tier shows, in seconds.
+///
+/// IN SECONDS, NOT IN BARS, because a bar there is one tube's reading and n
+/// of them make a second: a fixed bar count would show four seconds with a
+/// pair and half a second with nine, and the tier would mean something
+/// different on every rig. Four seconds is four whole turns of the rota
+/// whatever n is -- long enough to see the tubes taking turns and to see
+/// whether they agree about the second happening now, and short enough that
+/// the rest of the width goes to the tiers that are measuring time.
+pub const INTERLEAVE_SECONDS: usize = 4;
+
 /// The counts, as a strip that compresses as it ages.
 ///
 /// Four tiers of equal width, newest at the right edge. The rightmost is a
@@ -630,6 +641,16 @@ pub fn tiers_with(
 /// aggregating tier and n at the single boundary below them -- and that
 /// boundary is worth marking, because it is exactly where the strip stops
 /// measuring time and starts measuring arrival.
+///
+/// AND IT IS THE NARROWEST TIER, NOT THE WIDEST. An equal fifth of the strip
+/// gave the interleave forty-eight bars, which at two tubes is twenty-four
+/// seconds of arrival order -- a quarter of the width spent on the one tier
+/// that is not measuring time, and spent on a stretch of it long enough that
+/// nobody reads the far end. What the interleave is FOR is the last few
+/// seconds: whether the tubes are taking turns, and whether they agree about
+/// the second happening now. `INTERLEAVE_SECONDS` of it answers that and the
+/// width it gives back goes to the aggregating tiers, which reach further for
+/// having it.
 pub fn tiers_interleaved(
     samples: &[f64],
     first: usize,
@@ -637,12 +658,22 @@ pub fn tiers_interleaved(
     tubes: usize,
 ) -> Vec<Tier> {
     let tubes = tubes.max(1);
-    let count = TIERS + 1;
-    if width == 0 || count == 0 {
+    if width == 0 {
         return Vec::new();
     }
-    let q = width / count;
-    let fine_cols = width - q * (count - 1);
+    // THE INTERLEAVE TIER IS CAPPED, and capped in SECONDS rather than in
+    // bars, because what it shows is one tube's reading per bar and n of them
+    // make a second. Four seconds is four whole turns of the rota at any tube
+    // count: eight bars with a pair, thirty-six with nine, and in both cases
+    // the same stretch of wall clock.
+    let fine_cols = (INTERLEAVE_SECONDS * tubes)
+        .clamp(1, width.saturating_sub(TIERS).max(1));
+    let rest = width - fine_cols;
+    // The width the interleave gave back, split equally; what does not divide
+    // goes to the one-second tier, which is the one whose rightmost bar is
+    // the second happening now.
+    let q = rest / TIERS;
+    let extra = rest - q * TIERS;
     let n = (first + samples.len()) as i64;
     let base = first as i64;
     let at = |a: i64| -> Option<f64> {
@@ -663,8 +694,8 @@ pub fn tiers_interleaved(
     // samples; each one left of it is twice that.
     let mut step = tubes as i64;
     let mut b = n - fine_cols as i64;
-    for _ in 0..TIERS {
-        let c = q as i64;
+    for t in 0..TIERS {
+        let c = (q + if t == 0 { extra } else { 0 }) as i64;
         let top = (b - 1).div_euclid(step);
         let values: Vec<Option<f64>> = (0..c)
             .map(|j| {
@@ -674,7 +705,7 @@ pub fn tiers_interleaved(
             .collect();
         b = (top - c + 1) * step;
         out.push(Tier {
-            columns: q,
+            columns: c as usize,
             seconds: step as f64 / tubes as f64,
             values,
         });
@@ -708,6 +739,41 @@ pub fn bar_seconds(seconds: f64) -> String {
         }
     }
     format!("{:.1}", seconds)
+}
+
+/// What a measured interleave is worth, against what n tubes could manage.
+///
+/// TUBES ONLY SHARPEN TIME IF THEY DISAGREE ABOUT WHEN A SECOND STARTS. Each
+/// has its own clock and its own phase and none can be steered, so the offset
+/// is whatever it is. THE IDEAL IS 1/n OF A SECOND, not half of one: two
+/// tubes perfectly interleaved are half a second apart, nine are a ninth.
+/// Measuring against a fixed half-second -- which this did until nine
+/// counters were plugged in -- marks a perfect nine-way interleave down to
+/// 36%, and marks a pair that fires together as better than it is.
+///
+/// A RATIO, NOT A DISTANCE FROM IDEAL. The obvious form -- one minus the
+/// relative error -- hits zero the moment the gap is twice the ideal and goes
+/// negative after, so nine free-running tubes averaging 0.24s against an
+/// ideal of 0.11s were reported as 0%: a rig that is in fact spreading its
+/// samples over most of the second, dismissed as doing nothing. The smaller
+/// over the larger is scale-free, symmetric, and degrades the way the thing
+/// it measures does.
+///
+/// HERE RATHER THAN IN A FRONT END, for the reason `span_words` is here: the
+/// window, the terminal and the exported page all report this number, and a
+/// figure that disagreed between them would be the exact class of bug the
+/// differential suite exists to catch.
+///
+/// 1.0 is a full grid in time. 0.0 is every tube reporting at once, which
+/// still multiplies the counts and still buys the precision but adds no
+/// resolution at all -- and claiming "1/9s per bar" in that case would be a
+/// lie the display tells itself.
+pub fn interleave_quality(gap: f64, tubes: usize) -> f64 {
+    let ideal = 1.0 / tubes.max(2) as f64;
+    if gap <= 0.0 {
+        return 0.0;
+    }
+    ideal.min(gap) / ideal.max(gap)
 }
 
 /// How many tiers a strip fed by `counters` tubes should have.
@@ -1170,6 +1236,70 @@ mod tests {
         let t = tiers_interleaved(&samples, 0, 240, 2);
         let seconds: Vec<String> = t.iter().map(|x| bar_seconds(x.seconds)).collect();
         assert_eq!(seconds, vec!["8", "4", "2", "1", "1/2"]);
+    }
+
+    /// THE IDEAL INTERLEAVE IS 1/n, NOT HALF A SECOND. A perfect nine-way
+    /// interleave was being marked at 36% against a hard-coded pair. Moved
+    /// here from the window when the exported page started reporting the same
+    /// number: three front ends, one arithmetic.
+    #[test]
+    fn the_interleave_is_judged_against_what_this_many_tubes_could_manage() {
+        let pc = |g, n| (100.0 * interleave_quality(g, n)).round() as i64;
+        assert_eq!(pc(0.5, 2), 100, "a pair half a second apart is perfect");
+        assert_eq!(pc(1.0 / 9.0, 9), 100, "and so is nine a ninth apart");
+        // Tubes firing together buy precision and no time at all.
+        assert_eq!(pc(0.0, 2), 0);
+        // A pair's ideal is not nine's.
+        assert!(pc(0.5, 9) < 100);
+        // TWICE THE IDEAL GAP IS HALF A GRID, NOT NO GRID. One minus the
+        // relative error called this zero, and called anything wider zero
+        // too -- so nine free-running tubes spreading their samples over most
+        // of the second were reported as doing nothing.
+        assert_eq!(pc(0.25, 2), 50);
+        assert_eq!(pc(1.0, 2), 50, "and it is symmetric either side");
+        assert_eq!(pc(0.24, 9), 46);
+        // Never a number that would read as better than perfect.
+        for n in [2usize, 3, 9] {
+            for g in [0.0, 0.01, 0.11, 0.5, 1.0, 7.5] {
+                let q = interleave_quality(g, n);
+                assert!((0.0..=1.0).contains(&q), "{} tubes at {}s: {}", n, g, q);
+            }
+        }
+    }
+
+    /// THE INTERLEAVE TIER IS FOUR SECONDS WIDE, whatever the tube count.
+    /// It was an equal fifth of the strip, which at two tubes spent a quarter
+    /// of the width on twenty-four seconds of arrival order.
+    #[test]
+    fn the_interleave_tier_shows_four_seconds_however_many_tubes() {
+        for n in [2usize, 3, 4, 9] {
+            let samples: Vec<f64> = (0..8000).map(|i| (i % 5) as f64).collect();
+            let t = tiers_interleaved(&samples, 0, 240, n);
+            let fine = t.last().expect("a strip has an interleave tier");
+            assert_eq!(fine.columns, INTERLEAVE_SECONDS * n,
+                       "{} tubes: {} bars", n, fine.columns);
+            // Which is the same stretch of wall clock on every rig.
+            assert!((fine.columns as f64 * fine.seconds - INTERLEAVE_SECONDS as f64).abs()
+                        < 1e-9);
+        }
+    }
+
+    /// And the width it gave back went to the tiers that measure time: the
+    /// whole strip is still exactly as wide as it was asked to be.
+    #[test]
+    fn the_width_the_interleave_gave_back_went_to_the_other_tiers() {
+        for n in [2usize, 3, 9] {
+            for width in [80usize, 160, 240] {
+                let t = tiers_interleaved(&[], 0, width, n);
+                let total: usize = t.iter().map(|x| x.columns).sum();
+                assert_eq!(total, width, "{} tubes at {} columns", n, width);
+            }
+        }
+        // The equal-fifth strip reached 15 * 48 = 720s of aggregation; this
+        // one reaches further, which is the point of taking the width back.
+        let t = tiers_interleaved(&[], 0, 240, 2);
+        let aggregated: f64 = t[..TIERS].iter().map(|x| x.columns as f64 * x.seconds).sum();
+        assert!(aggregated > 720.0, "only {}s", aggregated);
     }
 
     /// And the strip still reaches back far enough to be worth having.

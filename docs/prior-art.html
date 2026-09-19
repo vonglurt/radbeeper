@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Prior art: what GeigerLog and gq-gmc-control already know — RadBeeper</title>
+<meta name="description" content="Read on 4 September 2026, against radbeeper 0.1.0.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/prior-art.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Prior art: what GeigerLog and gq-gmc-control already know — RadBeeper">
+<meta property="og:description" content="Read on 4 September 2026, against radbeeper 0.1.0.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/prior-art.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="prior-art-what-geigerlog-and-gq-gmc-control-already-know">Prior art: what GeigerLog and gq-gmc-control already know</h1>
+<p>Read on 4 September 2026, against radbeeper 0.1.0.</p>
+<p>Two programs already talk to a GQ GMC counter over USB, and both are worth reading before writing a third. This is what they do, where radbeeper differs on purpose, and the two places it differs by mistake.</p>
+<table><thead><tr><th></th><th>lines</th><th>shape</th><th>what it is for</th></tr></thead><tbody><tr><td><strong>GeigerLog</strong> (ullix, v2.2pre01)</td><td>~78,000 Python</td><td>Qt desktop app, 20+ device backends, SQLite, plotting, a web server</td><td>a lab instrument's whole workbench</td></tr><tr><td><strong>gq-gmc-control</strong> (chaim-zax)</td><td>1,200 Python</td><td>one library + one argparse CLI, <code>pyserial</code></td><td>a scriptable remote control for the device</td></tr><tr><td><strong>radbeeper</strong></td><td>~7,500 Rust</td><td>one crate, one dependency (<code>libc</code>)</td><td>what it is counting <em>now</em>, on five time constants and four tiers of history</td></tr></tbody></table>
+<p>Neither flashes firmware. gq-gmc-control has the option in its CLI -- <code>-F/--firmware-update</code> -- and the function behind it is two lines:</p>
+<pre><code class="language-python">def firmware_update():
+    print('ERROR: option not yet available')</code></pre>
+<p>GeigerLog mentions firmware forty times and every one is a <em>workaround for</em> a firmware revision, never a write to one. So the gap in the table is real: nothing in the open-source world flashes these counters, and both projects that got close stopped at the same place.</p>
+<h2 id="two-bugs-this-reading-found-in-radbeeper">Two bugs this reading found in radbeeper</h2>
+<h3 id="1-the-0x3fff-mask-is-for-cps-and-it-is-on-cpm-too">1. The 0x3FFF mask is for CPS, and it is on CPM too</h3>
+<p>radbeeper masks both:</p>
+<pre><code class="language-python">def cpm(self):
+    b = self._ask(CMD_CPM, 2)
+    return struct.unpack("&gt;H", b)[0] &amp; COUNT_MASK   # COUNT_MASK = 0x3FFF</code></pre>
+<p>Both references say that mask belongs to CPS alone. GeigerLog is explicit --</p>
+<pre><code class="language-python">if maskHighBit: value = value &amp; 0x3fff   # ONLY for CPS* calls on 300 series counters</code></pre>
+<p>-- and gq-gmc-control masks in <code>set_heartbeat()</code> (which is CPS) and does <em>not</em> mask in <code>get_cpm()</code>. radbeeper's own README agrees with them and disagrees with its code:</p>
+<blockquote><p>| <code>&lt;GETCPM&gt;&gt;</code> | 2 bytes, big-endian | | <code>&lt;GETCPS&gt;&gt;</code> | 2 bytes, mask <code>0x3FFF</code> |</p></blockquote>
+<p>The consequence is not cosmetic. The mask silently wraps any CPM at or above 16384: a counter genuinely reading 20,000 CPM reports 3,616. On the M4011 at 151.5 CPM per uSv/h that is 132 uSv/h being displayed as 24 -- an order of magnitude, in the direction of "this is fine", in the one regime where the number matters. It is invisible in ordinary use because background is 25 CPM, and it is exactly wrong the first time somebody puts the tube against a real source.</p>
+<p><code>samples()</code> masks too, and there it is correct: the heartbeat stream is CPS.</p>
+<h3 id="2-the-500-and-600-series-answer-in-four-bytes-not-two">2. The 500 and 600 series answer in four bytes, not two</h3>
+<p>radbeeper hardcodes a 2-byte reply for every count command, and its README claims the 300/500/600. GeigerLog carries a per-model, per-firmware table and the 500/600 rows say otherwise:</p>
+<pre><code class="language-python">GMC_Bytes = 4    # Yields 4 bytes on all CPx calls!    (500, 500+, 600 series)
+GMC_Bytes = 2    #                                     (280, 300, 320)</code></pre>
+<p>with at least one 500 firmware back at 2, which is why the table is per firmware and not per model. On a 4-byte counter, reading the first two bytes of a big-endian 32-bit count gives the <em>high</em> half: a real reading of 25 comes back as 0. The two leftover bytes then sit in the buffer -- <code>_ask()</code> calls <code>flush_input()</code> first so the simple queries resynchronise, but <code>samples()</code> does not flush per read, so the monitor's stream would stay one sample out of phase permanently.</p>
+<p>gq-gmc-control has the same bug and documents its testing as "done on a GQ GMC-500", which is probably one of the 2-byte firmwares.</p>
+<p>Nothing here is testable without hardware of that series. The honest fix is either to detect the width (ask <code>&lt;GETCPM&gt;&gt;</code> and see how many bytes arrive before the timeout) or to narrow the README's claim to the 300 series until a 500 is on the desk.</p>
+<h2 id="three-things-worth-taking">Three things worth taking</h2>
+<p><strong>The tube factor is in the counter.</strong> radbeeper's 151.5 is a flag with a sensible default. It does not have to be: the device stores three calibration points, and gq-gmc-control reads them out of <code>&lt;GETCFG&gt;&gt;</code> and averages them.</p>
+<pre><code class="language-python">cal1_sv = m_config['cal1_sv'] * 1000 / m_config['cal1_cpm']
+...
+cal_sv = (cal1_sv + cal2_sv + cal3_sv) / 3</code></pre>
+<p><code>--cpm-per-usvh auto</code> would read the factor from the tube it is actually attached to, which is better than a default that is right for one model. The GMC-500+ has two tubes with sensitivities of 153.8 and 21.4, so on that hardware a single default cannot be right at all.</p>
+<p><strong><code>&lt;GETCFG&gt;&gt;</code> is a plain byte array with known offsets.</strong> Reading it is safe and cheap and would let <code>probe</code> print the counter's own calibration, its alarm threshold, its save mode and (on wifi models) the server it is uploading to. Writing it is not cheap: gq-gmc-control's <code>write_config()</code> has to <code>&lt;ECFG&gt;&gt;</code> (erase all of flash config), then <code>&lt;WCFG&gt;&gt;</code> every byte back one at a time, then <code>&lt;CFGUPDATE&gt;&gt;</code>. A failure halfway leaves the counter with a partially written configuration. That is a good reason for radbeeper to read config and not write it.</p>
+<p><strong>GeigerLog's model table is the actual documentation.</strong> GQ's RFC1201 is the published protocol and both projects note where shipped units disagree with it. GeigerLog resolves that by branching on firmware version with forum links in the comments -- the GMC-500+ 1.18 that returns nothing on the <em>first</em> <code>&lt;GETVER&gt;&gt;</code> and needs the connection cycled, the 2.42 voltage reply with no null terminator, dead-time settings that only exist from 2.41. If radbeeper ever meets a counter that misbehaves, <code>gdev_gmc.py</code> around line 4550 is where to look first.</p>
+<h2 id="what-radbeeper-does-that-neither-does">What radbeeper does that neither does</h2>
+<p>Both references report the counter's own number. <code>&lt;GETCPM&gt;&gt;</code> is a 60-second rolling average computed on the device, so both are showing one time constant and calling it "the reading". gq-gmc-control's <code>--heartbeat</code> prints raw CPS once a second with no averaging at all, which is the opposite extreme: pure noise, 25 background counts a minute arriving as a column of 0s and 1s.</p>
+<p>Counting the blips locally and running three windows over them is radbeeper's one real idea, and neither program does it. Because neither builds a local averaging window at all, neither has to answer the question the <code>--</code> answers -- what to show while a window is still filling -- so there is no prior art here to borrow from or argue with.</p>
+<p>The other difference is the failure path. GeigerLog's answer to "no counter" is a dialog; gq-gmc-control's is <code>ERROR: no device connected</code>. Neither distinguishes <em>no device</em> from <em>no driver</em>, which is the failure that cost an afternoon here and the reason <code>probe</code> names all three.</p>
+<hr>
+<p>MIT License — Copyright (c) 2026 Paul Richeson</p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>

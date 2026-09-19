@@ -364,9 +364,46 @@ impl Drop for Server {
 
 /// The attached end: a monitor, a probe, or a GUI that has not been written
 /// yet. It never opens the port and never writes anything.
+/// What one wake-up of `Client::poll` found.
+///
+/// THREE ANSWERS, NOT TWO. "nothing yet" and "there is no more counter" are
+/// different facts about the world and a caller that cannot tell them apart
+/// cannot poll at all.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Poll {
+    Event(Event),
+    /// The timeout ran out with nothing whole on the wire. The server is
+    /// still there.
+    Idle,
+    /// The socket ended. There is no more counter on it.
+    Closed,
+}
+
+/// A read that ran out of time rather than out of socket.
+///
+/// BOTH KINDS, because which one a timed-out socket read returns is not the
+/// same on every platform -- Linux gives `WouldBlock` for a receive timeout
+/// and `TimedOut` for a connect one, and a client that only knew the first
+/// would treat a quiet moment as a dead server.
+fn would_block(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+    )
+}
+
 pub struct Client {
     reader: BufReader<UnixStream>,
     pub identity: Identity,
+    /// Bytes of a line that has not arrived whole yet.
+    ///
+    /// ONLY `poll` NEEDS THIS, AND IT IS WHY `poll` IS NOT `next` WITH A
+    /// SHORTER ARGUMENT. `read_line` that times out mid-line has already
+    /// taken those bytes out of the socket and hands back an error rather
+    /// than the fragment, so waking every tenth of a second would eat a
+    /// sample whenever a wake-up landed between the `s` and the newline.
+    /// Held here, the fragment is simply the start of the next read.
+    partial: Vec<u8>,
 }
 
 impl Client {
@@ -409,7 +446,7 @@ impl Client {
             });
         }
         let identity = Identity { counters, spans };
-        Some(Client { reader, identity })
+        Some(Client { reader, identity, partial: Vec::new() })
     }
 
     /// The next thing that happened, or None if the feed ended.
@@ -430,16 +467,62 @@ impl Client {
                 // `identity()` after a tube joined gets the tube. Every client
                 // would otherwise have to do this itself, and one that forgot
                 // would index a sample into a counter list too short for it.
-                if let Event::Counter { who, id } = &e {
-                    if *who < self.identity.counters.len() {
-                        self.identity.counters[*who] = id.clone();
-                    } else {
-                        self.identity.counters.resize(*who + 1, id.clone());
-                    }
-                }
+                self.absorb(&e);
                 return Some(e);
             }
             // An unknown verb is skipped, not fatal: see PROTOCOL.
+        }
+    }
+
+    /// The next thing that happened, a quiet moment, or the end of the feed.
+    ///
+    /// WHY THIS IS NOT `next` WITH A SMALLER TIMEOUT. `next` collapses a
+    /// timeout and a closed socket into the same `None`, which is right when
+    /// the timeout is ten seconds and a silence that long means the server
+    /// has gone. It is wrong when the caller wants to wake up ten times a
+    /// second to move a needle: every wake-up would read as a dead counter.
+    /// So this keeps them apart, and keeps the half-line a short timeout can
+    /// leave behind (see `partial`).
+    pub fn poll(&mut self, timeout: Duration) -> Poll {
+        let _ = self.reader.get_ref().set_read_timeout(Some(timeout));
+        loop {
+            let mut chunk = Vec::new();
+            let read = self.reader.read_until(b'\n', &mut chunk);
+            // THE BYTES ARE KEPT BEFORE THE RESULT IS LOOKED AT. `read_until`
+            // appends as it goes and can append and THEN fail -- a timeout
+            // landing between the `s` and the newline returns an error with
+            // the first half of the line already taken out of the socket. Read
+            // the result first and those bytes are gone, and the sample with
+            // them.
+            self.partial.extend_from_slice(&chunk);
+            match read {
+                // `read_until` only returns Ok when it found the newline or
+                // ran out of socket, so an Ok with nothing at the end of it is
+                // the end of the feed either way.
+                Ok(_) if self.partial.last() == Some(&b'\n') => {}
+                Ok(_) => return Poll::Closed,
+                Err(e) if would_block(&e) => return Poll::Idle,
+                Err(_) => return Poll::Closed,
+            }
+            let line = String::from_utf8_lossy(&self.partial).trim_end().to_string();
+            self.partial.clear();
+            if let Some(e) = parse(&line) {
+                self.absorb(&e);
+                return Poll::Event(e);
+            }
+            // An unknown verb is skipped, not fatal: see PROTOCOL.
+        }
+    }
+
+    /// A counter line changes who `who` means, so it is applied before the
+    /// event is handed on -- however the event was read.
+    fn absorb(&mut self, e: &Event) {
+        if let Event::Counter { who, id } = e {
+            if *who < self.identity.counters.len() {
+                self.identity.counters[*who] = id.clone();
+            } else {
+                self.identity.counters.resize(*who + 1, id.clone());
+            }
         }
     }
 
@@ -542,6 +625,87 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         joining.join().unwrap().expect("attached to the server")
+    }
+
+    /// A QUIET MOMENT IS NOT A DEAD SERVER. `next` cannot say which is which
+    /// and does not need to at ten seconds; a window waking ten times a second
+    /// to move a needle would read every single wake-up as the counter having
+    /// stopped.
+    #[test]
+    fn polling_tells_a_silence_apart_from_a_closed_socket() {
+        let dir = tmp("poll-idle");
+        let mut s = Server::start(&dir, &id()).expect("served");
+        let mut c = attached(&dir, &mut s);
+
+        // Past the greeting's tail -- the `live` marker that ends the
+        // backfill is a real event and arrives before any silence does.
+        let mut idle = 0;
+        for _ in 0..50 {
+            if c.poll(Duration::from_millis(20)) == Poll::Idle {
+                idle += 1;
+            }
+        }
+        // Nothing is being published, so nearly every one of those was a
+        // quiet moment -- and not one of them was the end of the feed.
+        assert!(idle >= 40, "only {} of 50 wake-ups were quiet", idle);
+
+        // A sample still arrives through the same call.
+        s.publish_sample(0, 1_700_000_000.5, 12);
+        let mut got = None;
+        for _ in 0..50 {
+            match c.poll(Duration::from_millis(20)) {
+                Poll::Event(Event::Sample { who, when, counts }) => {
+                    got = Some((who, when, counts));
+                    break;
+                }
+                Poll::Idle => continue,
+                other => panic!("{:?}", other),
+            }
+        }
+        assert_eq!(got, Some((0, 1_700_000_000.5, 12)));
+
+        // And when the server really does go, that is a different answer.
+        drop(s);
+        let mut closed = false;
+        for _ in 0..50 {
+            if c.poll(Duration::from_millis(20)) == Poll::Closed {
+                closed = true;
+                break;
+            }
+        }
+        assert!(closed, "a dropped server ends the feed");
+    }
+
+    /// A WAKE-UP MID-LINE MUST NOT EAT THE LINE. `read_until` appends what it
+    /// got and then reports the timeout, so the half-line has already left the
+    /// socket: dropped, the sample goes with it. Polled fast against a server
+    /// publishing slowly, every sample still arrives exactly once.
+    #[test]
+    fn a_timeout_landing_mid_line_keeps_the_line() {
+        let dir = tmp("poll-partial");
+        let mut s = Server::start(&dir, &id()).expect("served");
+        let mut c = attached(&dir, &mut s);
+        let mut seen: Vec<u32> = Vec::new();
+        for i in 0..40u32 {
+            s.publish_sample(0, 1_700_000_000.0 + i as f64, i);
+            // Far shorter than the publishing beat, which is the case that
+            // lands a timeout in the middle of a line.
+            for _ in 0..3 {
+                if let Poll::Event(Event::Sample { counts, .. }) =
+                    c.poll(Duration::from_millis(1))
+                {
+                    seen.push(counts);
+                }
+            }
+        }
+        for _ in 0..200 {
+            match c.poll(Duration::from_millis(5)) {
+                Poll::Event(Event::Sample { counts, .. }) => seen.push(counts),
+                _ => break,
+            }
+        }
+        assert_eq!(seen, (0..40u32).collect::<Vec<u32>>(),
+                   "every sample, once, in order");
     }
 
     /// The identity survives the wire, spaces in the firmware string and all.

@@ -291,7 +291,23 @@ the width of the strip to display fifty seconds in units nobody thinks in.
 So the ratio is two between every aggregating tier and *n* at the single
 boundary below them. That boundary is worth marking rather than smoothing over:
 it is exactly where the strip stops measuring time and starts measuring
-arrival.
+arrival — and it now *is* marked, with a rule drawn down it, because the
+alternating tier wash can only say "another tier" and this is not another tier.
+
+**And it is the narrowest tier, not an equal share.** Five tiers of a fifth
+each gave the interleave forty-eight bars, which at two tubes is twenty-four
+seconds of arrival order: a quarter of the strip's width spent on the one tier
+that is not measuring time, and spent on a stretch of it long enough that
+nobody reads the far end. What the interleave is *for* is the last few seconds
+— whether the tubes are taking turns, and whether they agree about the second
+happening now — so it is capped at `INTERLEAVE_SECONDS * n` bars, four seconds
+of the rota at any tube count: eight bars with a pair, thirty-six with nine,
+and the same stretch of wall clock in both cases. The width it gives back goes
+to the aggregating tiers, which reach further for having it.
+
+The cap is in **seconds and not in bars** deliberately. A fixed bar count would
+show four seconds with a pair and half a second with nine, so the tier would
+mean something different on every rig.
 
 The finest tier is drawn **in each tube's own colour**, because every bar in it
 is one tube's reading. Every tier to its left is a mean over both and takes the
@@ -334,6 +350,30 @@ instruments would be a reading neither of them took, and no later analysis could
 unpick it. Averaging is a question about a *display*, and every display can ask
 it from the stream.
 
+**Except for one thing a display cannot reconstruct afterwards.** The
+interleave — whether the tubes took turns or fired together — is a fact about
+arrival times that no per-counter row records, and it is the difference between
+*n* tubes buying time resolution and *n* tubes buying only precision. It has to
+be measured as it happens, by the process holding the ports.
+
+So the merge is a file of its own, `cpm-merged-YYYY-MM.tsv`, written *beside*
+the per-counter logs and never into them. It carries both halves of every
+interval — the raw arrivals as integers with a `per_tube` breakdown by serial,
+and the merged rate of the room, counts over *tube*-seconds — at a precision
+the other format deliberately does not keep: `log::exact` writes the shortest
+string that parses back to identical bits, where `log::g` rounds to six
+significant figures because its characters are the Python's to the byte.
+
+Both rules therefore hold at once. The record of an instrument stays the record
+of that instrument, and the record of the room exists as well, taken apart again
+by anyone who wants the tubes back.
+
+**One counter writes no merged file.** There is nothing to merge and nothing to
+interleave, and a second file that only restates the first to more decimal
+places is a second file to explain, to back up and to get out of step. The
+differential suite states the same rule from the outside: a single-counter
+`watch` leaves exactly one `cpm-*.tsv` behind.
+
 ---
 
 ## IV. The window: flow and layout
@@ -357,11 +397,32 @@ socket ──► feed thread ─────────────────
            Ladder [512, 4096, 32768]               (≈1 Hz, bounded)
            Entropy pool, strip ring
            → Snapshot
+                     └──────────────────────────► Message::Moved
+           Recent (30 s of arrivals)               (≤12 Hz, and only
+           Ballistic needle, Drift ×2               when something moved)
+           → Meters
 ```
+
+**Two messages, on two beats.** A `Snapshot` is the cascade, three spectra and
+the table: it changes once a second and costs a clone of all of it. A `Meters`
+is a handful of floats and wants to *move*, so it travels separately and twelve
+times as often — but only when the needle has actually shifted, because a
+settled reading is the ordinary case and every message is a full software
+re-render on the machine this usually runs on.
 
 The channel is bounded at 32 and the thread uses a non-blocking send: if the
 interface is a second behind, the snapshot is dropped, because the next one
 supersedes it. There is nothing to retry and nothing to queue.
+
+Waking twelve times a second needs `Client::poll` rather than `Client::next`.
+`next` collapses a read timeout and a closed socket into the same `None`, which
+is the right answer at ten seconds — a silence that long *is* the server going
+away — and the wrong one at eighty milliseconds, where every single wake-up
+would read as a dead counter. `poll` returns `Event`, `Idle` or `Closed`, and
+keeps the half-line a short timeout leaves behind: `read_until` appends what it
+got and *then* reports the error, so a timeout landing between the `s` and the
+newline has already taken those bytes out of the socket. Dropped, the sample
+goes with them.
 
 ### B. Reading order
 
@@ -419,6 +480,61 @@ gauge: the needle has to mean the same thing minute to minute.
 
 With two counters the two needles side by side answer *do they agree?* before
 any number has been read.
+
+#### Three time constants on the collected face
+
+A dial can show more than one answer at a time and a number cannot, which is
+most of the argument for drawing one. The collected face carries the **three
+seconds** its needle points at, the **half minute** the chrome pointer sits at
+— the same window the headline number is quoted over — and the half minute and
+minute the needle has been bouncing between, as the two drifting arcs outside
+the bands. The gap between needle and pointer *is* the trend.
+
+Three seconds rather than one because one second of one tube is a handful of
+arrivals, and a needle drawn from it draws the counting statistics rather than
+the room; at three times the counts it is √3 steadier and still quick enough
+to show a source passing under the tube. The one-second figure is printed on
+the plate under the bezel, which is where a number that jumps several times a
+second belongs.
+
+**The needle has mass.** `Ballistic` leans it out with a 0.25 s constant and
+settles it back with 0.9 s — fast enough not to smooth away a real excursion,
+slow enough that one Poisson lump does not read as a spike. It is the same
+idea as the range bugs with a different asymmetry: a bug must not *miss* an
+excursion, so it snaps out instantly; a needle must be *readable*, so it
+accelerates instead. Without it the needle teleports once a second and the eye
+cannot follow which way it went.
+
+**Only the reading goes on the face.** A face is round and a line of text is
+not: everything drawn on it has to fit the chord at its own height, and the
+band arcs sit at 0.82 of the radius, so a line forty pixels below centre has
+65 pixels before its *ends* cross them. Both supporting lines therefore sit on
+a nameplate under the bezel, where the width available is the dial's whole
+share of the row and does not depend on how far down the line is.
+
+#### The reading does not wait for the second after it
+
+The collected meter used to close a second only when the **first sample of the
+next one** arrived — so the needle always showed a second that had already
+finished, and with several tubes it was whichever tube ticked over first that
+ended the wait. `Recent` rolls a window over the arrivals themselves and has
+the second the moment it has gone by, at any tube count.
+
+Its divisor is the **samples in the window, not the span times the tubes**.
+Each sample covers one second of one tube, so `sum * 60 / samples` is counts
+per minute per tube whatever happens to a tube mid-window; dividing by
+`span * tubes` reports a tube that has stopped answering as the room having
+gone quiet.
+
+The meters travel apart from the snapshot and twelve times as often — a
+`Meters` is a handful of floats where a `Snapshot` is the cascade, three
+spectra and the table — and **only when something has moved**. A settled
+reading sends nothing between snapshots, which matters because this program's
+usual home is a VM with no GPU, where every message is a full software
+re-render of the panel. `Client::poll` is what makes the short wake-up safe:
+`next` collapses a timeout and a closed socket into the same `None`, which is
+right at ten seconds and would read every twelfth of a second as a dead
+counter.
 
 ### D. The cascade
 

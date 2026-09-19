@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Radiation monitor</title>
+<style>
+:root{color-scheme:light dark;--fg:#181818;--bg:#faf9f7;--dim:#6b6b6b;--line:#e0ddd8;--card:#fff;--accent:#2f6f4f;--warn:#b0642a}
+@media (prefers-color-scheme:dark){:root{--fg:#e8e6e3;--bg:#16161a;--dim:#9a9a9a;--line:#2e2e35;--card:#1e1e24;--accent:#6cc08c;--warn:#e0a06a}}
+body{margin:0;padding:2rem 1rem;background:var(--bg);color:var(--fg);font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:1100px;margin:0 auto}
+h1{font-size:1.6rem;margin:0 0 .2rem}
+h2{font-size:1.1rem;margin:2.2rem 0 .6rem;font-weight:600}
+.sub{color:var(--dim);margin:0 0 1rem}
+.lede{max-width:70ch;margin:0 0 2rem;font-size:1rem;line-height:1.6}
+.lede a{color:var(--accent)}
+.how{margin-top:2.6rem}
+.how h3{margin:1.6rem 0 .3rem;font-size:1rem}
+.how p{margin:.35rem 0;max-width:68ch}
+.how pre{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.6rem .9rem;overflow-x:auto;font-size:.84rem;margin:.5rem 0}
+.how img{border:1px solid var(--line);border-radius:8px;margin:.6rem 0;max-width:100%}
+.how figure{margin:.8rem 0 1.2rem}
+.how figcaption{color:var(--dim);font-size:.82rem;margin-top:.3rem}
+.cards{display:grid;gap:.9rem;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem}
+.card .k{color:var(--dim);font-size:.78rem;text-transform:uppercase;letter-spacing:.04em}
+.card .v{font-size:1.5rem;font-variant-numeric:tabular-nums;margin-top:.15rem}
+.card .n{color:var(--dim);font-size:.8rem}
+.plotwrap{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:.9rem 1rem 0;margin-top:.9rem}
+.plot{display:block;height:auto}
+.plot .grid{stroke:var(--line);stroke-width:1}
+.plot .minor{opacity:.45}
+.plot .mean{fill:none;stroke:var(--accent);stroke-width:1.6;stroke-linejoin:round;stroke-linecap:round}
+.plot .peak{fill:none;stroke:var(--warn);stroke-width:1;opacity:.55}
+.plot text{fill:var(--dim);font-size:11px;font-family:system-ui,sans-serif}
+.plot .ylab{text-anchor:end}
+.plot .xlab{text-anchor:middle}
+.plot .ycap{text-anchor:start;font-size:10px;letter-spacing:.05em;text-transform:uppercase}
+.legend{display:flex;gap:1.2rem;color:var(--dim);font-size:.8rem;padding:.1rem 0 .8rem}
+.legend i{display:inline-block;width:18px;height:0;border-top-width:2px;border-top-style:solid;vertical-align:middle;margin-right:.4rem}
+.about{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:1.2rem 1.4rem;margin-top:2.6rem}
+.about h3{margin:0 0 .4rem;font-size:1.05rem}
+.about p{margin:.4rem 0;max-width:62ch}
+.about pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:.6rem .8rem;overflow-x:auto;font-size:.82rem}
+.windows{display:grid;gap:.7rem;margin:.9rem 0 0;padding:0;list-style:none;grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.windows li{border-left:2px solid var(--accent);padding-left:.7rem}
+.windows b{display:block;font-size:1.05rem}
+.windows span{color:var(--dim);font-size:.85rem}
+table{border-collapse:collapse;width:100%;font-size:.86rem;font-variant-numeric:tabular-nums;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th{text-align:left;font-weight:600;color:var(--dim);font-size:.76rem;text-transform:uppercase;letter-spacing:.04em}
+th,td{padding:.36rem .7rem;border-bottom:1px solid var(--line)}
+tbody tr:last-child td{border-bottom:0}
+td:not(:first-child),th:not(:first-child){text-align:right}
+.more{margin:.6rem 0 0;font-size:.85rem}
+.more a{color:var(--accent)}
+.tablewrap{overflow-x:auto}
+footer{color:var(--dim);font-size:.82rem;margin-top:3rem;border-top:1px solid var(--line);padding-top:1rem}
+code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
+</style></head><body><main>
+<h1>Radiation monitor</h1>
+<p class="sub">A GQ GMC Geiger-Muller counter on the desk &middot; generated 2026-09-19 12:27 by radbeeper 0.3.1 &middot; tube factor 151.5 CPM per &micro;Sv/h</p>
+<p class="lede">A <strong>GQ GMC-320 Plus</strong> Geiger&ndash;M&uuml;ller counter, plugged into a machine running <strong>Alpine Linux</strong> &mdash; or <strong><a href="https://github.com/vonglurt/copal">Copal</a></strong>, its distillation, which carries this as a stage and installs the <code>linux-lts</code> kernel package the counter needs to be seen at all &mdash; as a USB serial device, here shared into a virtual machine over USB pass-through. RadBeeper reads the counter, logs it to tab-separated files, and <strong>this page is regenerated from those files by a GitHub Action</strong> on every push. The whole of it is forkable: copy your own logs into <code>logs/</code> and you get a page like this one. <a href="https://github.com/vonglurt/radbeeper">Source and instructions</a>. <a href="random.html">Where the random comes from</a>.</p>
+<h2>Counter F48824B8207F7E</h2>
+<div class="cards">
+<div class="card"><div class="k">Mean</div><div class="v">42.0 CPM</div><div class="n">0.277 uSv/h</div></div>
+<div class="card"><div class="k">Highest 3s peak</div><div class="v">8520 CPM</div><div class="n">56.238 uSv/h</div></div>
+<div class="card"><div class="k">Rows</div><div class="v">28,544</div><div class="n">237.5 hours counted</div></div>
+<div class="card"><div class="k">Covering</div><div class="v">2026-08-24 02:37</div><div class="n">to 2026-09-04 12:53</div></div>
+</div>
+<h2>Counts per minute, by the hour</h2>
+<div class="plotwrap"><svg class="plot" viewBox="0 0 1120 1200" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="counts per minute over time"><line class="grid" x1="52" y1="1174.0" x2="1110" y2="1174.0"/><text class="ylab" x="44" y="1178.0">10</text><line class="grid minor" x1="52" y1="1057.4" x2="1110" y2="1057.4"/><line class="grid minor" x1="52" y1="903.3" x2="1110" y2="903.3"/><line class="grid" x1="52" y1="786.7" x2="1110" y2="786.7"/><text class="ylab" x="44" y="790.7">100</text><line class="grid minor" x1="52" y1="670.1" x2="1110" y2="670.1"/><line class="grid minor" x1="52" y1="515.9" x2="1110" y2="515.9"/><line class="grid" x1="52" y1="399.3" x2="1110" y2="399.3"/><text class="ylab" x="44" y="403.3">1,000</text><line class="grid minor" x1="52" y1="282.7" x2="1110" y2="282.7"/><line class="grid minor" x1="52" y1="128.6" x2="1110" y2="128.6"/><line class="grid" x1="52" y1="12.0" x2="1110" y2="12.0"/><text class="ylab" x="44" y="16.0">10,000</text><line class="grid" x1="109.9" y1="12" x2="109.9" y2="1174"/><text class="xlab" x="109.9" y="1192">Aug 24</text><line class="grid" x1="202.6" y1="12" x2="202.6" y2="1174"/><text class="xlab" x="202.6" y="1192">Aug 25</text><line class="grid" x1="295.3" y1="12" x2="295.3" y2="1174"/><text class="xlab" x="295.3" y="1192">Aug 26</text><line class="grid" x1="387.9" y1="12" x2="387.9" y2="1174"/><text class="xlab" x="387.9" y="1192">Aug 27</text><line class="grid" x1="480.6" y1="12" x2="480.6" y2="1174"/><text class="xlab" x="480.6" y="1192">Aug 28</text><line class="grid" x1="573.3" y1="12" x2="573.3" y2="1174"/><text class="xlab" x="573.3" y="1192">Aug 29</text><line class="grid" x1="665.9" y1="12" x2="665.9" y2="1174"/><text class="xlab" x="665.9" y="1192">Aug 30</text><line class="grid" x1="758.6" y1="12" x2="758.6" y2="1174"/><text class="xlab" x="758.6" y="1192">Aug 31</text><line class="grid" x1="851.3" y1="12" x2="851.3" y2="1174"/><text class="xlab" x="851.3" y="1192">Sep 1</text><line class="grid" x1="944.0" y1="12" x2="944.0" y2="1174"/><text class="xlab" x="944.0" y="1192">Sep 2</text><line class="grid" x1="1036.6" y1="12" x2="1036.6" y2="1174"/><text class="xlab" x="1036.6" y="1192">Sep 3</text><path class="peak" d="M52.0 515.9 L55.9 304.2 L59.7 613.5 L63.6 308.1 L67.4 530.0 L71.3 75.9 L75.2 613.5 L79.0 190.5 L82.9 522.8 L86.8 74.9 L90.6 75.9 L94.5 601.9 L98.3 75.4 L102.2 38.9 L106.1 613.5 L109.9 485.3 L113.8 491.0 L117.6 503.0 L121.5 454.6 L125.4 537.4 M133.1 496.9 L136.9 601.9 L140.8 601.9 L144.7 553.5 L148.5 503.0 L152.4 625.9 L156.3 613.5 L160.1 654.0 L164.0 601.9 L167.8 571.2 M175.6 601.9 L179.4 601.9 L183.3 450.0 L187.1 625.9 L191.0 479.7 L194.9 496.9 L198.7 530.0 L202.6 485.3 L206.5 509.3 L210.3 464.2 L214.2 503.0 L218.0 496.9 L221.9 450.0 L225.8 454.6 L229.6 601.9 L233.5 469.2 L237.3 459.3 L241.2 553.5 L245.1 580.8 L248.9 625.9 L252.8 601.9 L256.6 654.0 L260.5 591.0 L264.4 613.5 L268.2 625.9 L272.1 509.3 L276.0 613.5 L279.8 562.1 L283.7 537.4 L287.5 300.5 L291.4 625.9 L295.3 308.1 L299.1 287.9 L303.0 450.0 L306.8 192.5 L310.7 496.9 L314.6 76.4 L318.4 571.2 L322.3 459.3 L326.2 613.5 L330.0 625.9 L333.9 515.9 L337.7 654.0 L341.6 639.4 L345.5 503.0 L349.3 530.0 L353.2 496.9 L357.0 571.2 L360.9 515.9 L364.8 509.3 L368.6 562.1 L372.5 545.3 L376.4 639.4 L380.2 530.0 L384.1 639.4 L387.9 562.1 L391.8 639.4 L395.7 625.9 L399.5 670.1 L403.4 464.2 L407.2 469.2 L411.1 491.0 L415.0 625.9 L418.8 496.9 L422.7 654.0 L426.5 474.4 L430.4 571.2 L434.3 515.9 L438.1 503.0 L442.0 503.0 L445.9 591.0 L449.7 601.9 L453.6 491.0 L457.4 545.3 L461.3 562.1 L465.2 545.3 L469.0 515.9 L472.9 613.5 L476.7 537.4 L480.6 464.2 L484.5 601.9 L488.3 469.2 L492.2 639.4 L496.1 625.9 L499.9 625.9 L503.8 591.0 L507.6 515.9 L511.5 601.9 L515.4 591.0 M523.1 601.9 L526.9 639.4 L530.8 553.5 L534.7 306.2 L538.5 625.9 L542.4 75.9 L546.2 75.9 L550.1 562.1 L554.0 76.4 L557.8 625.9 L561.7 38.9 L565.6 75.9 L569.4 601.9 L573.3 192.5 L577.1 625.9 L581.0 580.8 L584.9 464.2 L588.7 509.3 L592.6 625.9 L596.4 625.9 L600.3 639.4 L604.2 496.9 L608.0 625.9 L611.9 571.2 L615.8 654.0 L619.6 562.1 L623.5 545.3 L627.3 639.4 L631.2 625.9 L635.1 522.8 L638.9 639.4 L642.8 591.0 L646.6 591.0 L650.5 670.1 L654.4 613.5 L658.2 613.5 L662.1 537.4 L665.9 639.4 L669.8 639.4 L673.7 654.0 L677.5 530.0 L681.4 639.4 L685.3 625.9 L689.1 464.2 L693.0 491.0 L696.8 639.4 L700.7 509.3 L704.6 537.4 L708.4 639.4 L712.3 601.9 L716.1 553.5 L720.0 306.2 L723.9 308.1 L727.7 192.5 L731.6 613.5 L735.5 75.9 L739.3 76.4 L743.2 562.1 L747.0 670.1 L750.9 639.4 L754.8 474.4 L758.6 545.3 L762.5 485.3 L766.3 509.3 L770.2 613.5 L774.1 625.9 L777.9 432.7 L781.8 485.3 L785.6 469.2 L789.5 469.2 L793.4 625.9 L797.2 509.3 L801.1 625.9 L805.0 485.3 L808.8 625.9 L812.7 601.9 L816.5 580.8 L820.4 580.8 L824.3 571.2 L828.1 591.0 L832.0 625.9 L835.8 639.4 L839.7 625.9 L843.6 553.5 L847.4 464.2 L851.3 496.9 L855.2 522.8 L859.0 464.2 L862.9 625.9 L866.7 459.3 M874.5 474.4 L878.3 601.9 L882.2 625.9 L886.0 515.9 L889.9 580.8 L893.8 601.9 L897.6 639.4 L901.5 613.5 L905.4 580.8 L909.2 503.0 L913.1 562.1 L916.9 553.5 L920.8 601.9 L924.7 639.4 L928.5 591.0 L932.4 601.9 L936.2 571.2 L940.1 625.9 L944.0 625.9 L947.8 613.5 L951.7 537.4 L955.5 485.3 L959.4 639.4 M967.1 522.8 L971.0 522.8 L974.9 601.9 L978.7 613.5 L982.6 601.9 L986.4 601.9 L990.3 503.0 L994.2 639.4 L998.0 639.4 L1001.9 625.9 L1005.7 625.9 L1009.6 601.9 L1013.5 571.2 L1017.3 601.9 L1021.2 625.9 L1025.1 613.5 L1028.9 625.9 L1032.8 553.5 L1036.6 562.1 L1040.5 591.0 L1044.4 509.3 L1048.2 491.0 L1052.1 601.9 L1055.9 707.6 L1059.8 591.0 L1063.7 537.4 M1071.4 639.4 L1075.2 308.1 L1079.1 580.8 L1083.0 625.9 L1086.8 304.2 L1090.7 553.5 L1094.6 302.3 L1098.4 613.5 L1102.3 300.5 L1106.1 464.2 L1110.0 601.9"/><path class="mean" d="M52.0 907.6 L55.9 925.0 L59.7 949.9 L63.6 939.8 L67.4 926.6 L71.3 930.3 L75.2 951.5 L79.0 934.7 L82.9 933.4 L86.8 926.7 L90.6 931.7 L94.5 955.7 L98.3 912.8 L102.2 919.7 L106.1 931.5 L109.9 918.3 L113.8 915.4 L117.6 893.2 L121.5 833.1 L125.4 925.6 M133.1 905.6 L136.9 936.9 L140.8 945.7 L144.7 940.5 L148.5 915.6 L152.4 948.8 L156.3 949.6 L160.1 959.3 L164.0 950.6 L167.8 948.2 M175.6 947.1 L179.4 946.4 L183.3 933.5 L187.1 948.9 L191.0 893.9 L194.9 896.2 L198.7 913.7 L202.6 858.8 L206.5 903.9 L210.3 861.3 L214.2 903.5 L218.0 879.1 L221.9 840.3 L225.8 867.5 L229.6 938.5 L233.5 891.1 L237.3 883.4 L241.2 938.9 L245.1 947.2 L248.9 951.7 L252.8 950.4 L256.6 948.8 L260.5 948.0 L264.4 952.9 L268.2 947.4 L272.1 919.1 L276.0 945.3 L279.8 945.8 L283.7 811.3 L287.5 904.7 L291.4 948.4 L295.3 900.3 L299.1 910.5 L303.0 855.0 L306.8 825.5 L310.7 928.5 L314.6 889.8 L318.4 777.9 L322.3 845.1 L326.2 941.2 L330.0 942.7 L333.9 903.1 L337.7 938.6 L341.6 933.1 L345.5 924.8 L349.3 924.6 L353.2 936.7 L357.0 920.4 L360.9 945.7 L364.8 944.7 L368.6 952.7 L372.5 943.6 L376.4 953.8 L380.2 929.9 L384.1 947.5 L387.9 935.7 L391.8 939.1 L395.7 935.4 L399.5 935.0 L403.4 881.3 L407.2 917.9 L411.1 900.5 L415.0 935.9 L418.8 916.1 L422.7 940.1 L426.5 913.8 L430.4 945.4 L434.3 940.9 L438.1 923.2 L442.0 941.8 L445.9 946.1 L449.7 937.0 L453.6 916.5 L457.4 935.2 L461.3 948.9 L465.2 942.3 L469.0 940.7 L472.9 953.7 L476.7 936.2 L480.6 875.0 L484.5 953.2 L488.3 912.6 L492.2 937.3 L496.1 942.7 L499.9 951.7 L503.8 936.7 L507.6 928.2 L511.5 942.3 L515.4 945.0 M523.1 956.0 L526.9 958.7 L530.8 945.7 L534.7 924.1 L538.5 951.0 L542.4 926.1 L546.2 926.9 L550.1 944.3 L554.0 934.9 L557.8 955.6 L561.7 923.2 L565.6 912.2 L569.4 946.8 L573.3 915.7 L577.1 950.1 L581.0 947.4 L584.9 913.8 L588.7 917.9 L592.6 949.0 L596.4 955.3 L600.3 955.6 L604.2 917.1 L608.0 953.6 L611.9 941.2 L615.8 950.9 L619.6 950.9 L623.5 947.6 L627.3 959.1 L631.2 952.8 L635.1 935.7 L638.9 956.3 L642.8 958.6 L646.6 947.8 L650.5 962.3 L654.4 953.4 L658.2 950.8 L662.1 921.6 L665.9 948.1 L669.8 943.0 L673.7 939.2 L677.5 924.4 L681.4 947.2 L685.3 948.1 L689.1 923.7 L693.0 911.5 L696.8 941.1 L700.7 895.7 L704.6 939.8 L708.4 955.1 L712.3 947.2 L716.1 936.8 L720.0 942.8 L723.9 951.0 L727.7 953.6 L731.6 948.0 L735.5 928.6 L739.3 936.3 L743.2 946.5 L747.0 970.5 L750.9 946.3 L754.8 914.3 L758.6 936.3 L762.5 893.1 L766.3 910.1 L770.2 937.5 L774.1 933.8 L777.9 888.2 L781.8 895.2 L785.6 905.6 L789.5 933.9 L793.4 942.3 L797.2 918.5 L801.1 947.1 L805.0 933.7 L808.8 951.8 L812.7 956.0 L816.5 954.2 L820.4 946.1 L824.3 951.7 L828.1 951.0 L832.0 948.2 L835.8 943.5 L839.7 947.8 L843.6 939.1 L847.4 937.1 L851.3 939.7 L855.2 916.3 L859.0 882.6 L862.9 945.8 L866.7 913.0 M874.5 915.5 L878.3 944.9 L882.2 950.2 L886.0 926.2 L889.9 944.4 L893.8 946.7 L897.6 945.9 L901.5 954.8 L905.4 953.9 L909.2 938.6 L913.1 936.4 L916.9 949.5 L920.8 951.4 L924.7 965.4 L928.5 950.8 L932.4 944.3 L936.2 936.9 L940.1 946.4 L944.0 960.1 L947.8 952.7 L951.7 928.9 L955.5 936.8 L959.4 953.6 L963.3 787.6 L967.1 943.8 L971.0 940.4 L974.9 955.8 L978.7 954.8 L982.6 958.2 L986.4 960.8 L990.3 949.6 L994.2 962.3 L998.0 967.6 L1001.9 965.3 L1005.7 958.8 L1009.6 964.6 L1013.5 957.7 L1017.3 960.1 L1021.2 953.5 L1025.1 961.5 L1028.9 960.8 L1032.8 941.6 L1036.6 938.6 L1040.5 948.7 L1044.4 957.7 L1048.2 945.5 L1052.1 954.6 L1055.9 946.0 L1059.8 955.8 L1063.7 945.4 M1071.4 960.0 L1075.2 942.8 L1079.1 953.5 L1083.0 952.5 L1086.8 956.2 L1090.7 956.3 L1094.6 950.0 L1098.4 948.7 L1102.3 952.6 L1106.1 930.9 L1110.0 954.9"/><text class="ycap" x="8" y="22">CPM, log</text></svg>
+<div class="legend"><span><i style="border-top-color:var(--accent)"></i>hourly mean</span><span><i style="border-top-color:var(--warn)"></i>highest 3-second peak in the hour</span><span>a break in the line is an hour with no recording</span></div></div>
+<h2>By day</h2>
+<div class="tablewrap"><table><thead><tr><th>Day</th><th>Mean CPM</th><th>&micro;Sv/h</th><th>Peak 3s CPM</th><th>Rows</th><th>Hours</th></tr></thead><tbody>
+<tr><td>2026-09-04</td><td>37.8</td><td>0.250</td><td>1800</td><td>1380</td><td>11.5</td></tr>
+<tr><td>2026-09-03</td><td>36.7</td><td>0.242</td><td>580</td><td>2760</td><td>23.0</td></tr>
+<tr><td>2026-09-02</td><td>38.8</td><td>0.256</td><td>600</td><td>2592</td><td>21.6</td></tr>
+<tr><td>2026-09-01</td><td>41.5</td><td>0.274</td><td>700</td><td>2584</td><td>21.5</td></tr>
+<tr><td>2026-08-31</td><td>42.9</td><td>0.283</td><td>6840</td><td>2293</td><td>19.1</td></tr>
+<tr><td>2026-08-30</td><td>39.3</td><td>0.259</td><td>680</td><td>2294</td><td>19.1</td></tr>
+<tr><td>2026-08-29</td><td>40.8</td><td>0.270</td><td>8520</td><td>2572</td><td>21.4</td></tr>
+<tr><td>2026-08-28</td><td>41.9</td><td>0.276</td><td>680</td><td>2456</td><td>20.4</td></tr>
+<tr><td>2026-08-27</td><td>43.6</td><td>0.288</td><td>700</td><td>2414</td><td>20.1</td></tr>
+<tr><td>2026-08-26</td><td>46.5</td><td>0.307</td><td>6820</td><td>2346</td><td>19.5</td></tr>
+<tr><td>2026-08-25</td><td>47.8</td><td>0.316</td><td>740</td><td>2583</td><td>21.5</td></tr>
+<tr><td>2026-08-24</td><td>45.2</td><td>0.298</td><td>8520</td><td>2270</td><td>18.9</td></tr>
+</tbody></table></div>
+<h2>Latest rows</h2>
+<div class="tablewrap"><table><thead><tr><th>Time</th><th>CPS</th><th>3s</th><th>30s</th><th>300s</th><th>Peak 3s</th><th>Source</th><th>Site</th></tr></thead><tbody>
+<tr><td>2026-09-04T12:53:30</td><td>0.110</td><td>0.0</td><td>6.0</td><td>32.8</td><td>40.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:53:00</td><td>0.829</td><td>0.0</td><td>50.0</td><td>33.2</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:52:30</td><td>0.331</td><td>0.0</td><td>20.0</td><td>32.4</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:52:00</td><td>0.343</td><td>0.0</td><td>20.0</td><td>33.0</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:51:30</td><td>0.431</td><td>0.0</td><td>26.0</td><td>34.4</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:51:00</td><td>0.564</td><td>80.0</td><td>34.0</td><td>35.6</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:50:30</td><td>0.862</td><td>80.0</td><td>52.0</td><td>35.8</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:50:00</td><td>0.431</td><td>0.0</td><td>26.0</td><td>35.4</td><td>60.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:49:30</td><td>0.564</td><td>60.0</td><td>34.0</td><td>38.4</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:49:00</td><td>0.789</td><td>0.0</td><td>52.0</td><td>37.6</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:48:30</td><td>0.398</td><td>140.0</td><td>24.0</td><td>36.8</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:48:00</td><td>0.597</td><td>20.0</td><td>36.0</td><td>38.0</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:47:30</td><td>0.530</td><td>80.0</td><td>32.0</td><td>37.8</td><td>180.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:47:00</td><td>0.564</td><td>40.0</td><td>34.0</td><td>38.6</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:46:30</td><td>0.630</td><td>20.0</td><td>38.0</td><td>37.8</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:46:00</td><td>0.617</td><td>40.0</td><td>36.0</td><td>38.8</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:45:30</td><td>0.762</td><td>0.0</td><td>46.0</td><td>39.6</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:45:00</td><td>0.862</td><td>80.0</td><td>52.0</td><td>41.4</td><td>220.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:44:30</td><td>0.530</td><td>60.0</td><td>32.0</td><td>39.2</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:44:00</td><td>0.630</td><td>0.0</td><td>38.0</td><td>40.4</td><td>180.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:43:30</td><td>0.597</td><td>80.0</td><td>36.0</td><td>41.4</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:43:00</td><td>0.514</td><td>0.0</td><td>34.0</td><td>41.0</td><td>160.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:42:30</td><td>0.729</td><td>80.0</td><td>44.0</td><td>41.8</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:42:00</td><td>0.431</td><td>0.0</td><td>26.0</td><td>41.6</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:41:30</td><td>0.729</td><td>100.0</td><td>44.0</td><td>42.8</td><td>180.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:41:00</td><td>0.796</td><td>60.0</td><td>48.0</td><td>42.0</td><td>160.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:40:30</td><td>1.061</td><td>100.0</td><td>64.0</td><td>38.0</td><td>180.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:40:00</td><td>0.446</td><td>0.0</td><td>30.0</td><td>36.0</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:39:30</td><td>0.696</td><td>60.0</td><td>42.0</td><td>36.6</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:39:00</td><td>0.829</td><td>80.0</td><td>50.0</td><td>35.0</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:38:30</td><td>0.597</td><td>40.0</td><td>36.0</td><td>34.4</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:38:00</td><td>0.630</td><td>40.0</td><td>38.0</td><td>33.8</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:37:30</td><td>0.696</td><td>0.0</td><td>42.0</td><td>36.4</td><td>220.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:37:00</td><td>0.652</td><td>60.0</td><td>38.0</td><td>37.8</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:36:30</td><td>0.530</td><td>40.0</td><td>32.0</td><td>36.0</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:36:00</td><td>0.199</td><td>40.0</td><td>12.0</td><td>35.2</td><td>60.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:35:30</td><td>0.729</td><td>80.0</td><td>44.0</td><td>35.2</td><td>220.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:35:00</td><td>0.530</td><td>140.0</td><td>32.0</td><td>33.6</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:34:30</td><td>0.431</td><td>0.0</td><td>26.0</td><td>33.6</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:34:00</td><td>0.720</td><td>80.0</td><td>44.0</td><td>37.2</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:33:30</td><td>0.464</td><td>40.0</td><td>28.0</td><td>36.0</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:33:00</td><td>1.127</td><td>80.0</td><td>68.0</td><td>36.6</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:32:30</td><td>0.928</td><td>0.0</td><td>56.0</td><td>33.6</td><td>300.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:32:00</td><td>0.331</td><td>0.0</td><td>20.0</td><td>33.6</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:31:30</td><td>0.398</td><td>0.0</td><td>24.0</td><td>34.4</td><td>160.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:31:00</td><td>0.171</td><td>0.0</td><td>12.0</td><td>33.8</td><td>40.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:30:30</td><td>0.497</td><td>20.0</td><td>30.0</td><td>36.4</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:30:00</td><td>0.530</td><td>40.0</td><td>32.0</td><td>39.6</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:29:30</td><td>1.028</td><td>80.0</td><td>62.0</td><td>40.6</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:29:00</td><td>0.497</td><td>0.0</td><td>30.0</td><td>36.8</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:28:30</td><td>0.564</td><td>40.0</td><td>34.0</td><td>41.0</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:28:00</td><td>0.631</td><td>80.0</td><td>38.0</td><td>39.4</td><td>200.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:27:30</td><td>0.933</td><td>80.0</td><td>56.0</td><td>37.8</td><td>140.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:27:00</td><td>0.467</td><td>20.0</td><td>28.0</td><td>35.8</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:26:30</td><td>0.300</td><td>40.0</td><td>18.0</td><td>36.8</td><td>100.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:26:00</td><td>0.600</td><td>0.0</td><td>36.0</td><td>38.4</td><td>160.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:25:30</td><td>1.033</td><td>60.0</td><td>62.0</td><td>36.0</td><td>160.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:25:00</td><td>0.722</td><td>40.0</td><td>42.0</td><td>32.6</td><td>80.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:24:30</td><td>0.398</td><td>0.0</td><td>24.0</td><td>31.4</td><td>120.0</td><td>flash</td><td>--</td></tr>
+<tr><td>2026-09-04T12:24:00</td><td>1.193</td><td>0.0</td><td>72.0</td><td>31.2</td><td>200.0</td><td>flash</td><td>--</td></tr>
+</tbody></table></div>
+<p class="more">The last 60 rows of 28,544. Read the full chart: <a href="logs/cpm-F48824B8207F7E-2026-08.tsv">cpm-F48824B8207F7E-2026-08.tsv</a> &middot; <a href="logs/cpm-F48824B8207F7E-2026-09.tsv">cpm-F48824B8207F7E-2026-09.tsv</a> &mdash; tab-separated, one row every 30 seconds.</p>
+<section class="how">
+<h2>How to use it</h2>
+<h3>What you need</h3>
+<p><b>A GQ GMC-320 Plus, plugged into a USB port, switched on.</b> That is the hardware, and no amount of software substitutes for it: every number on this page came off a real tube over a real serial port. A <b>GMC-300</b> works too &mdash; RadBeeper tries its 57600 baud as well as the 320's 115200 &mdash; and a 500 or 600 is found and read, but its tube is not an M4011, so it needs its own <code>--cpm-per-usvh</code>.</p>
+<ul>
+<li><b>The USB cable that came with it.</b> A charge-only cable carries no data, and is indistinguishable from an empty port until you try another one.</li>
+<li><b>The counter switched on.</b> Its USB-serial chip is powered by the counter, not by the bus &mdash; a flat 320 enumerates as nothing.</li>
+<li><b>A kernel with <code>ch341</code>.</b> The 320 Plus presents as a CH340. <code>linux-lts</code> and <code>linux-rpi</code> carry the driver; Alpine's <code>linux-virt</code> does not, which is the commonest reason a counter that is plugged in cannot be found. <a href="https://github.com/vonglurt/copal">Copal</a> installs the <code>linux-lts</code> Alpine package, so the case does not arise there.</li>
+<li><b>Membership of <code>dialout</code>.</b> The serial node is <code>root:dialout</code> and RadBeeper does not want root.</li>
+</ul>
+<p>Plugged in and working, Linux says so: <code>dmesg</code> ends with <code>ch341-uart converter now attached to ttyUSB0</code> and <code>/dev/ttyUSB0</code> exists. USB pass-through into a VM counts &mdash; these logs came from one &mdash; provided the guest kernel is one of the two that has the driver.</p>
+<p>No counter yet? <code>radbeeper --source sim watch</code> draws the whole monitor against a synthetic Poisson background.</p>
+<h3>Install</h3>
+<p>One stdlib Python file. No packages, no build, nothing to compile &mdash; the install is a copy.</p>
+<pre>git clone https://github.com/vonglurt/radbeeper.git
+cd radbeeper &amp;&amp; make install
+
+doas adduser $USER dialout    # then log in again</pre>
+<p>The read side is also a Rust crate, if a native binary suits the machine better: <code>cargo install radbeeper</code>, or a static musl build from the <a href="https://github.com/vonglurt/radbeeper/releases">releases page</a> for x86_64, aarch64, armv7 or the Pi Zero's armv6. It does <code>probe</code>, <code>cpm</code> and <code>watch</code>; everything that writes these logs stays in the Python.</p>
+<h3>Find the counter</h3>
+<pre>radbeeper probe</pre>
+<figure><img src="docs/screenshots/probe.png" alt="radbeeper probe, against the counter these logs came from" loading="lazy"><figcaption>radbeeper probe, against the counter these logs came from</figcaption></figure>
+<p>If it finds nothing it says which of four things went wrong, because they have four different fixes: no serial node at all (often a kernel with no <code>ch341</code> &mdash; Alpine's <code>linux-virt</code> has none, <code>linux-lts</code> does), permission on the node, something that is not a GMC, or a port another reader already holds.</p>
+<h3>Watch it</h3>
+<pre>radbeeper watch</pre>
+<figure><img src="docs/screenshots/watch.png" alt="the monitor: five time constants, the counts, the spectrum and a line of decay-derived random" loading="lazy"><figcaption>the monitor: five time constants, the counts, the spectrum and a line of decay-derived random</figcaption></figure>
+<p>The counter's own reading is a rolling 60-second count &mdash; one number with one time constant. RadBeeper counts the blips itself and keeps five windows at once, each a factor of ten apart.</p>
+<ul class="windows">
+<li><b>3 s</b><span>Three seconds is too short to be a measurement. On a 40 CPM background it swings between 0 and 80, because at this rate three seconds is two counts. Watch it to see a source come and go as you move it, and do not write it down.</span></li>
+<li><b>30 s</b><span>Half a minute, and the shortest window that is a count rather than a flicker. Settled enough to compare two places, quick enough to follow your hands &mdash; which is why it is the number in the big digits, and what <code>radbeeper cpm</code> reports.</span></li>
+<li><b>300 s</b><span>Five minutes. A number worth writing down.</span></li>
+<li><b>3000 s</b><span>Fifty minutes. What the background here actually is, once the day's traffic through the room has averaged out.</span></li>
+<li><b>30000 s</b><span>Eight hours twenty &mdash; a working day. It is not a faster answer to the same question, it is the only window that spans one; a shift's worth of background, against which a day that was different is visible as a difference.</span></li>
+</ul>
+<p><strong>A window shows nothing until it is full</strong>, and says how long it still needs. A three-second CPM built from one sample is twenty times noisier than it looks, and drawing it as though it were settled is how a 25 CPM background reads as 60 and somebody goes hunting for a leak.</p>
+<h3>Is anything periodic?</h3>
+<p>The monitor also accumulates a power spectrum of the per-second counts. <strong>Decay is a Poisson process and the spectrum of a Poisson process is flat</strong> &mdash; so a featureless strip is the good answer, and says that nothing is arriving on a schedule.</p>
+<figure><img src="docs/screenshots/watch-spectrum.png" alt="the accumulating spectrum: flat is healthy" loading="lazy"><figcaption>the accumulating spectrum: flat is healthy</figcaption></figure>
+<p>A peak is the interesting case: mains hum on the tube's supply, a fan carrying a source past, a loose connector, firmware that batches its reporting. In the time domain all of those look exactly like more counts. Averaging successive windows is what makes a real line climb out of the noise &mdash; one periodogram of a Poisson process is flat in expectation and violently noisy in fact.</p>
+<p>No counter on the desk? Every command runs against a built-in source, and it is a real one &mdash; radioactive decay is a Poisson process, so the simulator draws Poisson samples.</p>
+<pre>radbeeper --source sim --sim-cpm 400 watch</pre>
+<h3>Random numbers out of decay</h3>
+<p>The monitor also keeps an entropy pool and prints a line of hex whenever the samples have <strong>earned</strong> it. Not modelled &mdash; measured: the counts coming back over the serial link are measurably burstier than Poisson, so the bits per second are estimated from the samples themselves and pushed to the far end of a 99% confidence interval before anything is emitted.</p>
+<pre>radbeeper random</pre>
+<p><a href="random.html"><strong>Where the random comes from</strong></a> &mdash; the counts against the model, the bits accumulating second by second, what the serial link's one-second resolution costs, and every line emitted with the counts behind it.</p>
+<h3>Log it</h3>
+<pre>radbeeper service</pre>
+<p>A row every 30 seconds into a dated file per counter, <code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code> &mdash; which is rotation by construction, with no cron entry and nothing renaming a file while a service appends to it. Each row carries the <strong>peak</strong> every window reached since the last one, so a source that came and went between two rows still leaves a trace.</p>
+<figure><img src="docs/screenshots/log-output.png" alt="the log on disk, and what a row holds" loading="lazy"><figcaption>the log on disk, and what a row holds</figcaption></figure>
+<p>Tabs are invisible, and that matters here: an <strong>empty field is not a zero</strong>, it is a window that was not full yet.</p>
+<figure><img src="docs/screenshots/log-tabs.png" alt="the same rows with every tab made visible" loading="lazy"><figcaption>the same rows with every tab made visible</figcaption></figure>
+<p>The counter also records to its own flash whether or not anything is listening. <code>radbeeper backfill</code> reads that back and fills the gaps &mdash; one row per slot, never over a live measurement, and an hour nobody recorded stays an hour nobody recorded.</p>
+<pre>radbeeper backfill</pre>
+<h3>Publish it</h3>
+<pre>radbeeper export --logs logs -o index.html</pre>
+<p>This page. Fork the repository, copy your <code>cpm-*.tsv</code> into <code>logs/</code>, push, and the workflow rebuilds and commits it &mdash; served by GitHub Pages with no build step. There is nothing to install in the workflow: the generator is the same one file, which is also why the page cannot drift from the log format.</p>
+<p>MIT License &mdash; Copyright (c) 2026 Paul Richeson &middot; <a href="https://github.com/vonglurt/radbeeper">github.com/vonglurt/radbeeper</a></p>
+</section>
+<footer>MIT License &mdash; Copyright (c) 2026 Paul Richeson. Rows marked <code>live</code> were measured by a monitor on this machine; rows marked <code>flash</code> were reconstructed from the counter's own recorded history. Gaps are gaps: nothing is interpolated. Built by <code>radbeeper export</code>.</footer>
+</main>
+</body></html>

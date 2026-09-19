@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Random numbers out of decay — RadBeeper</title>
+<meta name="description" content="A lab report on RadBeeper&#x27;s entropy source: where the bits come from, three ways this is normally done wrong, why the model that used to be assumed was measurably wrong about this tube, and what the serial link costs.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/the-random.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Random numbers out of decay — RadBeeper">
+<meta property="og:description" content="A lab report on RadBeeper&#x27;s entropy source: where the bits come from, three ways this is normally done wrong, why the model that used to be assumed was measurably wrong about this tube, and what the serial link costs.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/the-random.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="random-numbers-out-of-decay">Random numbers out of decay</h1>
+<p><em>A lab report on RadBeeper's entropy source: where the bits come from, three ways this is normally done wrong, why the model that used to be assumed was measurably wrong about this tube, and what the serial link costs.</em></p>
+<blockquote><p>Treat this as a good physical entropy source, not a certified one. It has not been through a statistical test battery, and 256 bits of accounted min-entropy is a claim about the model of the source, not a proof about the output.</p></blockquote>
+<hr>
+<p>The moment a nucleus decays is not determined by anything, which makes a counter the textbook hardware entropy source.</p>
+<pre><code class="language-sh">radbeeper random</code></pre>
+<pre><code>b17c9c60 d5deeb7b 4b102dfc bec14efc b523818b 18d3ada0 582bd912 e61ff856
+
+  256 bits, min-entropy 258 measured, from 448 seconds at 0.68 counts/s
+  440 bits is what a Poisson model would have claimed for the same 448 seconds
+  spectrum flat -- the source looks like decay
+  recorded in /var/lib/radbeeper/random-F48824B8207F7E.tsv</code></pre>
+<p>That second line is the point: on this run the model would have handed over the same sixty-four characters after 260 seconds and called them 256 bits.</p>
+<hr>
+<h2 id="three-ways-this-normally-goes-wrong">Three ways this normally goes wrong</h2>
+<p>And what is done instead.</p>
+<p><em>Not from the FFT.</em> A transform is linear and invertible — it moves information about, it does not make any. Worse, these coefficients come from a mean-subtracted, Hann-tapered window, so neighbouring bins are correlated by construction. Bits pulled from them would look beautiful and carry far less than they appear to. The entropy is in the counts; the spectrum is a <em>view</em> of them.</p>
+<p><em>Not by XOR and rotation.</em> Shifting and XOR-ing a block rearranges what is in it. A block holding twenty bits of entropy holds twenty bits after any amount of barrel-shifting, while looking more and more convincing. The tool for condensing a lot of weakly-random data into a little strongly-random data is a cryptographic hash — SHA-256 is in the standard library and is faster than the shifting.</p>
+<p><em>Not proven by a flat spectrum.</em> Flatness is necessary and nowhere near sufficient: a counter, an LFSR and a square wave at the Nyquist rate all pass it. It is used as a <strong>health check</strong> — a peak means something periodic is contaminating the arrivals — and an emission is marked suspect when it fails. Nor does the spectrum <em>add</em> anything: the FFT is a deterministic function of the same samples, and H∞(f(X)) ≤ H∞(X) for any deterministic f.</p>
+<hr>
+<h2 id="the-bits-are-measured-not-modelled">The bits are measured, not modelled</h2>
+<p><strong>And the model was wrong.</strong> This used to compute min-entropy as −log₂ max_k P(k) for <em>Poisson</em> at the observed rate, which is the textbook thing to do and is not what the data supports. Across 1,128 recorded samples from a GMC-320Re the variance is <strong>2.54×</strong> the mean; Poisson requires 1.00. Empty seconds are 36% more common than the model allows and the tail runs far past it — five counts in a second happens fourteen times too often. Every pool is over-dispersed on its own, so it is not a mixture of quiet and busy periods, and high seconds fall next to each other about 1.6× as often as independence permits. Ground-level coincidences will do that.</p>
+<p>Over-dispersion piles the distribution onto its mode, and the mode is exactly what min-entropy is about, so the model was <strong>claiming 1.15 bits a second where the samples support 0.62</strong>. What is used now is NIST SP 800-90B's most-common- value estimator: the observed frequency of the commonest value, pushed to the far end of its 99% confidence interval so the entropy is a lower bound rather than a point estimate.</p>
+<table><thead><tr><th></th><th>Poisson model</th><th>measured</th></tr></thead><tbody><tr><td>bits per second</td><td>1.150</td><td><strong>0.618</strong></td></tr><tr><td>seconds for 256 bits</td><td>223</td><td><strong>≈ 415</strong></td></tr></tbody></table>
+<p>A line therefore arrives about half as often as it used to, and the number on it is one the data will support. A dead counter never becomes ready, however long it sits there — and neither does a counter <em>stuck at exactly one count a second</em>, which the Poisson model would have credited with half a bit a second for having an ordinary-looking mean.</p>
+<hr>
+<h2 id="there-is-a-page-for-this">There is a page for this</h2>
+<p><code>radbeeper export</code> writes <code>random.html</code> beside the index: the counts drawn against the model, the bits accumulating second by second with the target line across them, what the serial link's one-second resolution costs, and every emission with the counts behind it.</p>
+<hr>
+<h2 id="what-the-interface-costs">What the interface costs</h2>
+<p><code>&lt;HEARTBEAT1&gt;&gt;</code> gives two bytes once per second and nothing finer, so one sample is one integer and that is the entire raw material. If the link reported the <em>time</em> of each arrival instead, the gap between two would be exponential, and quantised to a millisecond it would carry about <strong>10 bits per arrival</strong> — roughly 8 bits a second at this background, against the 0.62 actually available. GQ's protocol has no such message: <code>&lt;GETCPS&gt;&gt;</code> and the heartbeat both answer with a count, never a timestamp. The limit is the interface, not the tube.</p>
+<hr>
+<h2 id="from-a-beep-to-a-frame">From a beep to a frame</h2>
+<p>Every emission now writes <strong>three</strong> files, not two. The third is the raw material, and this is the whole path from a decay in the tube to a row of bytes on disk.</p>
+<pre><code>  a decay in the M4011 tube
+        |  the counter's own discriminator fires
+        v
+  one pulse, on the counter's internal counter
+        |  &lt;HEARTBEAT1&gt;&gt; -- TWO BYTES, ONCE A SECOND
+        v
+  one integer: how many pulses were in that second
+        |  Entropy::add_at(when, counts)
+        v
+  the pool: counts[] and times[], growing until it has earned 256 bits
+        |  Entropy::frame(seq, suspect)
+        v
+  a Frame:  started, and (gap, count) for every second
+        |  Frame::encode()  -- one byte an ordinary second
+        v
+  random-&lt;serial&gt;.bin, appended</code></pre>
+<p><strong>The beep is never timed, and that is the interface's fault rather than the tube's.</strong> It is worth being exact about, because the obvious frame format is a list of intervals between pulses — that is where the entropy physically is, and quantised to a millisecond it would carry about ten bits per arrival against the 0.62 bits a second this counter yields. <code>&lt;HEARTBEAT1&gt;&gt;</code> answers with a <strong>count</strong>; <code>&lt;GETCPS&gt;&gt;</code> answers with a <strong>count</strong>. There is no message in GQ's vocabulary that reports <em>when</em> a pulse landed. One second holding one integer is the entire raw material, and a file that implied otherwise would be inventing precision the wire never carried.</p>
+<h3 id="what-a-frame-holds">What a frame holds</h3>
+<table><tbody><tr><td><code>started</code></td><td>whole seconds since the epoch, of the <strong>first</strong> sample — the same number that went into the digest, so a frame can recompute its own key</td></tr><tr><td><code>suspect</code></td><td>the spectrum was not flat when this was drawn</td></tr><tr><td><code>seq</code></td><td>which emission this is, for the same counter</td></tr><tr><td>samples</td><td><code>(gap, count)</code> per second: how long since the previous sample, and exactly how many pulses were in this one</td></tr><tr><td><code>key</code></td><td>the 256 bits this frame produced</td></tr></tbody></table>
+<h3 id="what-it-costs">What it costs</h3>
+<p>A naive record is a timestamp and a count per second: <strong>twelve bytes</strong>, eleven of which say <em>"and then it was a second later"</em>. The cadence is the default, so only departures from it are worth encoding:</p>
+<table><thead><tr><th>tag byte</th><th>means</th></tr></thead><tbody><tr><td><code>0x00</code>–<code>0xFD</code></td><td>one second after the last, and <strong>the byte is the count</strong></td></tr><tr><td><code>0xFE</code></td><td>escape: a varint gap and a varint count follow</td></tr><tr><td><code>0xFF</code></td><td>unused, so a run of padding can never parse as data</td></tr></tbody></table>
+<p>An ordinary second is therefore <strong>one byte</strong>. A four-hundred-second frame is about 450 bytes including its header and key — against 4.8 kB stored the naive way, and against a <code>.tsv</code> line that would have clamped every second to fifteen.</p>
+<p><strong>There is no gzip in this</strong>, and not only because the crate has one dependency and it is <code>libc</code>. A DEFLATE header alone is most of what this encoding costs in total, and a stream of bytes valued 0–5 is the shape a generic compressor does worst on. The structure <em>is</em> the compression.</p>
+<h3 id="the-magic-is-per-frame-not-per-file">The magic is per frame, not per file</h3>
+<p><code>RBF1</code> heads every frame rather than the file. The file is appended to forever, may be concatenated with another, and will one day be truncated by a full disk or a crash — so a reader that loses its place scans forward to the next magic and carries on, and a damaged frame costs one frame instead of the rest of the record. A frame is only accepted when the byte after it is another magic or the end of the file: corrupting a length field does not make a frame fail to parse, it makes it parse as a <em>different</em> frame that swallows the next one, and that is the failure the boundary check catches.</p>
+<h3 id="looking-at-one">Looking at one</h3>
+<pre><code class="language-sh">radbeeper random --frames logs/random-F48824B8207F7E.bin</code></pre>
+<pre><code>  seq 0    2026-09-19T12:21:28     20s     21 samples  peak    63  1.920 bits/s  recomputes
+  seq 1    2026-09-19T12:21:49     23s     24 samples  peak    60  1.724 bits/s  recomputes
+radbeeper: 2 of 2 frames recompute from their own seconds</code></pre>
+<p><strong>"recomputes" is the claim being checked.</strong> Each frame re-derives the key written inside it from the counts written inside it. Change one second and it stops recomputing. It says nothing about the <em>next</em> key, which comes from decays that have not happened yet.</p>
+<p><code>--no-frames</code> turns the file off; <code>--entropy-bits N</code> changes what a line is worth. Both the service and the monitor write frames whenever they are the process holding the port.</p>
+<hr>
+<h2 id="reproducible-is-not-the-same-as-predictable">Reproducible is not the same as predictable</h2>
+<p>The counts behind each line are written beside it in <code>random-&lt;serial&gt;.tsv</code>, so anyone can recompute it and check it was not invented:</p>
+<pre><code class="language-sh">radbeeper random --check logs/random-F48824B8207F7E.tsv</code></pre>
+<p>That is an audit trail. It says nothing about the <em>next</em> line, which comes from decays that have not happened yet.</p>
+<p><strong>For the numbers alone</strong>, every line is also appended to <code>random-&lt;serial&gt;.hex</code> — the time it was drawn, two spaces, sixty-four hex digits — by <code>random</code> and by <code>watch</code> alike:</p>
+<pre><code class="language-sh">tail -f /var/lib/radbeeper/random-F48824B8207F7E.hex | cut -c22-</code></pre>
+<hr>
+<h2 id="further-reading">Further reading</h2>
+<ul><li><a href="the-spectrum.html">The spectrum</a> — the flatness check this uses as a health test, and why flat is necessary and nowhere near sufficient.</li><li><a href="the-log.html">The log</a> — where the emission record and its counts are kept.</li><li><a href="reference.html">Reference</a> — the counter's protocol, and what it will and will not tell you.</li></ul>
+<hr>
+<p>MIT License — Copyright (c) 2026 Paul Richeson</p>
+<hr>
+<p><a href="../index.html">← back to the README</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>

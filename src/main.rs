@@ -242,6 +242,14 @@ struct WatchLog {
     backfill: Option<(usize, f64)>,
     /// index.html and random.html into `dir`, and how often while open.
     export_every: Option<f64>,
+    /// Whether the raw seconds behind each emission are kept beside it.
+    ///
+    /// ON BY DEFAULT AND TURNED OFF BY A FLAG, because the file is the
+    /// evidence for a claim the program makes on its own front page -- that
+    /// sixty-four characters came out of decay -- and a default that dropped
+    /// the evidence would leave the claim uncheckable unless somebody had
+    /// thought to ask for it in advance. It costs about a byte a second.
+    frames: bool,
 }
 
 /// Write the pages into the log directory, and say so in a few words.
@@ -745,6 +753,10 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
     let wants_table = logging.is_some();
     let logging = logging.filter(|_| feed.owns_the_port());
     let mut loggers: Vec<Logger> = Vec::new();
+    // None when this monitor is attached to a service: the process holding
+    // the ports writes both files, and a client that wrote either would be a
+    // second hand on the same record. See broker.rs.
+    let mut merged_log: Option<MergedLogger> = None;
     if let Some(wl) = logging.as_ref() {
         let _ = std::fs::create_dir_all(&wl.dir);
         // THE HISTORY FIRST, and it takes a while -- fifteen or twenty seconds
@@ -777,6 +789,12 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
             }
             loggers.push(Logger::new(spans, wl.dir.clone(), &c.serial_no, wl.every));
         }
+        // And the room they are all in, beside them. See `MergedLogger`.
+        let mut m = MergedLogger::new(spans, wl.dir.clone(), wl.every);
+        m.counters(
+            &feed.counters().iter().map(|c| c.serial_no.clone()).collect::<Vec<_>>(),
+        );
+        merged_log = Some(m);
         if wl.export_every.is_some() {
             let done = export_pages(&wl.dir, cpm_per_usvh);
             table_note = if table_note.is_empty() { done } else { format!("{}   {}", table_note, done) };
@@ -796,7 +814,7 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
     let mut w = Windows::new(spans);
     let mut ladder = Ladder::new();
     let mut pools: Vec<entropy::Entropy> =
-        (0..tubes).map(|_| entropy::Entropy::default()).collect();
+        (0..tubes).map(|_| new_pool()).collect();
     // The samples in ARRIVAL order, as rates, which is what the cascade is
     // cut from. With one counter that is one bar a second; with two it is a
     // bar every half second on average, because two tubes on their own clocks
@@ -893,7 +911,7 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
         // emission arrives, and exact from then on.
         if !replaying {
             if let Some(p) = pools.get_mut(who) {
-                p.add(counts);
+                p.add_at(when, counts);
             }
         }
         if replaying {
@@ -915,6 +933,11 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
                 }
                 Ok(None) => {}
                 Err(e) => table_note = format!("NOT LOGGING: {}", e),
+            }
+        }
+        if let Some(m) = merged_log.as_mut() {
+            if let Err(e) = m.add(who, when, counts, &w) {
+                table_note = format!("NOT LOGGING THE MERGE: {}", e);
             }
         }
         // Out to whoever is attached, after the borrow of the logger ends.
@@ -1162,11 +1185,17 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
             if let Some(k) = ready {
                 let (top, _) = spec.loudest();
                 suspect = top > 0.0 && top >= spec.chance_max() * 1.25;
+                // Before the draw: see the note in `service`.
+                let keep = logging.as_ref().map(|w| w.frames).unwrap_or(false);
+                let frame = keep.then(|| pools[k].frame(pools[k].seq, suspect));
                 let (text, record) = pools[k].draw();
                 let at_time = clock::format(clock::now(), "%H:%M:%S");
                 let serial = id.counters.get(k).map(|c| c.serial_no.as_str()).unwrap_or("");
                 if let Some(wl) = logging.as_ref() {
                     let _ = entropy::write_record(&wl.dir, &record, serial, suspect);
+                    if let Some(f) = frame.as_ref() {
+                        let _ = entropy::write_frame(&wl.dir, f, serial);
+                    }
                 }
                 feed.publish_random(k, &text, &at_time, suspect);
                 shown = Some((text.clone(), at_time));
@@ -1252,6 +1281,9 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
         let averages: Vec<Option<f64>> = spans.iter().map(|s| each[k].average(*s)).collect();
         lg.finish(&averages);
     }
+    if let Some(m) = merged_log.as_mut() {
+        m.finish(&w);
+    }
     if let Some(wl) = logging.as_ref() {
         if wl.export_every.is_some() {
             export_pages(&wl.dir, cpm_per_usvh);
@@ -1275,10 +1307,11 @@ const TABLE_KEEP: usize = 200;
 /// that is present but LOCKED is the opposite: the counter is right there,
 /// somebody is watching it in a monitor, and they will close it. One open()
 /// every ten seconds picks the log back up the moment they do.
+#[allow(clippy::too_many_arguments)]
 fn service(spans: &[f64], every: f64, duration: Option<f64>,
            devices: &[String], baud: Option<u32>,
            logs: Option<std::path::PathBuf>,
-           backfill: Option<(usize, f64)>) -> i32 {
+           backfill: Option<(usize, f64)>, frames: bool) -> i32 {
     install_stop_handler();
 
     // WHERE THIS SERVICE'S STATUS BELONGS, settled before anything is written:
@@ -1357,6 +1390,15 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
         .iter()
         .map(|c| Logger::new(spans, dir.clone(), &c.serial_no, every))
         .collect();
+    // AND ONE SET ACROSS ALL OF THEM, which is not a contradiction of the
+    // note above. The per-counter files stay per-counter; this is the second
+    // file, beside them, saying what the room did -- see `MergedLogger`, and
+    // note that it can be taken apart again because `per_tube` is in it.
+    let mut all = Windows::new(spans);
+    let mut merged_log = MergedLogger::new(spans, dir.clone(), every);
+    merged_log.counters(
+        &id.counters.iter().map(|c| c.serial_no.clone()).collect::<Vec<_>>(),
+    );
     // THE FAN-OUT. This process holds the flocks, so it owes the stream to
     // everybody who wants a counter and cannot have the port: a monitor, a
     // second monitor, a GUI. A socket that will not bind is not fatal -- the
@@ -1380,7 +1422,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     // record of ONE source, and `radbeeper random --check` recomputes it from
     // that source's own counts.
     let mut pools: Vec<entropy::Entropy> =
-        (0..tubes).map(|_| entropy::Entropy::default()).collect();
+        (0..tubes).map(|_| new_pool()).collect();
     // The ladder is fed the whole-second SUM across the tubes: a period is a
     // property of the room, both counters are looking at the same room, and
     // adding them is twice the signal on one time base. `suspect` is an
@@ -1413,6 +1455,10 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
         println!("radbeeper: monitoring {} -- {}", c.path, c.version);
         println!("radbeeper: counter {} logging to {}", c.serial_no,
                  log::path(clock::now(), &dir, Some(&c.serial_no)).display());
+    }
+    if id.counters.len() > 1 {
+        println!("radbeeper: the room, merged, to {}",
+                 log::path(clock::now(), &dir, Some(log::MERGED)).display());
     }
     println!("radbeeper: {} at {}", if tubes == 1 { "counter" } else { "counters" },
              here.unwrap_or_else(|| "an unrecorded place".to_string()));
@@ -1474,7 +1520,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
                 }
                 if who == each.len() {
                     each.push(Windows::new(spans));
-                    pools.push(entropy::Entropy::default());
+                    pools.push(new_pool());
                     loggers.push(Logger::new(spans, dir.clone(), &serial, every));
                 } else {
                     // A tube that has come back: its windows start again, its
@@ -1482,6 +1528,9 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
                     each[who] = Windows::new(spans);
                 }
                 let id = bank.identity(spans);
+                merged_log.counters(
+                    &id.counters.iter().map(|c| c.serial_no.clone()).collect::<Vec<_>>(),
+                );
                 if let (Some(s), Some(c)) = (srv.as_mut(), id.counters.get(who)) {
                     s.announce(who, c);
                 }
@@ -1510,6 +1559,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
             None => continue,
         };
         each[who].add(when, counts);
+        all.add(when, counts);
         if let Some(s) = srv.as_mut() {
             s.publish_sample(who, when, counts);
         }
@@ -1528,7 +1578,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
                 sec_sum = counts;
             }
         }
-        pools[who].add(counts);
+        pools[who].add_at(when, counts);
         // The line, when a pool has earned it: written once, here, against the
         // tube that earned it, and sent to every window so they all show the
         // same hex.
@@ -1536,9 +1586,18 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
             let spec = ladder.best();
             let (top, _) = spec.loudest();
             let suspect = top > 0.0 && top >= spec.chance_max() * 1.25;
+            // THE FRAME IS TAKEN BEFORE THE DRAW, because drawing empties the
+            // pool. It is the raw material the key came out of -- every
+            // second, unclamped, with the gaps where the counter was away.
+            let frame = frames.then(|| pools[who].frame(pools[who].seq, suspect));
             let (text, record) = pools[who].draw();
             let at_time = clock::format(clock::now(), "%H:%M:%S");
             let _ = entropy::write_record(&dir, &record, &id.counters[who].serial_no, suspect);
+            if let Some(f) = frame.as_ref() {
+                if let Err(e) = entropy::write_frame(&dir, f, &id.counters[who].serial_no) {
+                    eprintln!("radbeeper: could not write the frame -- {}", e);
+                }
+            }
             if let Some(s) = srv.as_mut() {
                 s.publish_random(who, &text, &at_time, suspect);
             }
@@ -1557,11 +1616,19 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
                 break;
             }
         }
+        // AND THE MERGE, WHOSE FAILURE IS NOT FATAL. The per-counter files
+        // are the record and a service that cannot write them should stop;
+        // this one is the second view of the same seconds, and losing it is
+        // worth a line on stderr and nothing else.
+        if let Err(e) = merged_log.add(who, when, counts, &all) {
+            eprintln!("radbeeper: could not write the merged log -- {}", e);
+        }
     }
     for (k, lg) in loggers.iter_mut().enumerate() {
         let averages: Vec<Option<f64>> = spans.iter().map(|s| each[k].average(*s)).collect();
         lg.finish(&averages);
     }
+    merged_log.finish(&all);
     bank.stop();
     log::write_status(&dir, "stopped");
     0
@@ -1668,9 +1735,291 @@ impl Logger {
     }
 }
 
+/// Rows to the merged log: the room, rather than any one instrument.
+///
+/// THE SECOND FILE, AND WHY THERE IS A SECOND FILE. `Logger` above writes the
+/// format of record -- one file per counter, the Python's characters to the
+/// byte, and a row in it is a reading ONE tube took. Nothing about two tubes
+/// belongs in it: a row that blended them could never be taken apart again,
+/// and the whole reason to run a second instrument is to be able to ask
+/// whether the two agree.
+///
+/// So the merge is its own file, `cpm-merged-YYYY-MM.tsv`, carrying what the
+/// per-counter files cannot say between them -- the combined rate, its error
+/// bar, the interleave, and the raw arrivals that produced all three -- at
+/// the precision that reads back bit-identical. See `log::merged_header`.
+///
+/// ONE TUBE WRITES NO MERGED FILE. There is nothing to merge and nothing to
+/// interleave: `per_tube` would have a single entry, `interleave` would be
+/// empty, and `cps` would be the counter's own rate restated to more places.
+/// A second file that only ever repeats the first is a second file to explain,
+/// to back up and to get out of step. So the merge begins when there is
+/// something to merge -- including when a second counter is plugged into a
+/// running service, which is exactly when a merged record starts being worth
+/// keeping.
+struct MergedLogger {
+    dir: PathBuf,
+    spans: Vec<f64>,
+    every: f64,
+    out: log::Writer,
+    serials: Vec<String>,
+    /// The interval: every arrival off every tube, and the tube-time behind
+    /// them.
+    counts: u64,
+    per_tube: Vec<u64>,
+    tube_seconds: f64,
+    /// WHICH WALL SECONDS THIS ROW COVERS, as a set of them.
+    ///
+    /// NOT A COUNT OF SAMPLES, which with n tubes is n per second, and not
+    /// the span from first to last, which is short by however long the last
+    /// sample lasted. Two tubes both reporting second 1,203 make that one
+    /// second of room however many samples it took, and the set says so
+    /// exactly however the samples happen to arrive.
+    wall: BTreeSet<i64>,
+    /// WHICH TUBES ACTUALLY REPORTED IN THIS INTERVAL.
+    ///
+    /// NOT THE NUMBER OF SLOTS, which only ever grows: a tube that is
+    /// unplugged keeps its slot -- deliberately, so that plugging it back in
+    /// returns it to its own colour and its own log -- and a divisor taken
+    /// from the slot count would go on dividing the room by a counter that
+    /// left the building. The set is emptied with the rest of the interval,
+    /// so it answers for the thirty seconds the row is about.
+    seen: BTreeSet<usize>,
+    peaks: Vec<Option<f64>>,
+    /// The interleave, measured over this interval only: the mean gap between
+    /// one tube's sample and the NEXT TUBE'S. Same-tube gaps are a second by
+    /// definition and would drown it.
+    prev: Option<(usize, f64)>,
+    gap: (f64, u32),
+    due: Option<f64>,
+    sites: Vec<(String, f64, String)>,
+    sites_mtime: Option<u64>,
+}
+
+impl MergedLogger {
+    fn new(spans: &[f64], dir: PathBuf, every: f64) -> MergedLogger {
+        let sites = log::read_sites(&dir);
+        let sites_mtime = mtime_of(&dir.join("sites.tsv"));
+        MergedLogger {
+            out: log::Writer::merged(spans, dir.clone(), every),
+            spans: spans.to_vec(),
+            dir,
+            every,
+            serials: Vec::new(),
+            counts: 0,
+            per_tube: Vec::new(),
+            tube_seconds: 0.0,
+            wall: BTreeSet::new(),
+            seen: BTreeSet::new(),
+            peaks: vec![None; spans.len()],
+            prev: None,
+            gap: (0.0, 0),
+            due: None,
+            sites,
+            sites_mtime,
+        }
+    }
+
+    /// The tubes as they stand, so a counter plugged into a running service
+    /// gets a column in the next row rather than at the next restart.
+    fn counters(&mut self, serials: &[String]) {
+        self.serials = serials.to_vec();
+        self.per_tube.resize(serials.len(), 0);
+    }
+
+    /// One sample, and the combined windows as they stand after it.
+    ///
+    /// Returns the row when this sample completed an interval, exactly as
+    /// `Logger::add` does.
+    fn add(&mut self, who: usize, when: f64, counts: u32, all: &Windows)
+        -> std::io::Result<Option<String>>
+    {
+        if !self.worth_keeping() {
+            // Whatever one tube put in the interval is not the start of a
+            // merged row. Dropped rather than carried, so that the first row
+            // after a second counter joins is a row about two counters.
+            self.reset();
+            self.due = None;
+            return Ok(None);
+        }
+        self.seen.insert(who);
+        self.counts += counts as u64;
+        if self.per_tube.len() <= who {
+            self.per_tube.resize(who + 1, 0);
+        }
+        self.per_tube[who] += counts as u64;
+        self.tube_seconds += 1.0;
+        self.wall.insert(when.floor() as i64);
+        let tubes = self.tubes();
+        if let Some((prev, t)) = self.prev {
+            if prev != who && when > t {
+                self.gap.0 += when - t;
+                self.gap.1 += 1;
+            }
+        }
+        self.prev = Some((who, when));
+        for (i, span) in self.spans.iter().enumerate() {
+            if let Some(v) = mean_of(all, *span, tubes) {
+                let slot = &mut self.peaks[i];
+                if slot.is_none() || v > slot.unwrap() {
+                    *slot = Some(v);
+                }
+            }
+        }
+        let due = *self.due.get_or_insert(when + self.every);
+        if when < due {
+            return Ok(None);
+        }
+        let line = self.row(all);
+        let wrote = self.out.write(clock::now(), &line)?;
+        self.reset();
+        self.due = Some(when + self.every);
+        Ok(wrote.then_some(line))
+    }
+
+    /// Whatever the last interval collected, as `Logger::finish` does: a
+    /// service stopped four seconds after a spike leaves the spike on disk.
+    /// Whether there is a room to write down, rather than one instrument.
+    fn worth_keeping(&self) -> bool {
+        self.serials.len() > 1
+    }
+
+    fn finish(&mut self, all: &Windows) {
+        if self.worth_keeping() && !self.wall.is_empty() {
+            let line = self.row(all);
+            let _ = self.out.write(clock::now(), &line);
+        }
+        self.out.close();
+    }
+
+    fn reset(&mut self) {
+        self.counts = 0;
+        for c in self.per_tube.iter_mut() {
+            *c = 0;
+        }
+        self.tube_seconds = 0.0;
+        self.wall.clear();
+        self.seen.clear();
+        for p in self.peaks.iter_mut() {
+            *p = None;
+        }
+        self.gap = (0.0, 0);
+    }
+
+    /// How many tubes this interval is the mean of.
+    ///
+    /// The combined windows hold every tube's samples, so their sums are
+    /// `tubes` times the room and the room is that over `tubes`. Over a
+    /// thirty-thousand-second window the count may have changed, and nothing
+    /// here records when -- so this is the tubes reporting NOW, which is the
+    /// best available answer and the one the panels already use. The `tubes`
+    /// column carries it, so a reader can see what the division was.
+    fn tubes(&self) -> usize {
+        if self.seen.is_empty() {
+            // Nothing has reported yet, so the plugged-in count is all there
+            // is to go on.
+            self.serials.len().max(1)
+        } else {
+            self.seen.len()
+        }
+    }
+
+    fn row(&mut self, all: &Windows) -> String {
+        let now = clock::now();
+        let tubes = self.tubes();
+        let m = mtime_of(&self.dir.join("sites.tsv"));
+        if m != self.sites_mtime {
+            self.sites_mtime = m;
+            self.sites = log::read_sites(&self.dir);
+        }
+        // THE SITE OF THE MERGE IS THE SITE OF THE FIRST TUBE. They are in one
+        // room -- that is the premise the merge rests on -- and if they are
+        // not, `together` in the report is the thing that says so.
+        let site = self
+            .serials
+            .first()
+            .and_then(|s| log::site_at(s, now, &self.sites))
+            .unwrap_or_default();
+        let averages: Vec<Option<f64>> =
+            self.spans.iter().map(|s| mean_of(all, *s, tubes)).collect();
+        let sigma = mean_of(all, HEADLINE_SPAN, tubes)
+            .and_then(|v| sigma_of(v, HEADLINE_SPAN, tubes));
+        let per_tube: Vec<(String, u64)> = self
+            .per_tube
+            .iter()
+            .enumerate()
+            .map(|(k, n)| {
+                let name = self
+                    .serials
+                    .get(k)
+                    .cloned()
+                    .unwrap_or_else(|| format!("tube{}", k));
+                (name, *n)
+            })
+            .collect();
+        log::merged_row(
+            now,
+            tubes,
+            (self.gap.1 > 0).then(|| self.gap.0 / self.gap.1 as f64),
+            self.counts,
+            self.wall.len() as f64,
+            self.tube_seconds,
+            &averages,
+            sigma,
+            &self.peaks,
+            &per_tube,
+            log::SRC_LIVE,
+            &site,
+        )
+    }
+}
+
+/// The window the merged log's error bar is quoted over.
+///
+/// The same thirty seconds the panels put in their big number, so the figure
+/// on disk and the figure on the screen are the same figure.
+const HEADLINE_SPAN: f64 = 30.0;
+
+/// The mean rate across the tubes, from windows holding every tube's samples.
+///
+/// TWO TUBES ARE TWO MEASUREMENTS OF ONE NUMBER. They do not double the dose;
+/// they double the evidence. The combined windows hold every tube's samples,
+/// so their sum is n times the room and the room is that over n.
+fn mean_of(w: &Windows, span: f64, tubes: usize) -> Option<f64> {
+    w.average(span).map(|v| v / tubes.max(1) as f64)
+}
+
+/// One sigma on that mean, in CPM.
+///
+/// Arrivals are Poisson, so the whole of the uncertainty is the count behind
+/// the number: N arrivals give a relative error of 1/sqrt(N), and the counts
+/// behind a mean of `tubes` tubes over `span` seconds is `cpm * span * tubes
+/// / 60`. THIS is what a second counter buys -- the same figure, known to
+/// within a factor of root two better -- and recording it is the only way the
+/// benefit survives into the record.
+fn sigma_of(cpm: f64, span: f64, tubes: usize) -> Option<f64> {
+    let n = cpm * span * tubes.max(1) as f64 / 60.0;
+    (n > 0.0).then(|| cpm / n.sqrt())
+}
+
 fn mtime_of(path: &std::path::Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
     std::fs::metadata(path).ok().map(|m| m.mtime() as u64)
+}
+
+/// How many bits an emission is worth, when it is not the usual 256.
+///
+/// A ONCE-SET GLOBAL, read where a pool is built. The pools are created in
+/// three places -- the service, the monitor, and the sweep that adopts a tube
+/// plugged in while either is running -- and threading a float through all of
+/// them to serve one flag nobody sets in ordinary use is more moving parts
+/// than the flag is worth. `--entropy-bits` was in the reference program and
+/// in this program's own `--help` for a year without being implemented here,
+/// which is the other half of why it is being added rather than deleted.
+static WANT_BITS: std::sync::OnceLock<f64> = std::sync::OnceLock::new();
+
+fn new_pool() -> entropy::Entropy {
+    entropy::Entropy::new(*WANT_BITS.get().unwrap_or(&entropy::ENTROPY_BITS))
 }
 
 static STOP: AtomicBool = AtomicBool::new(false);
@@ -1891,6 +2240,66 @@ fn random(spans: &[f64], duration: Option<f64>, device: Option<&str>,
 /// recomputed from its own counts was invented, and one that can was not. It
 /// proves nothing about the NEXT line, which is the point -- that one comes
 /// from decays that have not happened.
+/// `random --frames FILE`: what is in a frame file, and does it hold up.
+///
+/// THE FRAME IS THE EVIDENCE AND THIS IS HOW YOU LOOK AT IT. The `.tsv`
+/// carries the counts clamped to one hex digit a second, which is what the
+/// key is derived from and is not what the tube did; the `.bin` carries every
+/// second exactly, with the gaps where the counter was away. Each frame
+/// recomputes its own key from its own counts, so a file from somebody else's
+/// machine can be audited without trusting anything but the arithmetic.
+fn frames_report(path: &std::path::Path) -> i32 {
+    let frames = entropy::read_frames(path);
+    if frames.is_empty() {
+        eprintln!("radbeeper: no frames in {}", path.display());
+        return 1;
+    }
+    let bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+    let mut bad = 0;
+    let mut samples = 0usize;
+    for f in &frames {
+        let counts = f.counts();
+        let ok = f.verifies();
+        if !ok {
+            bad += 1;
+        }
+        samples += counts.len();
+        // The gaps are the thing the counts alone cannot say: a pool that
+        // spanned an unplugged counter looks exactly like one that did not.
+        let holes = f.samples.iter().skip(1).filter(|(g, _)| *g != 1).count();
+        println!(
+            "  seq {:<4} {:<20} {:>5}s  {:>5} samples  peak {:>5}  {:.3} bits/s  {}{}",
+            f.seq,
+            clock::stamp(f.started as f64),
+            f.seconds(),
+            counts.len(),
+            counts.iter().copied().max().unwrap_or(0),
+            entropy::mcv_min_entropy(&counts),
+            if ok { "recomputes" } else { "DOES NOT RECOMPUTE" },
+            if holes == 0 {
+                String::new()
+            } else {
+                format!("  ({} gap{})", holes, if holes == 1 { "" } else { "s" })
+            }
+        );
+        if f.suspect {
+            println!("       spectrum was not flat when this was drawn -- suspect");
+        }
+    }
+    println!(
+        "radbeeper: {} of {} frames recompute from their own seconds",
+        frames.len() - bad,
+        frames.len()
+    );
+    println!(
+        "radbeeper: {} seconds of counts in {} bytes -- {:.2} bytes a second",
+        samples,
+        bytes,
+        if samples > 0 { bytes as f64 / samples as f64 } else { 0.0 }
+    );
+    if bad > 0 { 1 } else { 0 }
+}
+
 fn check_random(path: &std::path::Path) -> i32 {
     let pools = entropy::read_emissions(path);
     if pools.is_empty() {
@@ -2293,6 +2702,7 @@ fn usage() {
     println!("  radbeeper service          log every counter found, and serve the stream");
     println!("  radbeeper random           256 bits of hex, out of decay timing");
     println!("  radbeeper random --check F recompute every line in an emission log");
+    println!("  radbeeper random --frames F  the raw seconds behind those lines");
     println!("  radbeeper backfill         fill the log's gaps from the counter's flash");
     println!("  radbeeper log info|pull    what history it holds, or download it");
     println!("  radbeeper export           index.html and random.html, from the logs");
@@ -2309,11 +2719,13 @@ fn usage() {
     println!("      --logs DIR             where service, watch and backfill write, and export reads");
     println!("      --no-log               watch without writing anything");
     println!("      --no-export            watch without writing index.html (hourly, and on quit)");
+    println!("      --no-frames            do not keep the raw seconds behind each random line");
     println!("      --no-backfill          skip reading the counter's history at start");
     println!("      --image FILE           backfill from a saved .bin, no counter");
     println!("      --serial SERIAL        which counter an image came from");
     println!("      --bytes N              how much flash to read");
     println!("      --max-gap SECONDS      a longer hole ends the averages");
+    println!("      --entropy-bits N       bits a random line is worth (default 256)");
     println!("      --poll SECONDS         hotplug: how often /dev is read (default 4)");
     println!("      --settle SECONDS       hotplug: grace before a new node is opened (default 2)");
     println!("      --tries N              hotplug: attempts per plug event (default 3)");
@@ -2350,6 +2762,8 @@ fn main() {
     let mut no_backfill = false;
     let mut no_log = false;
     let mut no_export = false;
+    let mut no_frames = false;
+    let mut frames_file: Option<std::path::PathBuf> = None;
     let mut wait: Option<f64> = None;
     let mut set_clock = false;
     let mut output: Option<String> = None;
@@ -2418,12 +2832,21 @@ fn main() {
                 log_every = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(log_every)
             }
             "--check" => check = next(&mut i).map(std::path::PathBuf::from),
+            "--frames" => frames_file = next(&mut i).map(std::path::PathBuf::from),
             "--image" => image = next(&mut i).map(std::path::PathBuf::from),
             "--serial" => serial = next(&mut i),
             "--bytes" | "--backfill-bytes" => bytes = next(&mut i).and_then(|v| v.parse().ok()),
             "--no-backfill" => no_backfill = true,
             "--no-log" => no_log = true,
             "--no-export" => no_export = true,
+            "--no-frames" => no_frames = true,
+            "--entropy-bits" => {
+                if let Some(v) = next(&mut i).and_then(|v| v.parse::<f64>().ok()) {
+                    if v > 0.0 {
+                        let _ = WANT_BITS.set(v);
+                    }
+                }
+            }
             "--set" => set_clock = true,
             "--max-gap" => {
                 max_gap = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(max_gap)
@@ -2481,6 +2904,9 @@ fn main() {
         // --check needs no hardware, so it runs before anything looks for a
         // counter: an audit of a file from another machine is the ordinary
         // case, not an odd one.
+        if let Some(p) = frames_file {
+            std::process::exit(frames_report(&p));
+        }
         if let Some(p) = check {
             std::process::exit(check_random(&p));
         }
@@ -2495,6 +2921,7 @@ fn main() {
         let backfill = (!no_backfill).then(|| (bytes.unwrap_or(64 * 1024), max_gap));
         std::process::exit(service(
             &spans, log_every, duration, &devices, baud, logs, backfill,
+            !no_frames,
         ));
     }
 
@@ -2510,6 +2937,7 @@ fn main() {
             every: log_every,
             backfill: (!no_backfill).then(|| (bytes.unwrap_or(64 * 1024), max_gap)),
             export_every: (!no_export).then_some(3600.0),
+            frames: !no_frames,
         });
         let mut feed = match Feed::open(&dir, &devices, baud, &spans, wait) {
             Ok(f) => f,
@@ -2881,6 +3309,62 @@ fn hotplug(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ONE TUBE WRITES NO MERGED FILE, and two do.
+    ///
+    /// With one counter there is nothing to merge and nothing to interleave,
+    /// so the merged row would restate that counter's own log to more decimal
+    /// places -- a second file to explain, to back up and to get out of step.
+    /// The differential suite is what caught this: it asserts that a
+    /// single-counter `watch` leaves exactly one `cpm-*.tsv` behind, which is
+    /// the same rule stated from the outside.
+    #[test]
+    fn the_merge_begins_when_there_is_something_to_merge() {
+        let spans = [3.0, 30.0];
+        let dir = std::env::temp_dir()
+            .join(format!("radbeeper-mergedlog-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = log::path(clock::now(), &dir, Some(log::MERGED));
+
+        // One tube, for long enough that several intervals have gone by.
+        let mut lg = MergedLogger::new(&spans, dir.clone(), 2.0);
+        lg.counters(&["F48824B8207F7E".to_string()]);
+        let mut all = Windows::new(&spans);
+        for i in 0..20 {
+            let when = 1_700_000_000.0 + i as f64;
+            all.add(when, 2);
+            assert_eq!(lg.add(0, when, 2, &all).unwrap(), None);
+        }
+        lg.finish(&all);
+        assert!(!path.exists(), "one counter wrote a merged log");
+
+        // A second joins. From here there IS a room to write down.
+        lg.counters(&["F48824B8207F7E".to_string(), "F7F4CA7F05C2EA".to_string()]);
+        let mut wrote = None;
+        for i in 20..40 {
+            let when = 1_700_000_000.0 + i as f64;
+            for who in 0..2 {
+                all.add(when + who as f64 * 0.5, 2);
+                if let Some(line) = lg.add(who, when + who as f64 * 0.5, 2, &all).unwrap() {
+                    wrote = Some(line);
+                }
+            }
+        }
+        let line = wrote.expect("two counters wrote a merged row");
+        assert!(path.exists(), "and it went to the merged log");
+
+        let names = log::columns(&log::merged_header(&spans));
+        let cells: Vec<&str> = line.split('\t').collect();
+        let at = |n: &str| cells[names.iter().position(|c| c == n).unwrap()];
+        assert_eq!(at("tubes"), "2");
+        // Both tubes in the breakdown, and an interleave now that there are
+        // two clocks to measure between.
+        assert!(at("per_tube").contains("F48824B8207F7E="), "{}", at("per_tube"));
+        assert!(at("per_tube").contains("F7F4CA7F05C2EA="), "{}", at("per_tube"));
+        assert!(!at("interleave").is_empty(), "no interleave was measured");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// The header the monitor draws on row 0, at its real length: a path, a
     /// baud rate, a firmware string and a fourteen-character serial.

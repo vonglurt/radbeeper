@@ -16,6 +16,19 @@ use std::path::{Path, PathBuf};
 
 pub const DEFAULT_LOG_EVERY: f64 = 30.0;
 pub const SRC_LIVE: &str = "live";
+
+/// The name in the merged log's file name, where a counter's serial goes.
+///
+/// A RESERVED SLOT, NOT A COUNTER. `cpm-merged-YYYY-MM.tsv` sits beside the
+/// per-counter files and is deliberately shaped like one, so `ls` and `sort`
+/// and a month's rotation all work on it unchanged -- but nothing may mistake
+/// it for a tube, or the report would count the room twice and `together`
+/// would ask a merge whether it agrees with the counters it is made of.
+/// `files()` therefore skips it and `merged_files()` is the only way to it.
+///
+/// A GMC serial is fourteen hex characters, so no counter can ever be called
+/// this.
+pub const MERGED: &str = "merged";
 #[allow(dead_code)]
 pub const SRC_FLASH: &str = "flash";
 
@@ -77,6 +90,126 @@ pub fn header(spans: &[f64]) -> String {
     head.push("src".to_string());
     head.push("site".to_string());
     format!("#{}", head.join("\t"))
+}
+
+/// A number written so that reading it back gives the same number.
+///
+/// THE HIGHEST-QUALITY FIGURE IS NOT THE LONGEST ONE. The obvious reach for
+/// "record it precisely" is `{:.17}`, which pads 0.5 out to
+/// 0.50000000000000000 and still cannot promise a round trip for every value;
+/// the obvious reach for "record it readably" is `%g`, which is what the
+/// per-counter log uses and throws away everything past the sixth significant
+/// figure. Rust's own Display for f64 writes the SHORTEST string that parses
+/// back to the identical bits -- so this is simultaneously the most precise
+/// form there is and, for the ordinary values in a log, the shortest.
+///
+/// It is not the per-counter log's formatter and must never become it: that
+/// file's characters are pinned against the Python, byte for byte, by
+/// tests/test_differential.py. This is the merged file's, which has no such
+/// promise to keep and exists precisely to keep what the other one rounds.
+pub fn exact(v: f64) -> String {
+    if !v.is_finite() {
+        return String::new();
+    }
+    // `{}` on an f64 that happens to be whole writes "34" and not "34.0",
+    // which reads back as the same number and is the shorter of the two.
+    format!("{}", v)
+}
+
+/// The merged log's header.
+///
+/// WHAT THIS FILE IS FOR, AND WHY IT IS NOT THE OTHER ONE. The per-counter
+/// log is the format of record: one file per instrument, one decimal place,
+/// the same characters the Python writes, and a row in it is a reading ONE
+/// tube took. That is a promise worth keeping and it is the wrong file to ask
+/// a question about two tubes -- the moment a row blended them, no later
+/// analysis could unpick which instrument said what.
+///
+/// So the merge goes beside it rather than into it, and carries both halves
+/// of the same interval:
+///
+///   RAW -- `counts` is every arrival off every tube, an integer, lossless;
+///   `tube_seconds` is how much instrument-time produced them; `per_tube`
+///   breaks the count down by serial so the merge can be taken apart again.
+///
+///   MERGED -- `cps` and `cpm_N` are the rate of the ROOM: the counts over
+///   the tube-seconds behind them, which is the mean the tubes agree on and
+///   not their sum. Two tubes do not double the dose; they halve the error
+///   bar, and `sigma` is where that lands.
+///
+///   INTERLEAVED -- `tubes` and `interleave`, the mean gap between one tube's
+///   sample and the next tube's. It is what says whether the merge bought
+///   time resolution or only precision: at 1/n of a second the tubes are
+///   taking turns, at zero they are firing together.
+///
+/// `unix` is beside `time` because `time` is whole seconds and a sample is
+/// not: the stamp is what a person reads and the epoch is what survives.
+pub fn merged_header(spans: &[f64]) -> String {
+    let mut head: Vec<String> = [
+        "time", "unix", "tubes", "interleave", "counts", "seconds",
+        "tube_seconds", "cps", "cps_raw",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    head.extend(spans.iter().map(|s| format!("cpm_{}", g(*s))));
+    head.push("sigma_30".to_string());
+    head.extend(spans.iter().map(|s| format!("peak_{}", g(*s))));
+    head.push("per_tube".to_string());
+    head.push("src".to_string());
+    head.push("site".to_string());
+    format!("#{}", head.join("\t"))
+}
+
+/// One row of the merged log. See `merged_header` for what each half is.
+#[allow(clippy::too_many_arguments)]
+pub fn merged_row(
+    when: f64,
+    tubes: usize,
+    interleave: Option<f64>,
+    counts: u64,
+    seconds: f64,
+    tube_seconds: f64,
+    averages: &[Option<f64>],
+    sigma: Option<f64>,
+    peaks: &[Option<f64>],
+    per_tube: &[(String, u64)],
+    src: &str,
+    site: &str,
+) -> String {
+    // THE ROOM'S RATE IS COUNTS OVER TUBE-SECONDS. Dividing by the wall clock
+    // instead would report two tubes as twice the background, which is the
+    // one arithmetic mistake a second instrument makes easy and no reading of
+    // "merged" excuses.
+    let cps = if tube_seconds > 0.0 { counts as f64 / tube_seconds } else { 0.0 };
+    // And the arrival rate at the machine, which is n times it and is what
+    // the entropy pool and the cascade's fine tier are actually fed.
+    let cps_raw = if seconds > 0.0 { counts as f64 / seconds } else { 0.0 };
+    let mut cells = vec![
+        clock::stamp(when),
+        exact(when),
+        format!("{}", tubes),
+        interleave.map(exact).unwrap_or_default(),
+        format!("{}", counts),
+        exact(seconds),
+        exact(tube_seconds),
+        exact(cps),
+        exact(cps_raw),
+    ];
+    let one = |v: &Option<f64>| v.map(exact).unwrap_or_default();
+    cells.extend(averages.iter().map(one));
+    cells.push(one(&sigma));
+    cells.extend(peaks.iter().map(one));
+    cells.push(
+        per_tube
+            .iter()
+            .map(|(serial, n)| format!("{}={}", serial, n))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
+    cells.push(src.to_string());
+    cells.push(site.to_string());
+    cells.join("\t")
 }
 
 /// The column names a header line declares, '#' stripped from the first.
@@ -161,8 +294,36 @@ pub fn files(directory: &Path) -> Vec<(String, PathBuf)> {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => continue,
         };
+        // THE MERGE IS NOT A TUBE. It is shaped like one on disk so that
+        // rotation and sorting need no special case, and a report that let it
+        // through here would count the room once per counter and once again
+        // for the merge of them -- and then ask the merge whether it agreed
+        // with the counters it was made of. See MERGED.
+        if serial == MERGED {
+            continue;
+        }
         out.push((serial, directory.join(&name)));
     }
+    out
+}
+
+/// The merged logs in a directory, oldest name first.
+///
+/// The other side of the filter in `files`: everything it skips, and nothing
+/// it returns.
+pub fn merged_files(directory: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = match fs::read_dir(directory) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| {
+                n.starts_with(&format!("cpm-{}-", MERGED)) && n.ends_with(".tsv")
+            })
+            .map(|n| directory.join(n))
+            .collect(),
+        Err(_) => return Vec::new(),
+    };
+    out.sort();
     out
 }
 
@@ -302,6 +463,100 @@ pub fn merge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE MERGED LOG'S FIGURES READ BACK AS THE FIGURES THAT WERE WRITTEN.
+    /// That is the whole of what `exact` is for and the one property worth
+    /// pinning: not how many digits it uses, which is its business, but that
+    /// no bit is lost between the two.
+    #[test]
+    fn an_exact_number_parses_back_to_the_same_bits() {
+        let cases = [
+            0.0, 0.5, 1.0, 34.0, 1.0 / 3.0, 60.0 / 7.0, 1789832801.956088,
+            0.0001234567890123, 1.7976931348623157e308, 5e-324,
+            96.92307692307692, -12.5,
+        ];
+        for v in cases {
+            let text = exact(v);
+            let back: f64 = text.parse().expect(&text);
+            assert_eq!(back.to_bits(), v.to_bits(), "{} -> {}", v, text);
+        }
+        // And it is the SHORT form, not seventeen padded places: the point is
+        // precision, and precision is not the same thing as length.
+        assert_eq!(exact(0.5), "0.5");
+        assert_eq!(exact(34.0), "34");
+        // Nothing that cannot be read back is written at all.
+        assert_eq!(exact(f64::NAN), "");
+        assert_eq!(exact(f64::INFINITY), "");
+    }
+
+    /// THE PER-COUNTER HEADER IS NOT TOUCHED BY ANY OF THIS. It is pinned
+    /// against the Python byte for byte by tests/test_differential.py, and
+    /// the merged log exists precisely so that it never has to change.
+    #[test]
+    fn the_merged_header_is_a_second_format_and_not_a_change_to_the_first() {
+        let spans = [3.0, 30.0, 300.0, 3000.0, 30000.0];
+        assert_eq!(
+            header(&spans),
+            "#time\tcps\tcounts\tseconds\tcpm_3\tcpm_30\tcpm_300\tcpm_3000\tcpm_30000\t\
+             peak_3\tpeak_30\tpeak_300\tpeak_3000\tpeak_30000\tsrc\tsite"
+        );
+        let m = columns(&merged_header(&spans));
+        // Both halves of every interval are named in it.
+        for want in ["counts", "tube_seconds", "per_tube", "cps", "cps_raw",
+                     "tubes", "interleave", "cpm_30", "sigma_30", "unix"] {
+            assert!(m.contains(&want.to_string()), "no {} in {:?}", want, m);
+        }
+        // And a row fills exactly the columns the header declares.
+        let row = merged_row(
+            1_700_000_000.5, 2, Some(0.5413), 34, 30.0, 60.0,
+            &[Some(70.0), Some(34.0), None, None, None],
+            Some(4.2),
+            &[Some(90.0), Some(40.0), None, None, None],
+            &[("AAA".into(), 20), ("BBB".into(), 14)],
+            SRC_LIVE, "the desk",
+        );
+        assert_eq!(row.split('\t').count(), m.len(), "{}", row);
+        let cells: Vec<&str> = row.split('\t').collect();
+        let at = |name: &str| cells[m.iter().position(|c| c == name).unwrap()];
+        // THE ROOM'S RATE IS COUNTS OVER TUBE-SECONDS, not over the wall
+        // clock: two tubes are two measurements of one number and do not
+        // double the dose. 34 arrivals in 60 tube-seconds is 0.5666...
+        assert_eq!(at("cps"), exact(34.0 / 60.0));
+        // And the arrival rate at the machine is the other one, which is n
+        // times it: 34 in 30 seconds of room.
+        assert_eq!(at("cps_raw"), exact(34.0 / 30.0));
+        assert_eq!(at("counts"), "34");
+        assert_eq!(at("tubes"), "2");
+        assert_eq!(at("per_tube"), "AAA=20,BBB=14");
+        assert_eq!(at("site"), "the desk");
+        // An empty window is empty, not zero -- the same rule the other
+        // format keeps, and for the same reason.
+        assert_eq!(at("cpm_300"), "");
+    }
+
+    /// THE MERGE IS NOT A TUBE, and `files` is where that is enforced: a
+    /// report that let it through would count the room once per counter and
+    /// once more for the merge of them.
+    #[test]
+    fn the_merged_log_is_never_mistaken_for_a_counter() {
+        let dir = std::env::temp_dir()
+            .join(format!("radbeeper-merged-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for name in ["cpm-F48824B8207F7E-2026-09.tsv", "cpm-AA1122BB3344CC-2026-09.tsv",
+                     "cpm-merged-2026-09.tsv", "cpm-merged-2026-10.tsv"] {
+            fs::write(dir.join(name), "").unwrap();
+        }
+        let serials: Vec<String> = files(&dir).into_iter().map(|(s, _)| s).collect();
+        assert_eq!(serials, vec!["AA1122BB3344CC", "F48824B8207F7E"]);
+        // And it is reachable, by the one door that leads to it.
+        let merged: Vec<String> = merged_files(&dir)
+            .into_iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(merged, vec!["cpm-merged-2026-09.tsv", "cpm-merged-2026-10.tsv"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     /// Every one of these is what Python's `%g` prints for that value. They
     /// were taken from the Python, not reasoned about: the point of the
@@ -585,7 +840,12 @@ impl Interval {
 /// descriptor onto an orphaned inode: it goes on writing, to nothing anybody
 /// will ever read. Comparing the inode catches that and reopens.
 pub struct Writer {
-    spans: Vec<f64>,
+    /// The header this writer's file carries, and so the columns its rows are
+    /// read back under. Held rather than recomputed because the merged log
+    /// and the per-counter log are two formats over the same machinery -- the
+    /// month rotation, the replaced-inode check and the one-row-per-slot rule
+    /// are identical and the columns are not.
+    head: String,
     dir: PathBuf,
     serial: Option<String>,
     every: f64,
@@ -599,8 +859,20 @@ impl Writer {
     pub fn new(spans: &[f64], dir: PathBuf, serial: Option<String>, every: f64)
         -> Writer
     {
+        Writer::under(header(spans), dir, serial, every)
+    }
+
+    /// The merged log's writer: the same file machinery, the other format.
+    /// Its serial slot is `MERGED`, which no counter can have.
+    pub fn merged(spans: &[f64], dir: PathBuf, every: f64) -> Writer {
+        Writer::under(merged_header(spans), dir, Some(MERGED.to_string()), every)
+    }
+
+    fn under(head: String, dir: PathBuf, serial: Option<String>, every: f64)
+        -> Writer
+    {
         Writer {
-            spans: spans.to_vec(),
+            head,
             dir,
             serial,
             every,
@@ -621,15 +893,15 @@ impl Writer {
         // header, and every peak column after the switch was read as the one
         // beside it. Both readers take the last header above a row as that
         // row's, so a second header is the whole of the migration.
-        if fresh || last_header(path).as_deref() != Some(header(&self.spans).as_str()) {
-            writeln!(f, "{}", header(&self.spans))?;
+        if fresh || last_header(path).as_deref() != Some(self.head.as_str()) {
+            writeln!(f, "{}", self.head)?;
             f.flush()?;
         }
         // The slot already on disk, so a restart cannot append a second row
         // for a slot the previous run finished. That is exactly what happens
         // when a service comes back mid-interval: its first row would be a
         // short one covering a stretch the last run already wrote in full.
-        let names = columns(&header(&self.spans));
+        let names = columns(&self.head);
         self.last_slot = read_table(path, &names)
             .last()
             .map(|(w, _)| slot_of(*w, self.every));

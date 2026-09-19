@@ -96,8 +96,9 @@ outside programs in `tools/`.
 
 ```sh
 make gui                                    # the window has to be open
-make gui-gif                                # 24 s of it, real time
-make gui-gif GIFSECS=180 GIFFPS=1 GIFPLAY=12 GIFWIDTH=540
+make gui-gif                                # 24 s of it, real time, maximised
+make gui-gif GIFSECS=180 GIFFPS=1 GIFPLAY=12
+make gui-gif GIFFULL= GIFWS=                # record it where it is
 ```
 
 The second is three minutes of counter played in fifteen seconds. **Playing
@@ -112,8 +113,30 @@ be read. The window is *found* rather than guessed -- `radbeeper-gui` sets an
 application id, so the compositor can be asked where it is -- and `--geometry
 'X,Y WxH'` covers a compositor `guicast` does not know how to ask. The palette
 is built from what changes between frames and only the moved rectangle is
-rewritten, which is what keeps a 48-frame recording of a 626x756 window under
-half a megabyte.
+rewritten, which is what keeps a 48-frame recording of a maximised window
+under a megabyte.
+
+**Its own workspace, and maximised.** A screen grab cannot grab what is not
+being composited, so a window on a workspace nobody is looking at records as
+whatever was last drawn -- and moving it somewhere empty is also the only way
+to be sure the clip is of the instrument rather than of the instrument with a
+terminal over one corner of it. `GIFWS` is the workspace to borrow and
+`guicast` switches back afterwards. `GIFFULL` maximises it first, because the
+panel drops the log table, then the verdicts, then the axis as it runs out of
+height: a clip taken in a quarter of a screen is a recording of the panel with
+its best parts missing.
+
+**The size is a promise the tool keeps.** The clip at the top of the README is
+the first thing a phone on a train downloads, so `GIFMAXMB` is a budget rather
+than a number somebody checks afterwards and forgets to: `guicast` re-encodes
+narrower until it fits. Scaling down is the right lever, because dropping
+frames makes a clock skip and a clock that skips is the one thing a recording
+of an instrument must not do.
+
+**And every clip says which build it is.** The panel carries its name and
+version in the top corner, so a screenshot in a bug report or a message
+asking what changed can be dated from the picture -- which is the form this
+program is most often seen in.
 
 Two consequences worth having. **A screenshot cannot claim something the
 program does not do** — the log-format shot found that busybox `sed` ignores

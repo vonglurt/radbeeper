@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Running it — RadBeeper</title>
+<meta name="description" content="A lab report on keeping a counter logging unattended: the boot service, one log directory two programs can both write, hotplug, and publishing the result without a build step.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/running-it.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Running it — RadBeeper">
+<meta property="og:description" content="A lab report on keeping a counter logging unattended: the boot service, one log directory two programs can both write, hotplug, and publishing the result without a build step.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/running-it.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="running-it">Running it</h1>
+<p><em>A lab report on keeping a counter logging unattended: the boot service, one log directory two programs can both write, hotplug, and publishing the result without a build step.</em></p>
+<hr>
+<h2 id="as-a-boot-service">As a boot service</h2>
+<p><a href="https://github.com/vonglurt/copal">Copal</a> — the Alpine distillation this was written on — carries RadBeeper as stage 10, which installs an OpenRC service and a udev rule alongside the <code>linux-lts</code> kernel that makes the counter visible in the first place. <strong>Dormant is the normal state</strong>: with no counter plugged in the service writes down why and exits 0 — a stopped service, not a crash loop.</p>
+<pre><code class="language-sh">rc-service radbeeper start        # or just plug the counter in
+cat /var/lib/radbeeper/status     # what it is doing, and why</code></pre>
+<p><strong>The service runs <code>/usr/local/bin/radbeeper</code>, not the one <code>make install</code> put in <code>~/.cargo/bin</code>.</strong> Upgrading your own copy leaves the boot service on whatever was there before, so give it the new build too:</p>
+<pre><code class="language-sh">make build
+doas rc-service radbeeper stop
+doas install -m 0755 target/release/radbeeper /usr/local/bin/radbeeper
+doas rc-service radbeeper start   # reads the flash first, then logs</code></pre>
+<p>On start it backfills from the counter's flash before appending anything — <code>--no-backfill</code> skips that. If the new build logs a different set of windows from the old one, it writes a second header line into the month's file rather than writing five columns under a four-column header; both readers take the last header above a row as that row's.</p>
+<p><code>radbeeper hotplug</code> is the other half: it sits in your desktop session and opens the monitor when a counter appears — at login if one is already there, and on plug-in at any point after.</p>
+<hr>
+<h2 id="one-log-for-the-service-and-the-monitor">One log for the service and the monitor</h2>
+<p>The boot service runs as root and <code>watch</code> runs as you, and they should write the same files. Make the directory the <code>dialout</code> group's, which you are already in for the serial port, and have the service create files the group can write:</p>
+<pre><code class="language-sh">doas rc-service radbeeper stop
+doas mkdir -p /var/lib/radbeeper
+doas sh -c 'cp -p /var/log/radbeeper/*.tsv /var/log/radbeeper/*.hex /var/lib/radbeeper/ 2&gt;/dev/null; true'
+doas chown -R root:dialout /var/lib/radbeeper
+doas chmod 2775 /var/lib/radbeeper
+doas sh -c 'chmod g+w /var/lib/radbeeper/* 2&gt;/dev/null; true'
+# the service script: make the directory at start, files group-writable, status in the new place
+doas sed -i -e 's|^\tcheckpath -d -m 0755 /var/log/radbeeper$|&amp;\n\tcheckpath -d -m 2775 -o root:dialout /var/lib/radbeeper|' \
+            -e 's|^command_background=true$|&amp;\numask=002|' \
+            -e 's|/var/log/radbeeper/status|/var/lib/radbeeper/status|g' /etc/init.d/radbeeper
+doas rc-service radbeeper start</code></pre>
+<p>The setgid bit (the <code>2</code> in <code>2775</code>) makes every file created in the directory belong to <code>dialout</code>, whoever creates it; <code>umask=002</code> makes the service's files group-writable. <code>service.log</code> stays in <code>/var/log</code> — it is the service's own output, and losing it at a reboot is what a log is for.</p>
+<hr>
+<h2 id="publishing-it">Publishing it</h2>
+<pre><code class="language-sh">radbeeper export --logs logs -o index.html</code></pre>
+<p><code>watch</code> writes both pages into the log directory by itself — after its backfill, every hour and on quit — so a monitor left open keeps them current.</p>
+<p>One self-contained page: a how-to, summary cards, a log-scale plot of counts per minute by the hour, a by-day table and the latest rows. <strong>No JavaScript, no web fonts, no CDN</strong> — the chart is SVG the program draws itself, and the full record is one link away as the file it already lives in.</p>
+<p><strong><code>random.html</code> is written beside it</strong> whenever there are emissions to account for, and the index links to it. It is the one claim on the front page a reader cannot check by looking — 256 bits out of decay — so the audit gets its own page: the counts drawn against the Poisson model that used to be assumed, the bits accumulating second by second with the target across them, what the serial link's one-second resolution costs against timestamped arrivals, and every line emitted with the counts behind it. <code>--no-random-page</code> turns it off.</p>
+<p>To put it on the web: <strong>fork this repository, copy your <code>cpm-*.tsv</code>, <code>random-*.tsv</code> and <code>sites.tsv</code> into <code>logs/</code>, and push.</strong> <code>.github/workflows/pages.yml</code> rebuilds both pages and commits them back, so GitHub Pages serves them with no build step. There is nothing to install in the workflow — the generator is this same file, which is also why the pages cannot drift from the log format. The native build's <code>radbeeper export</code> writes the same two pages, byte for byte, and <code>tests/test_differential.py</code> is what says so.</p>
+<hr>
+<h2 id="what-the-site-is-made-of">What the site is made of</h2>
+<p>GitHub Pages serves this repository's root, and three generators write into it.</p>
+<table><tbody><tr><td><code>index.html</code></td><td>the landing page, from <code>README.md</code> via <code>tools/landing.py</code></td></tr><tr><td><code>docs/*.html</code></td><td>the lab reports, from <code>docs/*.md</code>, by the same renderer</td></tr><tr><td><code>monitor.html</code></td><td>the counter's report, from <code>logs/</code> via <code>radbeeper export</code></td></tr><tr><td><code>random.html</code></td><td>the entropy audit, written beside it when there are emissions</td></tr></tbody></table>
+<p><strong>The report used to be <code>index.html</code>.</strong> Somebody arriving from a search for "GMC-320 Plus Linux" landed on a table of counts per minute with nothing on the page saying what had produced them; it is one click along now, and linked from the first screen of the landing page.</p>
+<p><strong>Neither page is hand-written</strong>, and that is the same argument twice. The report is built by the program that reads the counter, so it cannot drift from the row format. The landing page <em>is</em> the README, rendered — so it cannot drift from the documentation either. A hand-written overview is a second description of the program that goes stale the first time the first one changes.</p>
+<pre><code class="language-sh">make site          # build all of it
+make site-serve    # and look at it before pushing</code></pre>
+<p><strong><code>radbeeper export</code> still defaults to <code>index.html</code></strong>, which is the right name in a directory of your own and the wrong one here — run in the repository root it would write the counter's report over the landing page. <code>make site</code> passes <code>-o monitor.html</code>, and so does the workflow; if you run the export by hand in this checkout, pass it too.</p>
+<p><code>sitemap.xml</code>, <code>robots.txt</code> and <code>.nojekyll</code> are written alongside. The last one matters: without it GitHub runs Jekyll over the repository, which silently drops any file or folder whose name begins with an underscore.</p>
+<hr>
+<h2 id="further-reading">Further reading</h2>
+<ul><li><a href="the-log.html">The log</a> — what is in the files this is keeping.</li><li><a href="the-stream.html">The stream</a> — why a service holding the ports does not stop you watching the counter.</li><li><a href="troubleshooting.html">Troubleshooting</a> — the four things it can be when <code>probe</code> finds nothing.</li></ul>
+<hr>
+<p>MIT License — Copyright (c) 2026 Paul Richeson</p>
+<hr>
+<p><a href="../index.html">← back to the README</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>

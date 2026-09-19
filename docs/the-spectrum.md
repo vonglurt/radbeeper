@@ -47,8 +47,8 @@ answer for *one* periodogram — a single bin of white noise is exponential, and
 the largest of *B* of those does land near ln(*B*) above the mean — and the
 wrong one for an average of *N*, whose tail is not exponential at all. The two
 agree only at *N* = 1. Everywhere else the old form was too low, and it got
-worse the longer you watched: **the bar sinks like 1/*N* while the real peak
-only sinks like 1/√*N***, so the two cross over.
+worse the longer you watched: **the bar sinks like 1/_N_ while the real peak
+only sinks like 1/√_N_**, so the two cross over.
 
 Measured against a null built from this counter's own recorded counts,
 resampled i.i.d. so the spectrum is flat *by construction* and every flag is

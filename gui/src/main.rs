@@ -28,10 +28,11 @@ use std::time::{Duration, Instant};
 use iced::widget::{canvas, column, container, row, stack, text, Space};
 use iced::{Color, Element, Fill, Font, Length, Rectangle, Renderer, Subscription, Theme};
 use radbeeper::analysis::{
-    band, bar_seconds, span_words, tiers_interleaved, tiers_with, Band, Spectrum,
+    band, bar_seconds, interleave_quality, span_words, tiers_interleaved, tiers_with,
+    Band, Spectrum,
     Tier, Windows, TIERS,
 };
-use radbeeper::broker::{self, Client, CounterId, Event};
+use radbeeper::broker::{self, Client, CounterId, Event, Poll};
 use radbeeper::{clock, entropy, log};
 
 /// A NAMED MONOSPACE, NOT `Font::MONOSPACE`. The generic family resolves
@@ -41,6 +42,17 @@ use radbeeper::{clock, entropy, log};
 /// "<box>DEV<box>TTYUSB0" and the dose read "USV<box>H". DejaVu Sans Mono is
 /// on every Linux with fontconfig and covers what this window draws.
 const MONO: Font = Font::with_name("DejaVu Sans Mono");
+
+/// What this program is, for anything that outlives the window.
+///
+/// ON THE PANEL AND NOT ONLY IN `--help`, because a screenshot is the form
+/// this program is most often seen in: the README's clip, a bug report, a
+/// message to somebody asking what changed. A picture of an instrument that
+/// does not say which build it is cannot be dated, and every one of those
+/// questions starts with which build it is. The terminal monitor has put its
+/// name in a corner since the first version; this is the same idea with the
+/// version beside it.
+const NAMEPLATE: &str = concat!("radbeeper ", env!("CARGO_PKG_VERSION"));
 
 /// Samples kept for the cascade strip.
 const STRIP_KEEP: usize = 8192;
@@ -75,7 +87,7 @@ const PEAK_TAU: f64 = 30.0;
 /// window has left, three parts to two. A fixed height for those would leave a
 /// band of empty grey under the table on a tall window and clip them on a
 /// short one.
-const CLUSTER_H: f32 = 132.0;
+const CLUSTER_H: f32 = 156.0;
 
 /// How tall the dial band actually is, given how many rows of per-tube
 /// readings have to sit beside it.
@@ -84,16 +96,101 @@ const CLUSTER_H: f32 = 132.0;
 /// two more rows of numbers than one counter, and a fixed band let them
 /// overflow into the cascade's captions -- two pieces of text on top of each
 /// other, which is the one thing a dense panel must never do.
-fn cluster_h(tubes: usize) -> f32 {
+fn cluster_h(tubes: usize, scale: f32) -> f32 {
     let rows = if tubes > 1 { tubes.div_ceil(5) } else { 0 };
-    CLUSTER_H + rows as f32 * 12.0
+    // THE ROWS OF PER-TUBE READINGS DO NOT SCALE. They are text at a fixed
+    // size, beside the dials rather than on them, so they take the same
+    // twelve pixels a row whatever the faces are doing.
+    CLUSTER_H * scale + rows as f32 * 12.0
 }
 /// The cascade's share of the space under the dials.
 const CASCADE_SHARE: f32 = 0.62;
 
-/// One dial: the face, and the space it is given.
+/// One dial at its smallest: the face, the space it is given.
+///
+/// THE SMALLEST, NOT THE SIZE. These were fixed, and on a maximised window --
+/// which is what a hero clip and a spare monitor both are -- two 126-pixel
+/// dials sat in the corner of twelve hundred pixels with the whole top right
+/// of the panel empty beside them. An instrument cluster that does not use
+/// the glass it is given looks like a mistake, and it is one: the dials are
+/// the thing being read at a glance, and at a glance is exactly when size is
+/// what makes a needle legible. See `dial_scale`.
 const DIAL_R: f32 = 56.0;
 const DIAL_W: f32 = 126.0;
+/// Measured from the top of the panel, so the readouts stacked over the face
+/// land in the same place whatever the tube count. See `Chart::cluster`.
+const DIAL_CY: f32 = DIAL_R + 8.0;
+
+/// The largest the cluster is allowed to grow to.
+///
+/// A DIAL CAN BE TOO BIG. Past about half as much again the face stops
+/// reading as an instrument on a panel and starts reading as a logo, and the
+/// numbers beside it -- which are a fixed size, because they are text -- look
+/// stranded next to it.
+const DIAL_MAX_SCALE: f32 = 1.75;
+
+/// The most of a window's height the instrument cluster may take.
+const CLUSTER_SHARE: f32 = 0.30;
+
+/// How much bigger than its minimum to draw the cluster, in this window.
+///
+/// TWO BUDGETS, AND THE SMALLER WINS. Width, because the dials share the top
+/// band with the readout beside them and that block does not shrink: whatever
+/// is left over after it has its room is what the dials may grow into.
+/// Height, because a cluster that took a third of a tall window would be
+/// taking it from the charts, and the charts are the instrument -- the same
+/// rule that decides what goes first when there is no room at all.
+///
+/// Never below 1.0. The small-window layout is the one that was measured
+/// against a 560x400 tile, and nothing here may make that worse.
+fn dial_scale(size: iced::Size, tubes: usize) -> f32 {
+    // What the readout beside the dials needs: the big number and the five
+    // window rows, at the sizes they are drawn.
+    const READOUT_W: f32 = 320.0;
+    let faces = 2.0;
+    let spare = (size.width - 22.0 - READOUT_W) / (faces * DIAL_W);
+    // Rather less than a third of the height. The charts are the instrument
+    // and this is taken from them, so the share is the smallest one that
+    // still leaves the cluster looking like it belongs on the panel rather
+    // than parked in the corner of it.
+    let tall = size.height * CLUSTER_SHARE / cluster_h(tubes, 1.0);
+    spare.min(tall).clamp(1.0, DIAL_MAX_SCALE)
+}
+
+/// Where the digits on the face start.
+///
+/// UNDER THE HUB, NOT OVER IT. The reading goes on the black face below the
+/// spindle, as it does on the instruments this borrows from -- over the hub
+/// it is a number with a needle rotating through it.
+const DIAL_TEXT_TOP: f32 = DIAL_CY + 4.0;
+
+/// Where the two lines naming the face go: under the bezel, not on it.
+///
+/// A FACE IS ROUND AND A LINE OF TEXT IS NOT. Everything drawn on the face
+/// has to fit the CHORD at its own height, and the chord runs out fast below
+/// the middle: forty pixels under the centre of a 56-pixel face there are 78
+/// left -- and the band arcs are inside that, at 0.82 of the radius, so a
+/// line only has to be 65 pixels wide before its ENDS cross them. "1s 60 30s
+/// 85" did, and "3s held . 41-117" went past the bezel and out onto the
+/// panel, which reads as a mistake rather than as a label.
+///
+/// So only the reading stays on the face, which is what a gauge face is for,
+/// and everything supporting it moves to a nameplate under the bezel where
+/// the width available is the whole dial's share of the row and does not
+/// depend on how far down the line sits.
+const DIAL_PLATE_TOP: f32 = DIAL_CY + DIAL_R + 7.0;
+
+/// How heavy each face's needle is drawn, as a half-width in pixels.
+///
+/// THE TWO FACES ARE NOT THE SAME INSTRUMENT AND SHOULD NOT LOOK IT. The raw
+/// face carries a needle per tube and they have to be told apart, so they are
+/// drawn thin and in their own colours -- nine of them at the collected
+/// needle's weight would be a black disc. The collected face carries exactly
+/// one needle and it is the panel's headline: it gets a proper tapered
+/// pointer, wide at the hub and sharp at the tip, which is both easier to
+/// read at a glance and what the instruments this borrows from actually have.
+const NEEDLE_RAW: f32 = 0.0;
+const NEEDLE_HELD: f32 = 3.4;
 
 /// Full-scale marks a dial will choose between, smallest first.
 ///
@@ -105,6 +202,49 @@ const RANGES: [f64; 7] = [60.0, 120.0, 300.0, 600.0, 1200.0, 3000.0, 6000.0];
 
 /// The window the big number is an average over, when it has one.
 const HEADLINE: f64 = 30.0;
+
+/// The window the collecting needle sits at.
+///
+/// THREE SECONDS, NOT ONE. One second of one tube is a handful of arrivals --
+/// at background, two or three -- so a one-second needle is mostly Poisson
+/// noise, and what it draws is the counting statistics rather than the room.
+/// Three seconds is the shortest window the rest of the program already keeps,
+/// it is what the panel's top line of figures reports, and at three times the
+/// counts it is root-three steadier: a needle somebody can actually read a
+/// value off, still quick enough to show a source passing under the tube.
+const NEEDLE_SPAN: f64 = 3.0;
+
+/// The window the slow pointer sits at -- the same half minute as the big
+/// number, so the dial and the headline agree by construction.
+const POINTER_SPAN: f64 = 30.0;
+
+/// How long the collecting meter's three-second window is kept in arrivals.
+///
+/// A little more than the longest thing computed from it, so the half-minute
+/// pointer has a full half minute behind it and the trim never eats a sample
+/// the next tick wanted.
+const RECENT_KEEP: f64 = POINTER_SPAN + 2.0;
+
+/// How often the meters are recomputed and sent, at most.
+///
+/// THE SNAPSHOT IS A SECOND'S WORK AND THE NEEDLE IS NOT. Everything in a
+/// Snapshot -- the cascade, three spectra, the table -- changes once a second
+/// and costs a clone of all of it to send. The needle wants to MOVE, which is
+/// a handful of floats, so it travels separately and twelve times as often.
+///
+/// And only when it has moved: see `Meters::worth_sending`. A steady reading
+/// sends nothing between snapshots, which matters because this program's
+/// usual home is a VM with no GPU, where every message is a full software
+/// re-render of the panel.
+const METER_MS: u64 = 80;
+
+/// How long a silence means the server has gone rather than gone quiet.
+///
+/// Ten seconds, where a sample is due every one. It was the read timeout
+/// itself until the meters wanted a twelfth of a second; now the poll is
+/// short and this is counted, which is the same rule stated once instead of
+/// hidden in an argument.
+const ADRIFT_AFTER: Duration = Duration::from_secs(10);
 
 /// THE OVERLAY, AND WHY THESE THREE. A spectrum resolves periods up to its own
 /// window and no further: you cannot see an hourly rhythm in ten minutes of
@@ -188,11 +328,92 @@ static LOGS: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new(
 /// captured value on a plain function pointer.
 static SKIN: std::sync::OnceLock<Skin> = std::sync::OnceLock::new();
 
+/// Ask for the renderer that can actually work here, before anything probes.
+///
+/// WHAT THIS IS FIXING: eight lines of somebody else's diagnostics on every
+/// start.
+///
+///     virtio_gpu: driver missing
+///     libEGL warning: egl: failed to create dri2 screen
+///
+/// four times over. None of it is wrong and none of it is ours: it is Mesa's
+/// gallium loader and libEGL reporting, at warning level, that this machine
+/// has no GPU they can drive -- after which iced falls back to tiny-skia by
+/// itself and the window comes up perfectly. But a program that prints four
+/// warnings and then works is a program that looks broken, and the only way
+/// to find out otherwise is to read the README.
+///
+/// SO DO NOT ASK THE QUESTION THAT PRODUCES THE ANSWER. The messages come out
+/// of probing wgpu; iced probes wgpu because nothing told it not to; and
+/// `ICED_BACKEND` is how you tell it. Setting the environment variable rather
+/// than hard-coding the choice leaves `ICED_BACKEND=wgpu` working for anyone
+/// who wants the GPU path back, which is the whole point of compiling both
+/// renderers in.
+///
+/// THE TEST IS THE DRM DRIVER, not a feature probe, because every feature
+/// probe is the thing that prints. A virtio GPU is this distribution's usual
+/// home -- Alpine under UTM or QEMU -- and on one without virgl the host has
+/// no 3D to lend: Mesa drops to llvmpipe, where wgpu either fails to start or
+/// crawls. tiny-skia is both quieter and faster there. Anything else keeps
+/// wgpu, so a real card is still a real card.
+///
+/// And the two log levels, for the case where wgpu IS tried and fails anyway:
+/// then the fallback is real and still nobody needs four copies of it.
+fn pick_renderer(asked: Option<&str>) {
+    if std::env::var_os("EGL_LOG_LEVEL").is_none() {
+        std::env::set_var("EGL_LOG_LEVEL", "fatal");
+    }
+    if std::env::var_os("MESA_LOG_FILE").is_none() {
+        std::env::set_var("MESA_LOG_FILE", "/dev/null");
+    }
+    if let Some(name) = asked {
+        std::env::set_var("ICED_BACKEND", name);
+        return;
+    }
+    // Already asked for, by whoever launched us. Theirs, not ours.
+    if std::env::var_os("ICED_BACKEND").is_some() {
+        return;
+    }
+    if software_only() {
+        std::env::set_var("ICED_BACKEND", "tiny-skia");
+    }
+}
+
+/// Whether this machine's graphics are software whatever we ask for.
+fn software_only() -> bool {
+    let Ok(cards) = std::fs::read_dir("/sys/class/drm") else {
+        // No DRM at all: there is nothing for wgpu to find.
+        return true;
+    };
+    let mut saw_card = false;
+    for card in cards.flatten() {
+        let name = card.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("card") {
+            continue;
+        }
+        saw_card = true;
+        let driver = card.path().join("device/driver");
+        let Ok(target) = std::fs::read_link(&driver) else { continue };
+        let driver = target
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // `virtio-pci` is what the guest kernel binds; `virtio_gpu` is what
+        // Mesa then says it cannot load. Either spelling is this case.
+        if !driver.starts_with("virtio") {
+            return false;
+        }
+    }
+    saw_card
+}
+
 fn logs_dir() -> std::path::PathBuf {
     LOGS.get().cloned().unwrap_or_else(log::state_dir)
 }
 
 fn main() -> iced::Result {
+    let mut renderer: Option<String> = None;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -206,12 +427,17 @@ fn main() -> iced::Result {
                     let _ = SKIN.set(Skin::named(&t));
                 }
             }
+            "--renderer" => {
+                renderer = args.next();
+            }
             "-h" | "--help" => {
                 println!("radbeeper-gui -- a window onto the counters");
                 println!();
                 println!("  --logs DIR    where the serving radbeeper keeps its socket");
                 println!("  --theme T     dark, antiquity, or auto (the default:");
                 println!("                whatever ~/.config/copal/current says)");
+                println!("  --renderer R  wgpu or tiny-skia (the default: wgpu,");
+                println!("                except on a virtio GPU, which has none)");
                 println!();
                 println!("It opens no serial port. Start `radbeeper service` first, or");
                 println!("`radbeeper watch`, and this attaches to whichever is serving.");
@@ -221,6 +447,9 @@ fn main() -> iced::Result {
         }
     }
     let _ = SKIN.set(Skin::detect());
+    // BEFORE THE RUNTIME STARTS, because it is the runtime's first act that
+    // prints. See `pick_renderer`.
+    pick_renderer(renderer.as_deref());
     iced::application(App::new, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
@@ -282,6 +511,158 @@ impl Drift {
     }
 }
 
+/// A needle with mass, which is the other half of how the bugs move.
+///
+/// THE BUGS SNAP OUT AND CREEP BACK; THE NEEDLE LEANS BOTH WAYS. They are the
+/// same idea -- a reading is not a number, it is a number with a history, and
+/// an instrument that jumps between them throws the history away -- but a
+/// range mark and a pointer want different asymmetries. A bug must not miss
+/// an excursion, so it moves out instantly. A needle must be readable, so it
+/// moves out FAST and settles back slower: the quarter second is quick enough
+/// that a source passing under the tube is not smoothed away, and the
+/// nine-tenths coming back is what stops a lone Poisson lump from reading as
+/// a spike.
+///
+/// This is what every moving-coil meter does mechanically and what every VU
+/// meter specifies deliberately. Without it the needle teleports once a
+/// second and the eye cannot follow which way it went -- which is the whole
+/// reason for drawing a dial rather than printing the number.
+#[derive(Debug, Clone, Copy)]
+struct Ballistic {
+    at: f64,
+    rise: f64,
+    fall: f64,
+    seeded: bool,
+}
+
+impl Ballistic {
+    fn new(rise: f64, fall: f64) -> Ballistic {
+        Ballistic { at: 0.0, rise, fall, seeded: false }
+    }
+
+    /// Move `dt` seconds toward `target`, and say where that leaves it.
+    fn push(&mut self, target: f64, dt: f64) -> f64 {
+        if !self.seeded {
+            // A NEEDLE THAT HAS NEVER READ ANYTHING STARTS WHERE IT IS, not
+            // at zero. Attaching to a service that has been up since
+            // breakfast would otherwise sweep the needle up from the stop
+            // over the first second, which looks like an event and is not one.
+            self.at = target;
+            self.seeded = true;
+            return self.at;
+        }
+        let tau = if target > self.at { self.rise } else { self.fall };
+        self.at += (target - self.at) * (1.0 - (-dt / tau.max(1e-3)).exp());
+        self.at
+    }
+
+    fn at(&self) -> Option<f64> {
+        self.seeded.then_some(self.at)
+    }
+}
+
+/// The arrivals of the last half minute, for the meters that cannot wait.
+///
+/// WHY NOT `Windows`, WHICH ALREADY DOES THIS. Because `Windows::average`
+/// answers None until the window is full and is keyed by the spans the server
+/// declared, and because what the meters need is not the same question: this
+/// is asked between samples, at whatever moment the needle is being drawn,
+/// over a window that ends NOW rather than at the last sample.
+///
+/// THE DIVISOR IS THE SAMPLES, NOT THE SECONDS. Every sample covers one
+/// second of one tube, so `sum * 60 / samples` is counts per minute per tube
+/// -- the mean the tubes agree on -- whatever the tube count is and whatever
+/// happens to a tube mid-window. Dividing by `span * tubes` instead reports a
+/// tube that has stopped answering as the room having gone quiet.
+#[derive(Debug, Default)]
+struct Recent {
+    q: VecDeque<(f64, u32)>,
+}
+
+impl Recent {
+    fn push(&mut self, when: f64, counts: u32) {
+        self.q.push_back((when, counts));
+        let cutoff = when - RECENT_KEEP;
+        while self.q.front().map(|(t, _)| *t < cutoff).unwrap_or(false) {
+            self.q.pop_front();
+        }
+    }
+
+    /// CPM per tube over the `span` seconds ending at `now`, or None if
+    /// nothing was heard in them.
+    fn rate(&self, now: f64, span: f64) -> Option<f64> {
+        let cutoff = now - span;
+        let mut sum = 0u64;
+        let mut n = 0u32;
+        // EVERY SAMPLE IN THE WINDOW, NOT EVERY SAMPLE UNTIL THE FIRST OLD
+        // ONE. Arrival order is not quite time order: the tubes are read on
+        // separate threads and a sample stamped 9.95 can be delivered after
+        // one stamped 10.00. Scanning backwards and stopping at the first
+        // sample outside the window would then throw away everything before
+        // the inversion -- which, for a one-second window holding two
+        // samples, is the whole reading. The queue is half a minute of
+        // arrivals, so looking at all of it costs nothing worth saving.
+        for (t, c) in self.q.iter() {
+            if *t > cutoff {
+                sum += *c as u64;
+                n += 1;
+            }
+        }
+        (n > 0).then(|| sum as f64 * 60.0 / n as f64)
+    }
+
+    /// The newest sample's time, which is not necessarily the last one
+    /// pushed; see `rate`.
+    fn newest(&self) -> Option<f64> {
+        self.q.iter().map(|(t, _)| *t).fold(None, |best: Option<f64>, t| {
+            Some(best.map_or(t, |b| if t > b { t } else { b }))
+        })
+    }
+}
+
+/// The collecting meter, and only it: the numbers that have to move.
+///
+/// SENT APART FROM THE SNAPSHOT, AND OFTEN. See METER_MS.
+#[derive(Debug, Clone, Copy, Default)]
+struct Meters {
+    /// The newest whole second, as soon as a second of arrivals has gone by
+    /// rather than when the next second's first sample turns up.
+    live: Option<f64>,
+    /// Three seconds, which is what the needle is pointing at.
+    live3: Option<f64>,
+    /// Half a minute, which is where the slow pointer sits.
+    live30: Option<f64>,
+    /// Where the needle actually IS, which is not the same thing: see
+    /// `Ballistic`.
+    needle: Option<f64>,
+    /// The half-minute and minute ranges the reading has been bouncing
+    /// between, drifting inward.
+    range30: Option<(f64, f64)>,
+    range60: Option<(f64, f64)>,
+}
+
+impl Meters {
+    /// Whether this is different enough from what was last sent to be worth a
+    /// re-render.
+    ///
+    /// A PANEL THAT REDRAWS TWELVE TIMES A SECOND FOR NOTHING is a quarter of
+    /// a core on the software renderer this usually runs on, and a steady
+    /// reading is the ordinary case. So the needle's motion is what buys the
+    /// frame: when it has settled, the once-a-second snapshot is the only
+    /// thing redrawing the window, exactly as before any of this.
+    fn worth_sending(&self, last: &Meters) -> bool {
+        let moved = |a: Option<f64>, b: Option<f64>| match (a, b) {
+            (Some(x), Some(y)) => (x - y).abs() > 0.05 + 0.002 * y.abs(),
+            (x, y) => x.is_some() != y.is_some(),
+        };
+        moved(self.needle, last.needle)
+            || moved(self.live, last.live)
+            || moved(self.live30, last.live30)
+            || self.range30 != last.range30
+            || self.range60 != last.range60
+    }
+}
+
 /// One spectrum of the overlay, as the interface needs it.
 #[derive(Debug, Clone)]
 struct Layer {
@@ -309,13 +690,6 @@ struct Snapshot {
     headline_sigma: Option<f64>,
     now: u32,
     total: u64,
-    /// The combined reading at one-second resolution -- what the collecting
-    /// meter's needle sits at, and what pushes its bugs about.
-    live: Option<f64>,
-    /// The half-minute and minute ranges that needle has been bouncing
-    /// between, drifting inward.
-    range30: Option<(f64, f64)>,
-    range60: Option<(f64, f64)>,
     /// The cascade's vertical scale, held so it does not breathe. See
     /// PEAK_TAU.
     peak: f64,
@@ -346,6 +720,8 @@ impl Snapshot {
 #[derive(Debug, Clone)]
 enum Message {
     Update(Box<Snapshot>),
+    /// The collecting meter, on its own beat. See METER_MS.
+    Moved(Meters),
     Adrift(String),
     /// The window changed size. See `App::view`: what gets dropped first.
     Resized(iced::Size),
@@ -356,6 +732,9 @@ enum Message {
 struct App {
     skin: Skin,
     shot: Option<Snapshot>,
+    /// The collecting meter, which arrives between snapshots and more often
+    /// than them.
+    meters: Meters,
     adrift: String,
     cpm_per_usvh: f64,
     /// What the compositor has actually given us, which on a tiling desktop
@@ -369,6 +748,7 @@ impl App {
             App {
                 skin: SKIN.get().cloned().unwrap_or_else(Skin::dark),
                 shot: None,
+                meters: Meters::default(),
                 adrift: "looking for the counters...".into(),
                 cpm_per_usvh: 153.8,
                 size: iced::Size::new(760.0, 900.0),
@@ -387,8 +767,10 @@ impl App {
     fn update(&mut self, message: Message) {
         match message {
             Message::Update(s) => self.shot = Some(*s),
+            Message::Moved(m) => self.meters = m,
             Message::Adrift(why) => {
                 self.shot = None;
+                self.meters = Meters::default();
                 self.adrift = why;
             }
             Message::Resized(size) => self.size = size,
@@ -430,6 +812,12 @@ impl App {
         };
 
         let tubes = s.tubes();
+        // How big the instruments are in this window. Everything about the
+        // cluster is measured from it, on the canvas and in the widgets
+        // alike, so the two cannot drift apart.
+        let scale = dial_scale(self.size, tubes);
+        let dial_w = DIAL_W * scale;
+        let band_h = cluster_h(tubes, scale);
         let tint = s.headline.map(|c| self.skin.colour(band(c))).unwrap_or(self.skin.dim);
 
         // ---- who is on the other end ------------------------------------
@@ -440,7 +828,7 @@ impl App {
         // only has to say what they are and where.
         let firmwares: std::collections::BTreeSet<&str> =
             s.counters.iter().map(|c| c.version.as_str()).collect();
-        let who: Element<Message> = if tubes <= 2 {
+        let inner: Element<Message> = if tubes <= 2 {
             let mut col = column![].spacing(0);
             for (k, c) in s.counters.iter().enumerate() {
                 col = col.push(
@@ -465,6 +853,17 @@ impl App {
             .color(self.skin.dim)
             .into()
         };
+        // THE NAMEPLATE GOES IN THE CORNER, out of the way of everything that
+        // changes. It is the one line on the panel that never does.
+        let who: Element<Message> = row![
+            inner,
+            Space::new().width(Fill),
+            column![
+                Space::new().height(2.0),
+                mono(NAMEPLATE).size(9).color(self.skin.faint),
+            ],
+        ]
+        .into();
 
         // ---- the dials --------------------------------------------------
         //
@@ -475,22 +874,37 @@ impl App {
         // raise is whether they agree, and two angles can only be compared
         // when they mean the same thing.
         // ONE METER RAW, ONE METER COLLECTED. The left face carries a needle
-        // per tube -- every input, unaveraged, in its own colour -- so a tube
-        // that has wandered off is a needle that has wandered off. The right
-        // face carries ONE needle, the whole-second collection at the
-        // resolution the log is written in, and the ranges it has been
-        // bouncing between. The first answers "do they agree?", the second
-        // answers "what is the room doing?", and neither answers the other.
+        // per tube -- every input, in its own colour -- so a tube that has
+        // wandered off is a needle that has wandered off. The right face
+        // carries ONE needle and answers a different question, and neither
+        // answers the other: the first is "do they agree?", the second is
+        // "what is the room doing?".
+        //
+        // THE COLLECTED FACE IS A REAL INSTRUMENT AND CARRIES THREE TIME
+        // CONSTANTS, which is what a dial can show and a number cannot:
+        //
+        //   the needle    three seconds, with mass -- see `Ballistic`
+        //   the pointer   half a minute, the same window as the big number
+        //   the arcs      where the needle has been over the last half
+        //                 minute and minute -- see `Drift`
+        //
+        // Three seconds and not one because one second of one tube is a
+        // handful of arrivals, and a needle drawn from it is drawing the
+        // counting statistics rather than the room. The one-second figure has
+        // not gone anywhere -- it is the caption under the face, where a
+        // jumpy number belongs.
         //
         // They share a scale, because two dials that do not are two dials
         // that cannot be compared, which is the only reason to draw them side
         // by side.
+        let m = &self.meters;
         let top = s
             .per
             .iter()
             .filter_map(|v| *v)
-            .chain(s.live)
-            .chain(s.range60.map(|(_, hi)| hi))
+            .chain(m.needle)
+            .chain(m.live3)
+            .chain(m.range60.map(|(_, hi)| hi))
             .fold(0.0f64, f64::max);
         let full = dial_range(top);
         let faces: Vec<Face> = vec![
@@ -499,18 +913,26 @@ impl App {
                 full,
                 range30: None,
                 range60: None,
+                pointer: None,
+                weight: NEEDLE_RAW,
             },
             Face {
-                needles: vec![(usize::MAX, s.live)],
+                // Where the needle IS, not where it is heading. Drawing the
+                // target instead would make the mass invisible, which is the
+                // whole of what it is for.
+                needles: vec![(usize::MAX, m.needle)],
                 full,
-                range30: s.range30,
-                range60: s.range60,
+                range30: m.range30,
+                range60: m.range60,
+                pointer: m.live30,
+                weight: NEEDLE_HELD,
             },
         ];
 
         let chart = canvas(Chart {
             skin: self.skin.clone(),
-            cluster: cluster_h(tubes),
+            cluster: band_h,
+            scale,
             peak: s.peak,
             dials: faces.clone(),
             strip: s.strip.clone(),
@@ -530,6 +952,12 @@ impl App {
             let live: Vec<f64> = face.needles.iter().filter_map(|(_, v)| *v).collect();
             let mean = (!live.is_empty())
                 .then(|| live.iter().sum::<f64>() / live.len() as f64);
+            // WHAT THE FACE READS, IN DIGITS, under the needle. The raw
+            // face reads the mean of its needles; the collected face reads
+            // the three seconds the needle is pointing at -- the number the
+            // needle is FOR, so that the angle and the digits can never
+            // disagree.
+            let reads = if fi == 0 { mean } else { m.live3 };
             let caption: Element<Message> = if fi == 0 {
                 let mut letters = row![].spacing(3);
                 for (k, _) in face.needles.iter().take(10) {
@@ -539,33 +967,74 @@ impl App {
                 }
                 letters.into()
             } else {
-                mono(match (s.range30, s.range60) {
-                    (Some((l, h)), _) => format!("{:.0}\u{2013}{:.0}", l, h),
-                    _ => "range".into(),
-                })
-                .size(9)
-                .color(Color { a: 0.85, ..self.skin.hud })
+                // THE TWO FIGURES THE NEEDLE IS NOT. The one-second reading
+                // is the fastest thing the panel knows and it is no longer on
+                // the needle -- printed, which is where a number that jumps
+                // several times a second belongs -- and the half minute is
+                // where the chrome pointer is sitting. Labelled, because
+                // three bare numbers under a dial are a puzzle.
+                row![
+                    mono("1s").size(9).color(self.skin.faint),
+                    mono(match m.live {
+                        Some(v) => format!("{:.0}", v),
+                        None => "--".into(),
+                    })
+                    .size(9)
+                    .color(Color { a: 0.9, ..self.skin.dim }),
+                    mono("\u{b7}").size(9).color(self.skin.faint),
+                    mono(format!("{}s", POINTER_SPAN as i64))
+                        .size(9)
+                        .color(self.skin.faint),
+                    mono(match m.live30 {
+                        Some(v) => format!("{:.0}", v),
+                        None => "--".into(),
+                    })
+                    .size(9)
+                    .color(Color { a: 0.95, ..self.skin.bezel }),
+                ]
+                .spacing(3)
                 .into()
             };
             dial_faces = dial_faces.push(
                 container(
                     column![
-                        Space::new().height(54.0),
-                        mono(match mean {
+                        // ON THE FACE: the reading, and nothing else. A gauge
+                        // face carries the number the needle is pointing at;
+                        // everything that explains it goes on the plate.
+                        Space::new().height(DIAL_TEXT_TOP * scale),
+                        mono(match reads {
                             Some(v) => format!("{:.0}", v),
                             None => "--".into(),
                         })
-                        .size(19)
-                        .color(mean.map(|v| self.skin.colour(band(v))).unwrap_or(self.skin.dim)),
+                        .size(18.0 * scale)
+                        .color(reads.map(|v| self.skin.colour(band(v))).unwrap_or(self.skin.dim)),
+                        // Down to the nameplate, clear of the bezel.
+                        Space::new().height(
+                            ((DIAL_PLATE_TOP - DIAL_TEXT_TOP) * scale - 22.0 * scale)
+                                .max(0.0),
+                        ),
                         caption,
-                        mono(if fi == 0 { "raw".to_string() } else { "1s \u{b7} held".to_string() })
-                            .size(9)
-                            .color(self.skin.faint),
+                        // What this face is reading, and over what. The
+                        // collected one adds where it has been, which is what
+                        // the two arcs outside the bands are drawing.
+                        mono(if fi == 0 {
+                            format!("raw \u{b7} {}s", HEADLINE as i64)
+                        } else {
+                            match m.range30 {
+                                Some((l, h)) => format!(
+                                    "{}s held \u{b7} {:.0}\u{2013}{:.0}",
+                                    NEEDLE_SPAN as i64, l, h
+                                ),
+                                None => format!("{}s held", NEEDLE_SPAN as i64),
+                            }
+                        })
+                        .size(9)
+                        .color(self.skin.faint),
                     ]
                     .spacing(0)
                     .align_x(iced::Center),
                 )
-                .width(Length::Fixed(DIAL_W))
+                .width(Length::Fixed(dial_w))
                 .align_x(iced::Center),
             );
         }
@@ -671,30 +1140,52 @@ impl App {
         .spacing(1);
 
         // ---- the cascade captions, over the tiers they describe ---------
-        // A CAPTION HAS TO FIT ITS TIER. Four tiers across a window have room
-        // for "F 4s/bar . 3m"; eight do not, and a caption that wraps lands on
-        // the strip it is labelling. Past five tiers it says the one thing
-        // that cannot be inferred -- how much time a bar holds -- and drops
-        // the rest, which the tier widths already show.
-        let terse = s.strip.len() > 5;
+        //
+        // A CAPTION HAS TO FIT ITS OWN TIER, and the tiers are no longer the
+        // same width as each other. It used to be a count -- more than five
+        // tiers and every caption went terse -- which was right while every
+        // tier was an equal share and became wrong the moment the interleave
+        // was capped to four seconds of it: five tiers, so every caption took
+        // the long form, and the narrow one wrapped "F 1/2s/bar . 4s" over
+        // three lines onto the bars it was labelling.
+        //
+        // So each caption is measured against the pixels ITS tier has, and
+        // takes the longest of three forms that fits. The tier that gets a
+        // twentieth of the width says the one thing that cannot be inferred
+        // -- how much time a bar holds -- and the wide ones still say the
+        // rest.
+        let total: usize = s.strip.iter().map(|t| t.columns).sum::<usize>().max(1);
+        // The canvas's width, which is the window's less the padding either
+        // side. A caption that is a little conservative costs nothing; one
+        // that wraps lands on the chart.
+        let panel_w = (self.size.width - 22.0).max(80.0);
         let mut caps = row![].spacing(0);
         for (ti, t) in s.strip.iter().enumerate() {
+            let room = panel_w * t.columns as f32 / total as f32;
+            let bar = bar_seconds(t.seconds);
+            let long = format!(
+                "{}{}s/bar \u{b7} {}",
+                if ti == 0 { "" } else { "F " },
+                bar,
+                span_words(t.columns as f64 * t.seconds)
+            );
+            let mid = format!("{}s/bar", bar);
+            let short = format!("{}s", bar);
+            // DejaVu Sans Mono advances 0.602 em, and a little over that
+            // here so a caption never sits flush against its neighbour.
+            let fits = |text: &str, size: f32| text.chars().count() as f32 * size * 0.63 <= room;
+            let (text, size) = if fits(&long, 10.0) {
+                (long, 10)
+            } else if fits(&mid, 10.0) {
+                (mid, 10)
+            } else if fits(&short, 9.0) {
+                (short, 9)
+            } else {
+                (String::new(), 9)
+            };
             caps = caps.push(
-                container(
-                    mono(if terse {
-                        format!("{}s", bar_seconds(t.seconds))
-                    } else {
-                        format!(
-                            "{}{}s/bar \u{b7} {}",
-                            if ti == 0 { "" } else { "F " },
-                            bar_seconds(t.seconds),
-                            span_words(t.columns as f64 * t.seconds)
-                        )
-                    })
-                    .size(if terse { 9 } else { 10 })
-                    .color(self.skin.dim),
-                )
-                .width(Length::FillPortion(t.columns as u16)),
+                container(mono(text).size(size).color(self.skin.dim))
+                    .width(Length::FillPortion(t.columns as u16)),
             );
         }
 
@@ -703,16 +1194,29 @@ impl App {
         // canvas cannot contain text at all, so the readouts and the captions
         // are widgets in a stack above it -- laid out by the same engine as
         // the rest, at the same sizes, in the same font.
+        // FILL, SAID OUT LOUD. A `stack` is Shrink by default and its base
+        // layer here is a canvas that is Fill, so the column above measured
+        // this as a shrinking child, handed it the whole of the remaining
+        // height to measure itself against, and got back a panel as tall as
+        // everything left -- which then drew over the emission line and the
+        // clock under it. Visible only on a short window, because a tall one
+        // has height to spare either way; the committed 560x400 screenshot
+        // has the cascade running behind both lines.
+        //
+        // Declaring the height makes it a filling child of a filling column,
+        // which is what it always was, and the space is shared instead of
+        // taken.
         let panel = stack![
             chart,
             column![
                 container(row![dial_faces, Space::new().width(6.0), numbers].spacing(0))
-                    .height(Length::Fixed(cluster_h(tubes))),
+                    .height(Length::Fixed(band_h)),
                 caps,
                 Space::new().height(Fill),
             ]
             .spacing(0),
-        ];
+        ]
+        .height(Fill);
 
         // ---- the spectrum's axis and its verdict ------------------------
         let (shortest, longest) = ladder_ends(&s.layers);
@@ -816,31 +1320,18 @@ fn tube_name(k: usize) -> String {
     format!("{}", (b'A' + (k as u8 % 26)) as char)
 }
 
-/// What the measured interleave is worth, against what n tubes could manage.
+/// The measured interleave, as the panel says it.
 ///
-/// TUBES ONLY SHARPEN TIME IF THEY DISAGREE ABOUT WHEN A SECOND STARTS. Each
-/// has its own clock and its own phase and none can be steered, so the offset
-/// is whatever it is. THE IDEAL IS 1/n OF A SECOND, not half of one: two tubes
-/// perfectly interleaved are half a second apart, nine are a ninth. Measuring
-/// it against a fixed half-second -- which this did until nine counters were
-/// plugged in -- marks a perfect nine-way interleave down to 36%, and marks a
-/// pair that fires together as better than it is.
-///
-/// Near the ideal is a full grid in time. Near zero is every tube reporting at
-/// once, which still multiplies the counts and still buys the precision but
-/// adds no resolution at all -- and claiming "1/9s per bar" in that case would
-/// be a lie the display tells itself.
+/// The arithmetic is `analysis::interleave_quality`, and deliberately not
+/// here: the terminal and the exported page report the same number, and a
+/// figure that disagreed between them would be the exact class of bug the
+/// differential suite exists to catch. This is only the wording.
 fn phase_note(gap: f64, tubes: usize) -> String {
-    let ideal = 1.0 / tubes.max(2) as f64;
-    // A RATIO, NOT A DISTANCE FROM IDEAL. The obvious form -- one minus the
-    // relative error -- hits zero the moment the gap is twice the ideal and
-    // goes negative after, so nine free-running tubes averaging 0.24s against
-    // an ideal of 0.11s were reported as 0%: a rig that is in fact spreading
-    // its samples out over most of the second, dismissed as doing nothing.
-    // The smaller over the larger is scale-free, symmetric, and degrades the
-    // way the thing it measures does.
-    let quality = if gap > 0.0 { ideal.min(gap) / ideal.max(gap) } else { 0.0 };
-    format!("\u{b7} interleave {:.2}s ({:.0}%)", gap, quality * 100.0)
+    format!(
+        "\u{b7} interleave {:.2}s ({:.0}%)",
+        gap,
+        100.0 * interleave_quality(gap, tubes)
+    )
 }
 
 fn layer_verdict(l: &Layer, shortest: usize, longest: usize) -> String {
@@ -928,12 +1419,22 @@ struct Face {
     /// raw meter has none: a range needs one needle to be the range OF.
     range30: Option<(f64, f64)>,
     range60: Option<(f64, f64)>,
+    /// The slow pointer: the half-minute mean, which is the window the big
+    /// number is quoted over. Where the needle is going if nothing changes.
+    pointer: Option<f64>,
+    /// How heavy the needle is. Zero draws the thin stroked kind, which is
+    /// what several needles on one face need. See NEEDLE_RAW.
+    weight: f32,
 }
 
 struct Chart {
     skin: Skin,
-    /// The dial band's height, which depends on the tube count. See cluster_h.
+    /// The dial band's height, which depends on the tube count and on how
+    /// much room the window has. See cluster_h and dial_scale.
     cluster: f32,
+    /// How big the faces are drawn, relative to their smallest. The widgets
+    /// stacked over them are laid out from the same number.
+    scale: f32,
     /// The cascade's vertical scale, held steady by the feed. See PEAK_TAU.
     peak: f64,
     dials: Vec<Face>,
@@ -988,14 +1489,21 @@ impl Chart {
 
         for (k, face) in self.dials.iter().enumerate() {
             let full = face.full;
-            let cx = DIAL_W * (k as f32 + 0.5);
-            let cy = self.cluster * 0.5;
+            let (dial_r, dial_w) = (DIAL_R * self.scale, DIAL_W * self.scale);
+            let cx = dial_w * (k as f32 + 0.5);
+            // A FIXED HEIGHT, NOT THE MIDDLE OF THE BAND. The band grows by a
+            // row for every five tubes, and a face that followed it slid down
+            // away from the numerals stacked over it -- which are laid out by
+            // the widget engine against the top of the panel and cannot
+            // follow. Pinning the face means the digits sit in the same place
+            // on it with one tube or with nine.
+            let cy = DIAL_CY * self.scale;
             let c = iced::Point::new(cx, cy);
 
             // The face, and the bezel around it.
-            frame.fill(&Path::circle(c, DIAL_R), self.skin.face);
+            frame.fill(&Path::circle(c, dial_r), self.skin.face);
             frame.stroke(
-                &Path::circle(c, DIAL_R),
+                &Path::circle(c, dial_r),
                 Stroke::default().with_width(2.0).with_color(Color { a: 0.5, ..self.skin.bezel }),
             );
 
@@ -1010,7 +1518,7 @@ impl Chart {
                 let arc = Path::new(|b| {
                     b.arc(canvas::path::Arc {
                         center: c,
-                        radius: DIAL_R * radius,
+                        radius: dial_r * radius,
                         start_angle: Radians(a0),
                         end_angle: Radians(a1),
                     });
@@ -1035,8 +1543,8 @@ impl Chart {
                 let t = i as f32 / 50.0;
                 let a = start + sweep * t;
                 let major = i % 5 == 0;
-                let r1 = DIAL_R * if major { 0.66 } else { 0.73 };
-                let r2 = DIAL_R * 0.79;
+                let r1 = dial_r * if major { 0.66 } else { 0.73 };
+                let r2 = dial_r * 0.79;
                 let p1 = iced::Point::new(cx + r1 * a.cos(), cy + r1 * a.sin());
                 let p2 = iced::Point::new(cx + r2 * a.cos(), cy + r2 * a.sin());
                 frame.stroke(
@@ -1058,7 +1566,7 @@ impl Chart {
             // holds a unique borrow, and two closures cannot both have one.
             let bug = |frame: &mut canvas::Frame, value: f64, radius: f32, width: f32| {
                 let a = start + sweep * dial_fraction(value, full) as f32;
-                let (r0, r1) = (DIAL_R * (radius - 0.05), DIAL_R * (radius + 0.05));
+                let (r0, r1) = (dial_r * (radius - 0.05), dial_r * (radius + 0.05));
                 frame.stroke(
                     &Path::line(
                         iced::Point::new(cx + r0 * a.cos(), cy + r0 * a.sin()),
@@ -1077,7 +1585,50 @@ impl Chart {
                 bug(frame, hi, radius, width + 0.5);
             }
 
-            // A NEEDLE PER TUBE ON THIS self.skin.face, each in its own colour and each
+            // THE SLOW POINTER: the half minute, under the needle.
+            //
+            // A DIAL CAN SHOW TWO TIME CONSTANTS AT ONCE AND A NUMBER CANNOT,
+            // which is most of the argument for drawing a dial at all. The
+            // needle is three seconds and moves; this is thirty and barely
+            // does, so the gap between them IS the trend -- needle above
+            // pointer is a rising room, and the two together are the reading
+            // and its context in one glance.
+            //
+            // DRAWN AS A REFERENCE AND NOT AS A SECOND NEEDLE: no
+            // counterweight, chrome rather than a band colour, and stopping
+            // short of the hub. It must never be mistaken for the reading.
+            if let Some(v) = face.pointer {
+                let a = start + sweep * dial_fraction(v, full) as f32;
+                let (r0, r1) = (dial_r * 0.30, dial_r * 0.795);
+                let (ca, sa) = (a.cos(), a.sin());
+                frame.stroke(
+                    &Path::line(
+                        iced::Point::new(cx + r0 * ca, cy + r0 * sa),
+                        iced::Point::new(cx + r1 * ca, cy + r1 * sa),
+                    ),
+                    Stroke::default()
+                        .with_width(1.4)
+                        .with_color(Color { a: 0.85, ..self.skin.bezel }),
+                );
+                // A diamond at the tip, so which end is pointing is not a
+                // question the eye has to work out from the hub.
+                let (px, py) = (-sa, ca);
+                let mid = dial_r * 0.70;
+                let w = 2.6f32;
+                let kite = Path::new(|b| {
+                    b.move_to(iced::Point::new(cx + r1 * ca, cy + r1 * sa));
+                    b.line_to(iced::Point::new(cx + mid * ca + px * w, cy + mid * sa + py * w));
+                    b.line_to(iced::Point::new(
+                        cx + (mid - dial_r * 0.08) * ca,
+                        cy + (mid - dial_r * 0.08) * sa,
+                    ));
+                    b.line_to(iced::Point::new(cx + mid * ca - px * w, cy + mid * sa - py * w));
+                    b.close();
+                });
+                frame.fill(&kite, Color { a: 0.9, ..self.skin.bezel });
+            }
+
+            // A NEEDLE PER TUBE ON THIS FACE, each in its own colour and each
             // a little shorter than the one before, so two tubes reading the
             // same number are two needles that can still be told apart
             // instead of one that has swallowed the other.
@@ -1085,27 +1636,55 @@ impl Chart {
             for (j, (tube, value)) in face.needles.iter().enumerate() {
                 let Some(v) = value else { continue };
                 let a = start + sweep * dial_fraction(*v, full) as f32;
-                let reach = DIAL_R * (0.74 - 0.05 * (j as f32).min(4.0));
-                let tip = iced::Point::new(cx + reach * a.cos(), cy + reach * a.sin());
+                let reach = dial_r * (0.74 - 0.05 * (j as f32).min(4.0));
+                let (ca, sa) = (a.cos(), a.sin());
+                let tint = if *tube == usize::MAX {
+                    self.skin.face_colour(band(*v))
+                } else {
+                    self.skin.face_tube(*tube)
+                };
                 // A counterweight the other side of the hub, as a real needle
                 // has: it is what stops the dial looking like a clock hand.
-                let tail = iced::Point::new(
-                    cx - DIAL_R * 0.16 * a.cos(),
-                    cy - DIAL_R * 0.16 * a.sin(),
-                );
-                frame.stroke(
-                    &Path::line(tail, tip),
-                    Stroke::default()
-                        .with_width(if n > 3 { 1.8 } else { 2.5 })
-                        .with_color(if *tube == usize::MAX {
-                            self.skin.face_colour(band(*v))
-                        } else {
-                            self.skin.face_tube(*tube)
-                        }),
-                );
+                let back = dial_r * 0.17;
+                if face.weight <= 0.0 {
+                    frame.stroke(
+                        &Path::line(
+                            iced::Point::new(cx - back * ca, cy - back * sa),
+                            iced::Point::new(cx + reach * ca, cy + reach * sa),
+                        ),
+                        Stroke::default()
+                            .with_width(if n > 3 { 1.8 } else { 2.5 })
+                            .with_color(tint),
+                    );
+                    continue;
+                }
+                // THE HEAVY KIND: a filled taper rather than a stroke, which
+                // is the only way to be wide at the hub and sharp at the tip.
+                // A stroke of this width would be a rectangle with a blunt
+                // end, and a blunt end on a dial is a reading you cannot take
+                // to better than a couple of degrees.
+                let (px, py) = (-sa, ca);
+                let half = face.weight;
+                let tail = half * 0.55;
+                let needle = Path::new(|b| {
+                    b.move_to(iced::Point::new(cx + reach * ca, cy + reach * sa));
+                    b.line_to(iced::Point::new(cx + px * half, cy + py * half));
+                    b.line_to(iced::Point::new(
+                        cx - back * ca + px * tail,
+                        cy - back * sa + py * tail,
+                    ));
+                    b.line_to(iced::Point::new(
+                        cx - back * ca - px * tail,
+                        cy - back * sa - py * tail,
+                    ));
+                    b.line_to(iced::Point::new(cx - px * half, cy - py * half));
+                    b.close();
+                });
+                frame.fill(&needle, tint);
             }
-            frame.fill(&Path::circle(c, 4.0), self.skin.bezel);
-            frame.fill(&Path::circle(c, 2.0), Color { a: 0.9, ..self.skin.face });
+            // The hub last, over every needle's root, as a real one is.
+            frame.fill(&Path::circle(c, 5.0), self.skin.bezel);
+            frame.fill(&Path::circle(c, 2.4), Color { a: 0.9, ..self.skin.face });
         }
     }
 
@@ -1136,11 +1715,30 @@ impl Chart {
             // A tier's own patch of background, a shade apart from its
             // neighbours, so the hand-over from one resolution to the next is
             // visible rather than something you have to be told about.
-            if ti % 2 == 1 {
+            let interleave = ti + 1 == self.strip.len() && self.tubes > 1;
+            if ti % 2 == 1 || interleave {
                 frame.fill_rectangle(
                     iced::Point::new(x0, top + tick),
                     iced::Size::new(w, height),
                     self.skin.tier_wash(),
+                );
+            }
+            // AND A LINE AT THE ONE BOUNDARY THAT IS NOT A DOUBLING. Every
+            // hand-over to the left of it is the same measurement over twice
+            // as long; this one is where the strip stops measuring TIME and
+            // starts measuring ARRIVAL -- a bar to the right of it is one
+            // tube's one-second reading placed where it landed, and 1/n is
+            // its spacing and not its window. The alternating wash says
+            // "another tier" and cannot say that.
+            //
+            // It is a narrow tier now that it is capped to four seconds of
+            // the rota, so the line also stops it reading as a stray gap at
+            // the edge of the strip.
+            if interleave {
+                frame.fill_rectangle(
+                    iced::Point::new(x0 - 1.0, top + tick),
+                    iced::Size::new(1.0, height),
+                    Color { a: 0.45, ..self.skin.hud },
                 );
             }
             // THE FINEST TIER IS THE ONE THAT KNOWS WHO SAID WHAT. Every bar
@@ -1372,10 +1970,25 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                 // one time base.
                 let mut sec_bin: Option<i64> = None;
                 let mut sec_sum: u32 = 0;
-                // What the collecting meter shows, and where it has been.
-                let mut live: Option<f64> = None;
+                // WHAT THE COLLECTING METER SHOWS, AND WHERE IT HAS BEEN.
+                //
+                // THE ARRIVALS, NOT THE CLOSED SECONDS. This waited for a
+                // second to CLOSE before it had a reading for it -- which
+                // means waiting for the first sample of the NEXT second, so
+                // the needle was always showing a second that had already
+                // finished, and with several tubes it was whichever tube
+                // happened to tick over first that ended the wait. A rolling
+                // window over the arrivals themselves has a reading for the
+                // second just gone the moment it is gone. See `Recent`.
+                let mut recent = Recent::default();
                 let mut d30 = Drift::new(30.0);
                 let mut d60 = Drift::new(60.0);
+                // The needle, which has mass. See `Ballistic`.
+                let mut needle = Ballistic::new(0.25, 0.9);
+                let mut meters = Meters::default();
+                let mut was = Meters::default();
+                let mut metered = Instant::now();
+                let mut heard = Instant::now();
                 let mut peak_hold = 0.0f64;
                 // For the interleave measurement: when the previous sample
                 // landed, and which tube it came from.
@@ -1384,98 +1997,156 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                 let mut replaying = true;
                 let mut sent = Instant::now() - Duration::from_secs(1);
 
-                // Ten seconds, where a sample is due every one: a gap that
-                // long means the server has gone, not that a counter is quiet.
-                while let Some(event) = client.next(Duration::from_secs(10)) {
-                    match event {
-                        Event::Sample { who, when, counts } => {
-                            let who = who.min(tubes - 1);
-                            all.add(when, counts);
-                            each[who].add(when, counts);
-                            if let Some((prev, t)) = last {
-                                if prev != who && when > t {
-                                    gaps.0 += when - t;
-                                    gaps.1 += 1;
-                                }
+                // A SHORT POLL AND A COUNTED SILENCE, rather than a long
+                // blocking read. The needle has to move between samples and
+                // the snapshot is too heavy to send at that rate, so this
+                // wakes twelve times a second whatever the counters are
+                // doing. `Poll` is what keeps "nothing yet" apart from "the
+                // server has gone" -- with `next` they are the same `None`,
+                // and every one of these wake-ups would have read as the
+                // counter stopping.
+                loop {
+                    let event = match client.poll(Duration::from_millis(METER_MS)) {
+                        Poll::Event(e) => {
+                            heard = Instant::now();
+                            Some(e)
+                        }
+                        // Nothing on the wire. Still a chance to move the
+                        // needle -- and, after long enough, the end.
+                        Poll::Idle => {
+                            if heard.elapsed() >= ADRIFT_AFTER {
+                                break;
                             }
-                            last = Some((who, when));
-                            if merged.len() == STRIP_KEEP {
-                                merged.pop_front();
-                                sources.pop_front();
-                                dropped += 1;
-                            }
-                            merged.push_back(counts as f64);
-                            sources.push_back(who as u8);
-                            now = counts;
-                            let this = when.floor() as i64;
-                            match sec_bin {
-                                Some(b) if b == this => sec_sum += counts,
-                                Some(was) => {
-                                    for r in ladder.iter_mut() {
-                                        r.add(sec_sum);
+                            None
+                        }
+                        Poll::Closed => break,
+                    };
+                    if let Some(event) = event {
+                        match event {
+                            Event::Sample { who, when, counts } => {
+                                let who = who.min(tubes - 1);
+                                all.add(when, counts);
+                                each[who].add(when, counts);
+                                if let Some((prev, t)) = last {
+                                    if prev != who && when > t {
+                                        gaps.0 += when - t;
+                                        gaps.1 += 1;
                                     }
-                                    // A SECOND HAS CLOSED, so the collecting
-                                    // meter has a reading: the whole-second
-                                    // sum across every tube, as a rate, which
-                                    // is the mean the tubes agree on and not
-                                    // their sum.
-                                    let cpm = sec_sum as f64 * 60.0 / tubes as f64;
-                                    let dt = ((this - was) as f64).clamp(1.0, 60.0);
-                                    if !replaying {
-                                        d30.push(cpm, dt);
-                                        d60.push(cpm, dt);
+                                }
+                                last = Some((who, when));
+                                if merged.len() == STRIP_KEEP {
+                                    merged.pop_front();
+                                    sources.pop_front();
+                                    dropped += 1;
+                                }
+                                merged.push_back(counts as f64);
+                                sources.push_back(who as u8);
+                                recent.push(when, counts);
+                                now = counts;
+                                let this = when.floor() as i64;
+                                match sec_bin {
+                                    Some(b) if b == this => sec_sum += counts,
+                                    Some(_) => {
+                                        // The SPECTRA still want whole seconds --
+                                        // a period is a property of the room on
+                                        // one time base -- and only they do. The
+                                        // meters no longer wait for this.
+                                        for r in ladder.iter_mut() {
+                                            r.add(sec_sum);
+                                        }
+                                        sec_bin = Some(this);
+                                        sec_sum = counts;
                                     }
-                                    live = Some(cpm);
-                                    sec_bin = Some(this);
-                                    sec_sum = counts;
+                                    None => {
+                                        sec_bin = Some(this);
+                                        sec_sum = counts;
+                                    }
                                 }
-                                None => {
-                                    sec_bin = Some(this);
-                                    sec_sum = counts;
+                                // NOT DURING THE REPLAY. The server's pool holds
+                                // the counts since its last draw; pouring hours of
+                                // history into this one would have it claim a line
+                                // the moment the window opened.
+                                if !replaying {
+                                    pool.add(counts);
                                 }
                             }
-                            // NOT DURING THE REPLAY. The server's pool holds
-                            // the counts since its last draw; pouring hours of
-                            // history into this one would have it claim a line
-                            // the moment the window opened.
-                            if !replaying {
-                                pool.add(counts);
+                            Event::Live => replaying = false,
+                            // A tube joined, or came back. Its slot is its
+                            // serial's, so a counter that was unplugged and put
+                            // back resumes its own colour and its own windows
+                            // rather than appearing as a stranger.
+                            Event::Counter { who, .. } => {
+                                id = client.identity().clone();
+                                tubes = id.len().max(1);
+                                while each.len() < tubes {
+                                    each.push(Windows::new(&id.spans));
+                                }
+                                present.resize(tubes, false);
+                                if let Some(p) = present.get_mut(who) {
+                                    *p = true;
+                                }
+                                each[who] = Windows::new(&id.spans);
                             }
-                        }
-                        Event::Live => replaying = false,
-                        // A tube joined, or came back. Its slot is its
-                        // serial's, so a counter that was unplugged and put
-                        // back resumes its own colour and its own windows
-                        // rather than appearing as a stranger.
-                        Event::Counter { who, .. } => {
-                            id = client.identity().clone();
-                            tubes = id.len().max(1);
-                            while each.len() < tubes {
-                                each.push(Windows::new(&id.spans));
+                            Event::Gone { who } => {
+                                if let Some(p) = present.get_mut(who) {
+                                    *p = false;
+                                }
                             }
-                            present.resize(tubes, false);
-                            if let Some(p) = present.get_mut(who) {
-                                *p = true;
+                            Event::Random { who, hex, at, suspect } => {
+                                random = Some((who.min(tubes - 1), hex, at, suspect));
+                                pool.reset();
                             }
-                            each[who] = Windows::new(&id.spans);
-                        }
-                        Event::Gone { who } => {
-                            if let Some(p) = present.get_mut(who) {
-                                *p = false;
+                            Event::Row { row, .. } => {
+                                if rows.len() == ROWS {
+                                    rows.pop_front();
+                                }
+                                rows.push_back(row.split('\t').map(str::to_string).collect());
                             }
-                        }
-                        Event::Random { who, hex, at, suspect } => {
-                            random = Some((who.min(tubes - 1), hex, at, suspect));
-                            pool.reset();
-                        }
-                        Event::Row { row, .. } => {
-                            if rows.len() == ROWS {
-                                rows.pop_front();
-                            }
-                            rows.push_back(row.split('\t').map(str::to_string).collect());
                         }
                     }
-                    if replaying || sent.elapsed() < Duration::from_millis(900) {
+                    if replaying {
+                        continue;
+                    }
+                    // ---- the meters, on their own beat ------------------
+                    //
+                    // BEFORE THE SNAPSHOT AND INDEPENDENT OF IT. This is the
+                    // part that has to be quick: a rolling read of the last
+                    // one, three and thirty seconds of arrivals, and one step
+                    // of the needle toward the three-second one.
+                    let dt = metered.elapsed().as_secs_f64();
+                    if dt >= METER_MS as f64 / 1000.0 {
+                        metered = Instant::now();
+                        // The window ends NOW, not at the last sample: a tube
+                        // that has gone quiet has to show as the room going
+                        // quiet, and it cannot if the window follows it.
+                        // Never ahead of the newest sample, though, or a
+                        // replay would read its own history as stale.
+                        let at = recent
+                            .newest()
+                            .map(|t| clock::now().max(t))
+                            .unwrap_or_else(clock::now);
+                        meters.live = recent.rate(at, 1.0);
+                        meters.live3 = recent.rate(at, NEEDLE_SPAN);
+                        meters.live30 = recent.rate(at, POINTER_SPAN);
+                        // THE BUGS FOLLOW THE NEEDLE, not the raw second.
+                        // They are the range the needle has been bouncing
+                        // between, and a range drawn around a number the
+                        // needle never showed is a range of nothing.
+                        if let Some(v) = meters.live3 {
+                            meters.needle = Some(needle.push(v, dt));
+                            d30.push(v, dt);
+                            d60.push(v, dt);
+                        } else {
+                            meters.needle = needle.at();
+                        }
+                        meters.range30 = d30.range();
+                        meters.range60 = d60.range();
+                        if meters.worth_sending(&was) {
+                            was = meters;
+                            let _ = out.try_send(Message::Moved(meters));
+                        }
+                    }
+                    if sent.elapsed() < Duration::from_millis(900) {
                         continue;
                     }
                     sent = Instant::now();
@@ -1534,9 +2205,6 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                         total: all.total,
                         phase: (gaps.1 > 0).then(|| gaps.0 / gaps.1 as f64),
                         strip,
-                        live,
-                        range30: d30.range(),
-                        range60: d60.range(),
                         peak: peak_hold,
                         sources: sources.iter().rev().take(STRIP_COLS).rev().copied().collect(),
                         samples: (dropped + merged.len()) as i64,
@@ -1873,30 +2541,173 @@ mod tests {
         assert!(layer_floor(2, 2, 4) >= 2.0);
     }
 
-    /// THE IDEAL INTERLEAVE IS 1/n, NOT HALF A SECOND. A perfect nine-way
-    /// interleave was being marked at 36% against a hard-coded pair.
+    /// The panel says the gap and what it is worth, in that order. The
+    /// arithmetic behind the percentage is pinned in `analysis`, which is
+    /// where it now lives so that the terminal and the exported page cannot
+    /// disagree with this window about it.
     #[test]
-    fn the_interleave_is_judged_against_what_this_many_tubes_could_manage() {
-        assert!(phase_note(0.5, 2).contains("100%"), "{}", phase_note(0.5, 2));
-        assert!(phase_note(1.0 / 9.0, 9).contains("100%"), "{}", phase_note(1.0 / 9.0, 9));
-        // Tubes firing together buy precision and no time at all.
-        assert!(phase_note(0.0, 2).contains("0%"));
-        // And a pair's ideal is not nine's.
-        assert!(!phase_note(0.5, 9).contains("100%"));
-        // Twice the ideal gap is half a grid, not no grid: the old form
-        // called this zero, and called anything wider than it zero too.
-        assert!(phase_note(0.25, 2).contains("50%"), "{}", phase_note(0.25, 2));
-        assert!(phase_note(1.0, 2).contains("50%"), "{}", phase_note(1.0, 2));
-        assert!(phase_note(0.24, 9).contains("46%"), "{}", phase_note(0.24, 9));
+    fn the_panel_prints_the_gap_and_what_it_is_worth() {
+        assert_eq!(phase_note(0.5, 2), "\u{b7} interleave 0.50s (100%)");
+        assert_eq!(phase_note(0.24, 9), "\u{b7} interleave 0.24s (46%)");
+        assert_eq!(phase_note(0.0, 2), "\u{b7} interleave 0.00s (0%)");
     }
 
     /// The dial band grows by a row of numbers for every five tubes, so nine
     /// counters cannot push their readings onto the cascade's captions.
     #[test]
     fn the_dial_band_makes_room_for_the_readings_beside_it() {
-        assert_eq!(cluster_h(1), CLUSTER_H, "one tube needs no grid at all");
-        assert!(cluster_h(9) > cluster_h(2));
-        assert_eq!(cluster_h(9), CLUSTER_H + 24.0, "nine is two rows of five");
+        assert_eq!(cluster_h(1, 1.0), CLUSTER_H, "one tube needs no grid at all");
+        assert!(cluster_h(9, 1.0) > cluster_h(2, 1.0));
+        assert_eq!(cluster_h(9, 1.0), CLUSTER_H + 24.0, "nine is two rows of five");
+        // The faces grow with the window; the rows of per-tube readings are
+        // text beside them and do not.
+        assert_eq!(cluster_h(9, 2.0), CLUSTER_H * 2.0 + 24.0);
+    }
+
+    /// THE READING DOES NOT WAIT FOR THE SECOND AFTER IT. This used to close
+    /// a second only when the FIRST SAMPLE OF THE NEXT ONE arrived, so the
+    /// needle was always showing a second that had already finished -- and
+    /// with several tubes it was whichever tube happened to tick over first
+    /// that ended the wait, which is a delay that grows with the rig.
+    #[test]
+    fn a_second_is_readable_as_soon_as_it_has_gone_by() {
+        let mut r = Recent::default();
+        // Two tubes, interleaved half a second apart, five counts each.
+        r.push(100.0, 5);
+        r.push(100.5, 5);
+        // The moment that second is behind us -- no sample from the next one
+        // has arrived, and none is needed.
+        assert_eq!(r.rate(101.0, 1.0), Some(300.0), "five a second is 300 CPM");
+    }
+
+    /// THE DIVISOR IS THE SAMPLES, NOT THE SPAN TIMES THE TUBES. A tube that
+    /// has stopped answering must not read as the room having gone quiet:
+    /// what is left is fewer measurements of the same number, not a lower
+    /// number.
+    #[test]
+    fn a_tube_dropping_out_is_not_the_room_going_quiet() {
+        let mut both = Recent::default();
+        let mut alone = Recent::default();
+        for i in 0..3 {
+            let t = 100.0 + i as f64;
+            both.push(t, 5);
+            both.push(t + 0.5, 5);
+            alone.push(t, 5);
+        }
+        // Same room, one tube or two: the same answer, from half the
+        // evidence. Dividing by span * tubes would have called the second one
+        // 150 CPM -- the room halved, because an instrument was unplugged.
+        assert_eq!(both.rate(103.0, NEEDLE_SPAN), Some(300.0));
+        assert_eq!(alone.rate(103.0, NEEDLE_SPAN), Some(300.0));
+    }
+
+    /// ARRIVAL ORDER IS NOT QUITE TIME ORDER. The tubes are read on separate
+    /// threads, so a sample stamped a little earlier can be delivered a
+    /// little later. Scanning back to the first sample outside the window
+    /// would stop at the inversion and throw away everything before it --
+    /// which, for a one-second window holding two samples, is the reading.
+    #[test]
+    fn a_sample_delivered_out_of_order_is_still_in_its_window() {
+        let mut r = Recent::default();
+        // Tube B's 9.95 lands after tube A's 10.00, as it can.
+        r.push(10.00, 4);
+        r.push(9.95, 6);
+        // Both are inside the second ending at 10.4, and both count.
+        assert_eq!(r.rate(10.4, 1.0), Some(300.0), "5 a second across two tubes");
+        // And the window's edge is still the time, not the position: half a
+        // second back from 10.4 excludes the 9.95 and keeps the 10.00,
+        // whatever order they arrived in.
+        assert_eq!(r.rate(10.4, 0.45), Some(240.0), "only the 10.00 sample");
+        // The newest is the newest, whichever arrived last.
+        assert_eq!(r.newest(), Some(10.00));
+    }
+
+    /// Nothing heard in the window is None, which the dial holds, and never
+    /// zero, which the dial would draw as a counter reading nothing.
+    #[test]
+    fn a_window_with_no_arrivals_in_it_says_so() {
+        let mut r = Recent::default();
+        assert_eq!(r.rate(100.0, 1.0), None, "before anything at all");
+        r.push(100.0, 7);
+        assert_eq!(r.rate(100.5, 1.0), Some(420.0));
+        // Long after, with the sample outside the window.
+        assert_eq!(r.rate(120.0, 1.0), None);
+        // And the half-minute pointer still has it.
+        assert_eq!(r.rate(120.0, POINTER_SPAN), Some(420.0));
+    }
+
+    /// THE NEEDLE LEANS BOTH WAYS, and further one way than the other: out
+    /// fast so a source passing under the tube is not smoothed away, back
+    /// slower so one Poisson lump does not read as a spike.
+    #[test]
+    fn the_needle_moves_out_faster_than_it_settles_back() {
+        // It starts where the reading is. Attaching to a service that has
+        // been up since breakfast must not sweep the needle off the stop.
+        let mut n = Ballistic::new(0.25, 0.9);
+        assert_eq!(n.at(), None, "a needle that has read nothing says so");
+        assert_eq!(n.push(200.0, 0.08), 200.0);
+        assert_eq!(n.at(), Some(200.0));
+
+        // A step up, and the same step back down, over the same time.
+        let mut up = Ballistic::new(0.25, 0.9);
+        up.push(100.0, 0.08);
+        let mut down = Ballistic::new(0.25, 0.9);
+        down.push(200.0, 0.08);
+        let rose = up.push(200.0, 0.25) - 100.0;
+        let fell = 200.0 - down.push(100.0, 0.25);
+        assert!(rose > fell * 2.0, "rose {} fell {}", rose, fell);
+
+        // It arrives, rather than creeping forever: a needle that never
+        // reaches the reading is a needle that cannot be read off.
+        let mut n = Ballistic::new(0.25, 0.9);
+        n.push(0.0, 0.08);
+        for _ in 0..200 {
+            n.push(120.0, 0.08);
+        }
+        assert!((n.at().unwrap() - 120.0).abs() < 0.01, "{:?}", n.at());
+    }
+
+    /// A STEADY READING SENDS NOTHING. Twelve messages a second is twelve
+    /// full re-renders of the panel on the software renderer this usually
+    /// runs on, and the ordinary case is a needle that has settled.
+    #[test]
+    fn the_meters_only_travel_when_the_needle_has_moved() {
+        let settled = Meters { needle: Some(34.0), live: Some(30.0), ..Meters::default() };
+        assert!(!settled.worth_sending(&settled));
+        let nudged = Meters { needle: Some(34.02), ..settled };
+        assert!(!nudged.worth_sending(&settled), "a hundredth of a CPM is not a frame");
+        let moved = Meters { needle: Some(35.0), ..settled };
+        assert!(moved.worth_sending(&settled));
+        // A reading appearing or going away is always worth drawing.
+        let gone = Meters { needle: None, ..settled };
+        assert!(gone.worth_sending(&settled));
+        // So is the range, which moves in steps of its own.
+        let ranged = Meters { range30: Some((10.0, 90.0)), ..settled };
+        assert!(ranged.worth_sending(&settled));
+    }
+
+    /// THE CLUSTER GROWS INTO A WIDE WINDOW AND NEVER SHRINKS BELOW ITS
+    /// MINIMUM. The small-window layout is the one measured against a
+    /// 560x400 tile, and nothing about making a maximised window look right
+    /// may make that worse.
+    #[test]
+    fn the_dials_grow_with_the_glass_and_never_below_their_minimum() {
+        let at = |w: f32, h: f32| dial_scale(iced::Size::new(w, h), 2);
+        // The tile this was laid out for: unchanged, exactly 1.
+        assert_eq!(at(560.0, 400.0), 1.0);
+        // The default window is not a tile, it is a window somebody opened,
+        // and it has room to spare in both directions.
+        let default = at(760.0, 900.0);
+        assert!(default > 1.0 && default <= DIAL_MAX_SCALE, "{}", default);
+        // A maximised window on this desk has room, and uses it.
+        assert!(at(1262.0, 756.0) > 1.3, "{}", at(1262.0, 756.0));
+        // But never past the point where a dial stops being an instrument.
+        assert_eq!(at(6000.0, 4000.0), DIAL_MAX_SCALE);
+        // A window that is wide and SHORT is still short: the charts do not
+        // give up their height to a pair of dials.
+        assert_eq!(at(3000.0, 400.0), 1.0, "height is a budget too");
+        // And one that is tall and narrow is still narrow.
+        assert_eq!(at(560.0, 4000.0), 1.0);
     }
 
     /// A dial reads the same fraction of its sweep for the same fraction of
