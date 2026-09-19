@@ -334,6 +334,8 @@ impl Snapshot {
 enum Message {
     Update(Box<Snapshot>),
     Adrift(String),
+    /// The window changed size. See `App::view`: what gets dropped first.
+    Resized(iced::Size),
 }
 
 // ------------------------------------------------------------------- state ---
@@ -342,12 +344,20 @@ struct App {
     shot: Option<Snapshot>,
     adrift: String,
     cpm_per_usvh: f64,
+    /// What the compositor has actually given us, which on a tiling desktop
+    /// is whatever is left after every other window has had its share.
+    size: iced::Size,
 }
 
 impl App {
     fn new() -> (App, iced::Task<Message>) {
         (
-            App { shot: None, adrift: "looking for the counters...".into(), cpm_per_usvh: 153.8 },
+            App {
+                shot: None,
+                adrift: "looking for the counters...".into(),
+                cpm_per_usvh: 153.8,
+                size: iced::Size::new(760.0, 900.0),
+            },
             iced::Task::none(),
         )
     }
@@ -366,6 +376,7 @@ impl App {
                 self.shot = None;
                 self.adrift = why;
             }
+            Message::Resized(size) => self.size = size,
         }
     }
 
@@ -378,11 +389,15 @@ impl App {
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        // ONE SOURCE, AND NO TIMER BESIDE IT. A snapshot lands every second
-        // while anything is attached, which is the same beat a clock tick
-        // would have had -- and `iced::time::every` needs a tokio or smol
-        // backend this crate deliberately does not carry.
-        Subscription::run(feed)
+        // ONE SOURCE OF DATA, AND NO TIMER BESIDE IT. A snapshot lands every
+        // second while anything is attached, which is the same beat a clock
+        // tick would have had -- and `iced::time::every` needs a tokio or
+        // smol backend this crate deliberately does not carry. The other
+        // subscription is not data; it is how much room there is to put it in.
+        Subscription::batch([
+            Subscription::run(feed),
+            iced::window::resize_events().map(|(_, size)| Message::Resized(size)),
+        ])
     }
 
     fn view(&self) -> Element<'_, Message> {
@@ -732,11 +747,28 @@ impl App {
             .size(10)
             .color(FAINT);
 
-        let table: Element<Message> = if s.rows.is_empty() {
+        // WHAT GOES FIRST WHEN THERE IS NO ROOM. A tiling compositor will
+        // hand this window a quarter of a screen without asking, and
+        // everything above was sized as though it would not: the charts are
+        // Fill and everything else is fixed, so at 373 pixels the fixed
+        // content took the lot and the cascade collapsed to nothing. The
+        // charts ARE the instrument -- they are the last thing to go, not the
+        // first. So the log table goes, then the per-layer verdicts, then the
+        // axis, in that order, and what is left keeps its shape.
+        let room = self.size.height;
+        let (want_table, want_verdicts, want_axis) =
+            (room >= 620.0, room >= 500.0, room >= 430.0);
+        let table: Element<Message> = if s.rows.is_empty() || !want_table {
             Space::new().into()
         } else {
+            // Fewer rows on a shorter window, rather than none.
+            // 700 and not 760: a full-height tile on a 800-pixel screen is
+            // 756 after the bar and the gaps, and that is the commonest
+            // window this will ever be in. A threshold above it would give
+            // the short table to the ordinary case.
+            let keep = if room >= 700.0 { ROWS } else { 3 };
             let mut t = column![mono(cells(&s.columns)).size(9).color(FAINT)].spacing(0);
-            for r in &s.rows {
+            for r in s.rows.iter().rev().take(keep).rev() {
                 t = t.push(mono(cells(r)).size(9).color(DIM));
             }
             t.into()
@@ -746,8 +778,8 @@ impl App {
             column![
                 who,
                 panel,
-                axis,
-                verdicts,
+                if want_axis { axis.into() } else { Element::from(Space::new()) },
+                if want_verdicts { verdicts.into() } else { Element::from(Space::new()) },
                 random,
                 now,
                 table,
