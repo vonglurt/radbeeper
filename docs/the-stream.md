@@ -271,10 +271,27 @@ difference between seeing a one-second modulation and aliasing it.
 
 ### D. The fifth tier
 
-`analysis::tiers` was generalised (`tiers_with`) to take a sample unit and a
-tier count, so a bar may cover a fractional second. With one counter the cascade
-is unchanged at `8s · 4s · 2s · 1s`; with two it grows a fifth tier and runs
-`8s · 4s · 2s · 1s · 0.5s`, the unit being 1/*tubes*.
+`analysis::tiers` was generalised so a bar may cover a fractional second. With
+one counter the cascade is unchanged at `8s · 4s · 2s · 1s`; with any number
+above one it grows **exactly one** more tier and runs `8s · 4s · 2s · 1s · 1/n`
+— `1/2` for two tubes, `1/9` for nine.
+
+**One tier, not one per doubling**, and the first attempt got this wrong. Adding
+a tier per doubling of the tube count keeps the ratio between neighbours at two,
+which looks like the invariant worth protecting; it is not. Every tier at or
+above a second aggregates *time* — a 4-second bar is four seconds of the room,
+and halving it is a finer view of the room. The fine tier aggregates nothing: a
+bar in it is one tube's whole one-second reading, placed where it arrived, so
+1/n is its **spacing and not its integration window**. Tiers between the two —
+2/9, 4/9, 8/9 of a second — are therefore neither. They average measurements
+that each already span a second, which makes them smoothed views of the same
+second rather than sharper views of time, and at nine tubes they consumed half
+the width of the strip to display fifty seconds in units nobody thinks in.
+
+So the ratio is two between every aggregating tier and *n* at the single
+boundary below them. That boundary is worth marking rather than smoothing over:
+it is exactly where the strip stops measuring time and starts measuring
+arrival.
 
 The finest tier is drawn **in each tube's own colour**, because every bar in it
 is one tube's reading. Every tier to its left is a mean over both and takes the

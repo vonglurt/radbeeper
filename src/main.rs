@@ -946,12 +946,13 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
         // holds ten minutes where three tiers held five. One scale for all
         // four, so the same height is the same rate wherever it is drawn.
         let series: Vec<f64> = merged.iter().copied().collect();
-        let strip = analysis::tiers_with(
-            &series, dropped, width - 1,
-            spec.window * tubes,
-            analysis::TIERS + if tubes > 1 { 1 } else { 0 },
-            1.0 / tubes as f64,
-        );
+        // WHOLE SECONDS, AND ONE TIER BELOW THEM FOR THE INTERLEAVE. One tube
+        // keeps the strip it always had; see analysis::tiers_interleaved.
+        let strip = if tubes > 1 {
+            analysis::tiers_interleaved(&series, dropped, width - 1, tubes)
+        } else {
+            analysis::tiers_with(&series, dropped, width - 1, spec.window, analysis::TIERS, 1.0)
+        };
         let peak = strip
             .iter()
             .flat_map(|t| t.values.iter().flatten())
@@ -1189,6 +1190,12 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
            backfill: Option<(usize, f64)>) -> i32 {
     install_stop_handler();
 
+    // WHERE THIS SERVICE'S STATUS BELONGS, settled before anything is written:
+    // a service on its own --logs has its own status, and must not report
+    // itself into somebody else's.
+    let dir = logs.unwrap_or_else(log::state_dir);
+    let _ = std::fs::create_dir_all(&dir);
+
     let started = clock::now();
     let mut waiting = false;
     let found = loop {
@@ -1197,7 +1204,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
             None => break found,
             Some(e) => {
                 if !e.busy {
-                    let path = log::write_status(&format!("dormant: {}", e.reason));
+                    let path = log::write_status(&dir, &format!("dormant: {}", e.reason));
                     println!("radbeeper: dormant -- {}", e.reason);
                     for line in e.detail.lines() {
                         println!("    {}", line);
@@ -1209,7 +1216,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
                 }
                 if !waiting {
                     waiting = true;
-                    log::write_status(&format!("waiting: {}", e.reason));
+                    log::write_status(&dir, &format!("waiting: {}", e.reason));
                     println!("radbeeper: waiting -- {}", e.reason);
                     println!("    Logging starts by itself when the port is free.");
                 }
@@ -1228,17 +1235,12 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
         }
     };
 
-    // --logs is what makes this path testable at all. Without it the only
-    // way to exercise the logger is against the machine's real log.
-    let dir = logs.unwrap_or_else(log::state_dir);
-    let _ = std::fs::create_dir_all(&dir);
-
     // EVERY COUNTER BACKFILLED FROM ITS OWN FLASH, into its own file. Two
     // tubes were both in the room while nobody was listening and both wrote
     // down what they saw; the records stay apart, because the only way to ask
     // whether two instruments agree is to have kept both their answers.
     if let Some((bytes, max_gap)) = backfill {
-        log::write_status("backfilling from the counters' history");
+        log::write_status(&dir, "backfilling from the counters' history");
         for c in &found {
             println!("radbeeper: {}",
                      backfill_at_start(c, &dir, spans, every, bytes, max_gap, false));
@@ -1246,7 +1248,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     }
 
     let tubes = found.len();
-    log::write_status(&format!(
+    log::write_status(&dir, &format!(
         "monitoring {} ({})",
         found.iter().map(|c| c.path.as_str()).collect::<Vec<_>>().join(", "),
         found.iter().map(|c| c.version.as_str()).collect::<Vec<_>>().join(", ")
@@ -1409,7 +1411,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
         lg.finish(&averages);
     }
     bank.stop();
-    log::write_status("stopped");
+    log::write_status(&dir, "stopped");
     0
 }
 
@@ -2588,7 +2590,7 @@ fn worth_a_window(dir: &Path, device: Option<&str>, baud: Option<u32>) -> bool {
         Ok(_) => true,
         Err(e) => {
             if !e.busy {
-                log::write_status(&format!("dormant: {}", e.reason));
+                log::write_status(dir, &format!("dormant: {}", e.reason));
             }
             false
         }

@@ -96,6 +96,12 @@ pub enum Level {
     High,
 }
 
+/// Which of three bands a reading is in.
+///
+/// KEPT BESIDE `band` BELOW, which is the five-band scale everything that can
+/// show five bands now uses. This one remains because the log format, the
+/// exported page and the terminal monitor are all written against three, and
+/// widening them is a separate change to a separate file format.
 pub fn level(cpm: f64) -> Level {
     if cpm >= LEVEL_HIGH {
         Level::High
@@ -103,6 +109,89 @@ pub fn level(cpm: f64) -> Level {
         Level::Raised
     } else {
         Level::Calm
+    }
+}
+
+// ------------------------------------------------------------------ bands ---
+//
+// THE FLOOR OF EACH NAMED BAND, in counts per minute. These are the numbers a
+// person operating the instrument works in, so they are named rather than
+// left as thresholds: a reading is not "above 240", it is a WARNING.
+//
+// The scale is not linear and is not meant to be. Each step is roughly a
+// doubling with the low end stretched, because the interesting question at 3
+// CPM ("is this tube even working?") and the interesting question at 600 CPM
+// ("how quickly can I leave?") are different questions and want different
+// resolution.
+pub const BAND_ATTENUATED: f64 = 3.0;
+pub const BAND_NOMINAL: f64 = 30.0;
+pub const BAND_ADVISORY: f64 = 120.0;
+pub const BAND_WARNING: f64 = 240.0;
+pub const BAND_DEADLY: f64 = 600.0;
+
+/// A reading, named.
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Debug)]
+pub enum Band {
+    /// Below 3 CPM. Not a quiet room -- a tube that is shielded, unplugged,
+    /// dying or lying. Natural background does not go this low, so this band
+    /// is a fault report and not a reassurance.
+    Attenuated,
+    /// Ordinary background, 30 to 120.
+    Nominal,
+    /// 120 to 240: worth knowing about, not worth acting on.
+    Advisory,
+    /// 240 to 600.
+    Warning,
+    /// 600 and up.
+    Deadly,
+}
+
+/// The band a reading falls in.
+///
+/// NOTE THE FLOOR OF `Nominal` IS 30 AND NOT 0. Between 3 and 30 is where a
+/// counter reads when something is between it and the world, and calling that
+/// "nominal" would be the most dangerous thing this scale could do -- an
+/// instrument reading low because it has failed must not look like an
+/// instrument reading low because the room is clean.
+pub fn band(cpm: f64) -> Band {
+    if cpm >= BAND_DEADLY {
+        Band::Deadly
+    } else if cpm >= BAND_WARNING {
+        Band::Warning
+    } else if cpm >= BAND_ADVISORY {
+        Band::Advisory
+    } else if cpm >= BAND_NOMINAL {
+        Band::Nominal
+    } else {
+        Band::Attenuated
+    }
+}
+
+impl Band {
+    pub fn name(self) -> &'static str {
+        match self {
+            Band::Attenuated => "attenuated",
+            Band::Nominal => "nominal",
+            Band::Advisory => "advisory",
+            Band::Warning => "warning",
+            Band::Deadly => "deadly",
+        }
+    }
+
+    /// Where this band begins, in CPM.
+    pub fn floor(self) -> f64 {
+        match self {
+            Band::Attenuated => 0.0,
+            Band::Nominal => BAND_NOMINAL,
+            Band::Advisory => BAND_ADVISORY,
+            Band::Warning => BAND_WARNING,
+            Band::Deadly => BAND_DEADLY,
+        }
+    }
+
+    /// Every band, lowest first, for anything drawing the whole scale.
+    pub fn all() -> [Band; 5] {
+        [Band::Attenuated, Band::Nominal, Band::Advisory, Band::Warning, Band::Deadly]
     }
 }
 
@@ -521,13 +610,113 @@ pub fn tiers_with(
     out
 }
 
-/// How long a bar covers, as a label: "1", "0.5", "8".
+/// The cascade for several interleaved tubes: whole seconds, and one tier
+/// below them at 1/n.
+///
+/// WHY THE FINE TIER IS NOT PART OF THE PROGRESSION. Every other tier here
+/// aggregates TIME -- a 4-second bar is four seconds of the room, and halving
+/// it to two is a finer view of the room. The fine tier aggregates nothing: a
+/// bar in it is ONE tube's one-second reading, placed where it arrived, and
+/// 1/n is its spacing and not its integration window. Tiers between the two --
+/// 2/9, 4/9, 8/9 of a second -- are therefore neither. They average
+/// measurements that each already span a whole second, so they are smoothed
+/// views of the same second rather than sharper views of time, and at nine
+/// tubes they cost half the width of the strip to show fifty seconds in units
+/// nobody thinks in.
+///
+/// So: `TIERS` aggregating tiers at 1, 2, 4, 8 seconds, and one interleave
+/// tier under them at 1/n. Five in all, whether n is two or nine, which is
+/// what the two-counter strip already did. The ratio is 2 between every
+/// aggregating tier and n at the single boundary below them -- and that
+/// boundary is worth marking, because it is exactly where the strip stops
+/// measuring time and starts measuring arrival.
+pub fn tiers_interleaved(
+    samples: &[f64],
+    first: usize,
+    width: usize,
+    tubes: usize,
+) -> Vec<Tier> {
+    let tubes = tubes.max(1);
+    let count = TIERS + 1;
+    if width == 0 || count == 0 {
+        return Vec::new();
+    }
+    let q = width / count;
+    let fine_cols = width - q * (count - 1);
+    let n = (first + samples.len()) as i64;
+    let base = first as i64;
+    let at = |a: i64| -> Option<f64> {
+        (a >= base && a < n).then(|| samples[(a - base) as usize])
+    };
+    let mean = |lo: i64, hi: i64| -> Option<f64> {
+        let (lo, hi) = (lo.max(base), hi.min(n));
+        (hi > lo).then(|| {
+            (lo..hi).map(|a| at(a).unwrap_or(0.0)).sum::<f64>() / (hi - lo) as f64
+        })
+    };
+    let unit = 1.0 / tubes as f64;
+    let fine: Vec<Option<f64>> = (0..fine_cols as i64)
+        .map(|j| at(n - fine_cols as i64 + j))
+        .collect();
+    let mut out = vec![Tier { columns: fine_cols, seconds: unit, values: fine }];
+    // The first aggregating tier is one whole second, which is `tubes`
+    // samples; each one left of it is twice that.
+    let mut step = tubes as i64;
+    let mut b = n - fine_cols as i64;
+    for _ in 0..TIERS {
+        let c = q as i64;
+        let top = (b - 1).div_euclid(step);
+        let values: Vec<Option<f64>> = (0..c)
+            .map(|j| {
+                let g = top - c + 1 + j;
+                mean(g * step, (g * step + step).min(b))
+            })
+            .collect();
+        b = (top - c + 1) * step;
+        out.push(Tier {
+            columns: q,
+            seconds: step as f64 / tubes as f64,
+            values,
+        });
+        step *= 2;
+    }
+    out.reverse();
+    out
+}
+
+/// How long a bar covers, as a label: "8", "1", "1/2", "1/9".
+///
+/// A FRACTION BELOW A SECOND, because that is what the number IS. With n
+/// counters interleaving, the finest tier is one nth of a second and `0.111`
+/// is a worse way of saying 1/9 -- longer, less exact, and it hides the very
+/// thing the reader wants to know, which is how many tubes are feeding it.
 pub fn bar_seconds(seconds: f64) -> String {
     if (seconds - seconds.round()).abs() < 1e-9 {
-        format!("{}", seconds.round() as i64)
-    } else {
-        format!("{}", seconds)
+        return format!("{}", seconds.round() as i64);
     }
+    // UNDER A SECOND, A FRACTION. Nine tubes make the fine tiers 1/9, 2/9,
+    // 4/9 and 8/9 of a second, and written that way the doubling is on the
+    // face of the label; written as 0.11, 0.22, 0.44 it is arithmetic the
+    // reader has to do. Over a second the magnitude is what matters and a
+    // decimal says it better than 128/9 does.
+    if seconds > 0.0 && seconds < 1.0 {
+        for d in 2..=64i64 {
+            let n = seconds * d as f64;
+            if (n - n.round()).abs() < 1e-6 && n.round() >= 1.0 {
+                return format!("{}/{}", n.round() as i64, d);
+            }
+        }
+    }
+    format!("{:.1}", seconds)
+}
+
+/// How many tiers a strip fed by `counters` tubes should have.
+///
+/// ONE MORE THAN USUAL, AND ONLY ONE, however many tubes there are. See
+/// `tiers_interleaved` for why the answer is not "one per doubling": the
+/// extra tier is the interleave, and there is only ever one of those.
+pub fn tiers_for(counters: usize) -> usize {
+    TIERS + if counters > 1 { 1 } else { 0 }
 }
 
 /// "79s", "6m", "1h 4m": a stretch of time in the fewest words that are still
@@ -622,6 +811,36 @@ mod tests {
         fill(&mut w, &[1; 600]);
         assert!(w.samples.len() < 40, "kept {} samples", w.samples.len());
         assert_eq!(w.total, 600);
+    }
+
+    /// The named scale, at its own boundaries. The awkward one is 3 to 30:
+    /// a counter reading there is not reporting a clean room, it is reporting
+    /// itself, and the band is named so that cannot be misread.
+    #[test]
+    fn a_reading_is_named_rather_than_compared() {
+        assert_eq!(band(0.0), Band::Attenuated);
+        assert_eq!(band(2.9), Band::Attenuated);
+        assert_eq!(band(29.9), Band::Attenuated, "under 30 is not yet nominal");
+        assert_eq!(band(30.0), Band::Nominal);
+        assert_eq!(band(119.9), Band::Nominal);
+        assert_eq!(band(120.0), Band::Advisory);
+        assert_eq!(band(239.9), Band::Advisory);
+        assert_eq!(band(240.0), Band::Warning);
+        assert_eq!(band(599.9), Band::Warning);
+        assert_eq!(band(600.0), Band::Deadly);
+        assert_eq!(band(65535.0), Band::Deadly, "the counter's ceiling is still deadly");
+    }
+
+    /// The bands sort the way the readings do, so a maximum over a stretch of
+    /// them is the worst of them.
+    #[test]
+    fn the_bands_order_themselves() {
+        let mut all = Band::all();
+        all.reverse();
+        all.sort();
+        assert_eq!(all, Band::all());
+        assert!(Band::Deadly > Band::Nominal);
+        assert_eq!(Band::all().iter().copied().max().unwrap(), Band::Deadly);
     }
 
     #[test]
@@ -892,6 +1111,73 @@ mod tests {
         assert_eq!(t.iter().map(|x| x.seconds).collect::<Vec<_>>(), vec![8.0, 4.0, 2.0, 1.0]);
         let reach: f64 = t.iter().map(|x| x.columns as f64 * x.seconds).sum();
         assert!(reach >= 512.0, "{}", reach);
+    }
+
+    /// A bar shorter than a second is a fraction, because that is what it is.
+    #[test]
+    fn a_sub_second_bar_is_labelled_as_the_fraction_it_is() {
+        assert_eq!(bar_seconds(8.0), "8");
+        assert_eq!(bar_seconds(1.0), "1");
+        assert_eq!(bar_seconds(0.5), "1/2");
+        assert_eq!(bar_seconds(1.0 / 9.0), "1/9");
+        assert_eq!(bar_seconds(1.0 / 3.0), "1/3");
+        // The fine tiers of a nine-tube strip, where the doubling should be
+        // readable straight off the labels.
+        assert_eq!(bar_seconds(2.0 / 9.0), "2/9");
+        assert_eq!(bar_seconds(4.0 / 9.0), "4/9");
+        assert_eq!(bar_seconds(8.0 / 9.0), "8/9");
+        // And over a second, the magnitude rather than the fraction.
+        assert_eq!(bar_seconds(16.0 / 9.0), "1.8");
+        assert_eq!(bar_seconds(128.0 / 9.0), "14.2");
+    }
+
+    /// ONE MORE TIER PER DOUBLING, so the cascade stays dyadic however many
+    /// tubes feed it. Without this, nine counters would need k = 5 and the
+    /// strip would stop being something a person can read across.
+    #[test]
+    fn exactly_one_tier_is_added_for_the_interleave() {
+        assert_eq!(tiers_for(1), TIERS, "one tube is the strip as it was");
+        assert_eq!(tiers_for(2), TIERS + 1);
+        assert_eq!(tiers_for(9), TIERS + 1, "nine tubes is still one interleave");
+        assert_eq!(tiers_for(0), TIERS, "no tubes is not fewer than one");
+    }
+
+    /// THE SHAPE OF THE STRIP, whatever the tube count: whole seconds
+    /// doubling leftwards, and one interleave tier below them at 1/n.
+    #[test]
+    fn nine_tubes_give_whole_seconds_and_one_interleave_tier() {
+        let n = 9usize;
+        let samples: Vec<f64> = (0..8000).map(|i| (i % 5) as f64).collect();
+        let t = tiers_interleaved(&samples, 0, 240, n);
+        assert_eq!(t.len(), TIERS + 1, "five tiers, not eight");
+        let seconds: Vec<String> = t.iter().map(|x| bar_seconds(x.seconds)).collect();
+        assert_eq!(seconds, vec!["8", "4", "2", "1", "1/9"]);
+        // Every aggregating tier is twice the one on its right...
+        for pair in t[..TIERS].windows(2) {
+            assert!((pair[0].seconds / pair[1].seconds - 2.0).abs() < 1e-9);
+        }
+        // ...and the interleave tier sits one whole second below them, which
+        // is the boundary between measuring time and measuring arrival.
+        assert!((t[TIERS - 1].seconds - 1.0).abs() < 1e-9);
+        assert!((t[TIERS].seconds - 1.0 / 9.0).abs() < 1e-9);
+    }
+
+    /// Two tubes get the same shape, which is what the two-counter strip
+    /// already drew before any of this was generalised.
+    #[test]
+    fn two_tubes_are_the_same_shape_as_nine() {
+        let samples: Vec<f64> = (0..4000).map(|i| (i % 3) as f64).collect();
+        let t = tiers_interleaved(&samples, 0, 240, 2);
+        let seconds: Vec<String> = t.iter().map(|x| bar_seconds(x.seconds)).collect();
+        assert_eq!(seconds, vec!["8", "4", "2", "1", "1/2"]);
+    }
+
+    /// And the strip still reaches back far enough to be worth having.
+    #[test]
+    fn the_interleaved_strip_still_reaches_back_minutes() {
+        let t = tiers_interleaved(&(0..8000).map(|_| 1.0).collect::<Vec<f64>>(), 0, 240, 9);
+        let reach: f64 = t.iter().map(|x| x.columns as f64 * x.seconds).sum();
+        assert!(reach > 600.0, "only {}s", reach);
     }
 
     #[test]

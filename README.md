@@ -553,7 +553,7 @@ double the dose — what doubles is the evidence:
 | **Each keeps its own log** | Separate files, keyed by serial, as before. They are separate instruments and the record has to say which said what; a row that averaged two of them would be a reading neither took. |
 | **The display averages them** | Every combined figure is the *mean* across the tubes, which is the same number one tube would report, measured from twice the arrivals. |
 | **The precision is what improves** | Poisson error is 1/sqrt(N), so twice the counts is a factor of root two better. The window prints it: `452 CPM ±21 (4.7%)`. |
-| **The cascade grows a fifth tier** | Two counters on their own clocks interleave, so the strip runs `8s/bar · 4s · 2s · 1s · 0.5s` instead of stopping at one second. |
+| **The cascade grows one more tier** | Counters on their own clocks interleave, so the strip runs `8s/bar · 4s · 2s · 1s · 1/n` instead of stopping at one second — `1/2` for two tubes, `1/9` for nine. Exactly one extra tier however many there are: the seconds above it aggregate *time*, and the one below aggregates *arrival*, and there is only ever one of those. |
 | **The finest tier is coloured by tube** | Each bar in it is one tube's reading, drawn in that tube's colour, so the interleave is visible. Every tier left of it is a mean over both and takes the level colours — the two have merged into one number by then. |
 
 ![radbeeper-gui with two counters: two dials, and a cascade whose finest tier interleaves them](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-pair.gif)

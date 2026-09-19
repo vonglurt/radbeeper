@@ -429,6 +429,31 @@ mod tests {
         assert_eq!(at("peak_3000"), "");
     }
 
+    /// A SECOND RADBEEPER MUST NOT ANSWER FOR THE FIRST. `--logs` exists so a
+    /// test rig, or a service on another directory, can run beside the real
+    /// one; the status file ignored it and wrote to the shared state
+    /// directory regardless, so a test service stopping reported "stopped"
+    /// into the running service's status while that service went on logging.
+    /// `cat /var/lib/radbeeper/status` is what the init script tells people
+    /// to read when nothing seems to be happening.
+    #[test]
+    fn a_status_is_written_where_it_was_told_and_nowhere_else() {
+        let root = std::env::temp_dir().join(format!("rb-status-{}", std::process::id()));
+        let (real, other) = (root.join("real"), root.join("other"));
+        fs::create_dir_all(&real).unwrap();
+        fs::create_dir_all(&other).unwrap();
+
+        let p = write_status(&real, "monitoring /dev/ttyUSB0");
+        assert_eq!(p, real.join("status"));
+        write_status(&other, "stopped");
+
+        let said = fs::read_to_string(real.join("status")).unwrap();
+        assert!(said.contains("monitoring /dev/ttyUSB0"), "{}", said);
+        assert!(!said.contains("stopped"), "the other one answered for it: {}", said);
+        assert!(fs::read_to_string(other.join("status")).unwrap().contains("stopped"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn a_slot_is_a_rows_identity() {
         assert_eq!(slot_of(0.0, 30.0), 0);
@@ -474,8 +499,17 @@ pub fn state_dir() -> PathBuf {
 }
 
 /// A line saying what the service is doing, for a service that looks stuck.
-pub fn write_status(text: &str) -> PathBuf {
-    let path = state_dir().join("status");
+///
+/// IT WRITES WHERE IT IS TOLD, which it did not until a test service stopped
+/// and reported itself into the REAL one's status file. This used `state_dir`
+/// and ignored `--logs` entirely, so any second radbeeper -- a test rig, a
+/// synthetic counter, a service on another log directory -- would overwrite
+/// the running one's status on the way past. `cat /var/lib/radbeeper/status`
+/// is what the init script tells people to read when nothing seems to be
+/// happening, and it was answering for a process that had never touched the
+/// counter.
+pub fn write_status(directory: &Path, text: &str) -> PathBuf {
+    let path = directory.join("status");
     if let Ok(mut f) = fs::File::create(&path) {
         let _ = writeln!(f, "{}  {}", clock::format(clock::now(), "%Y-%m-%d %H:%M:%S"), text);
     }

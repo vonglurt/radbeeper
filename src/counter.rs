@@ -280,7 +280,29 @@ fn identify(path: &str, baud: Option<u32>) -> Result<Option<Counter>, OpenError>
         if port.write_all(b"<GETVER>>").is_err() {
             continue;
         }
-        let raw = port.read_exact_or_timeout(14, Duration::from_millis(1000));
+        // FOURTEEN BYTES IS THE OLD MODELS' ANSWER, NOT EVERY MODEL'S. A
+        // GMC-320 replies "GMC-320Re 4.26", which is exactly 14, and this read
+        // exactly 14 for years and was right every time. A GMC-320+ V4 replies
+        // "GMC-320+V4Re 4.83", which is 17: the version came out truncated to
+        // "GMC-320+V4Re 4" -- a firmware that does not exist -- and three
+        // bytes were left sitting in the input buffer for whatever asked next.
+        //
+        // So take the 14 that are certainly there, then keep taking whatever
+        // else arrives until it stops. The short second deadline is what keeps
+        // this from costing a second per port on every model that answers in
+        // 14: nothing more is coming, and 120 ms is long enough to be sure of
+        // that at 115200 baud.
+        let mut raw = port.read_exact_or_timeout(14, Duration::from_millis(1000));
+        loop {
+            let more = port.read_exact_or_timeout(16, Duration::from_millis(120));
+            if more.is_empty() {
+                break;
+            }
+            raw.extend_from_slice(&more);
+            if raw.len() > 64 {
+                break;
+            }
+        }
         let text = String::from_utf8_lossy(&raw).trim().to_string();
         if text.is_empty() || !text.to_uppercase().contains("GMC") {
             continue;
