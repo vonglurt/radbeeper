@@ -12,11 +12,9 @@ this repository.
 
 ![radbeeper-gui: two counters, in real time](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui.gif)
 
-**Twenty-four seconds of two counters, in real time**, attached to the service
-that is logging them — which never notices. Two dials, five averaging windows
+**Twenty-four seconds of two counters, in real time**, attached to radbeeper service daemon. GUI visuals like analogue dial meters, five averaging windows
 with the precision of each, a strip of counts that compresses as it ages, three
-spectra looking for anything arriving on a schedule, and 256 bits of hex out of
-the timing of decay.
+spectra of FFT.
 
 Plug a counter into a machine running Alpine — **including a VM with the counter
 passed through, which is what these logs were taken on** — switch it on, and
