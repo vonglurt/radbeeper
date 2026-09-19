@@ -87,8 +87,15 @@ FLASH_SIZE = 0x100000     # a GMC-320's history flash
 class FakeGMC(threading.Thread):
     daemon = True
 
-    def __init__(self, cpm=30.0, seed=3, history=None, tick=1.0):
+    def __init__(self, cpm=30.0, seed=3, history=None, tick=1.0, serial=None):
         super().__init__()
+        # A SERIAL OF ITS OWN, so two of these are two INSTRUMENTS. radbeeper
+        # keys a counter's log, its colour and its slot in the bank off the
+        # serial, and treats a serial it already knows as that instrument
+        # coming back -- which is right for a tube replugged and wrong for two
+        # fakes, who without this both claim to be 123456789ABCDE and collapse
+        # into one counter the moment a multi-counter test looks at them.
+        self.serial = serial if serial is not None else SERIAL
         self.master, self.slave = pty.openpty()
         self.path = os.ttyname(self.slave)
         self.rate = cpm / 60.0
@@ -172,7 +179,7 @@ class FakeGMC(threading.Thread):
         if body == b"GETVER":
             self._send(VERSION)
         elif body == b"GETSERIAL":
-            self._send(SERIAL)
+            self._send(self.serial)
         elif body == b"GETCPM":
             self._send(struct.pack(">H", int(self.rate * 60)))
         elif body == b"GETCPS":
@@ -214,10 +221,13 @@ def main():
     p = argparse.ArgumentParser(description="a fake GMC-320 on a pty")
     p.add_argument("--cpm", type=float, default=30.0)
     p.add_argument("--seed", type=int, default=3)
+    p.add_argument("--serial", help="14 hex digits; two fakes need two of these")
     args = p.parse_args()
-    dev = FakeGMC(cpm=args.cpm, seed=args.seed)
+    serial = bytes.fromhex(args.serial) if args.serial else None
+    dev = FakeGMC(cpm=args.cpm, seed=args.seed, serial=serial)
     dev.start()
-    print("fake GMC-320 on %s  (%.0f CPM)" % (dev.path, args.cpm))
+    print("fake GMC-320 on %s  (%.0f CPM, serial %s)"
+          % (dev.path, args.cpm, dev.serial.hex().upper()))
     print("point radbeeper at it:  radbeeper -d %s watch" % dev.path)
     try:
         while True:

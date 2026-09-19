@@ -29,6 +29,12 @@ const SERVICE_WAIT: f64 = 10.0;
 /// about a quarter of an hour at any width a terminal has; the rest is the
 /// windows' business, not the strip's.
 const STRIP_KEEP: usize = 4096;
+/// How often a running service looks for a counter that was not there before.
+///
+/// ONE LOG CYCLE. Often enough that plugging a tube in and looking at the
+/// screen feels like one action, rare enough that the scan -- an open and a
+/// close on every candidate port -- costs nothing anybody can measure.
+const RESCAN: f64 = log::DEFAULT_LOG_EVERY;
 /// How often `--wait` looks at a busy port again.
 ///
 /// Half a second, where the service takes ten. The service is waiting for a
@@ -342,27 +348,124 @@ fn draw_table(out: &mut String, top: usize, lines: usize, width: usize,
 /// their samples interleave. That interleaving is the whole benefit: the same
 /// tube watching the same room twice a second, at some offset, is a finer grid
 /// in time than either counter can produce alone.
+/// What a reader thread sends back.
+enum Tube {
+    Sample { who: usize, when: f64, counts: u32 },
+    /// This tube stopped answering. Its slot stays reserved for its serial.
+    Gone { who: usize },
+}
+
 struct Bank {
-    counters: Vec<std::sync::Arc<counter::Counter>>,
-    rx: std::sync::mpsc::Receiver<(usize, f64, u32)>,
-    /// Held until `start`, and dropped by it. While it exists the channel
-    /// cannot report that every reader has finished, which is what stops a
-    /// bank that has not been started yet from looking like one that is over.
-    tx: Option<std::sync::mpsc::Sender<(usize, f64, u32)>>,
+    /// One slot per counter ever seen, `None` once it has gone quiet -- which
+    /// drops its `Counter` and with it the file descriptor and the flock, so
+    /// the port can be taken again when the thing is plugged back in.
+    counters: Vec<Option<std::sync::Arc<counter::Counter>>>,
+    /// Who each slot IS, kept whether or not it is answering. A tube that
+    /// comes back keeps the index its serial had, so the logs, the colours
+    /// and the sample tags all stay pointing at the same instrument.
+    ids: Vec<broker::CounterId>,
+    /// Held for the lifetime of the bank so the channel never reports itself
+    /// disconnected: an empty bank is one waiting for a counter, not one that
+    /// is finished.
+    tx: std::sync::mpsc::Sender<Tube>,
+    rx: std::sync::mpsc::Receiver<Tube>,
+    running: bool,
 }
 
 impl Bank {
-    /// Take the counters. DOES NOT START READING -- see `start`.
     fn open(found: Vec<counter::Counter>) -> Bank {
         let (tx, rx) = std::sync::mpsc::channel();
-        Bank {
-            counters: found.into_iter().map(std::sync::Arc::new).collect(),
-            rx,
-            tx: Some(tx),
+        let mut bank = Bank { counters: Vec::new(), ids: Vec::new(), tx, rx, running: false };
+        for c in found {
+            bank.adopt(c);
         }
+        bank
     }
 
-    /// Turn the stream on and start reading it.
+    /// Take a counter into the bank, reusing its slot if this serial has been
+    /// here before, and return the index it landed in.
+    fn adopt(&mut self, c: counter::Counter) -> usize {
+        let id = broker::CounterId {
+            path: c.path.clone(),
+            baud: c.baud,
+            version: c.version.clone(),
+            serial_no: c.serial_no.clone(),
+        };
+        // A SERIAL ONLY RECLAIMS ITS SLOT IF THAT SLOT IS EMPTY. Matching on
+        // the serial alone let a second counter reporting the same one --
+        // which no two real tubes do, but every synthetic counter does, and
+        // one relabelled tube would -- take over the live slot and close the
+        // port of the counter already in it. A tube that is answering cannot
+        // simultaneously be arriving.
+        let free = |k: usize| self.counters.get(k).map(|c| c.is_none()).unwrap_or(false);
+        let who = match self
+            .ids
+            .iter()
+            .position(|k| k.serial_no == id.serial_no)
+            .filter(|k| free(*k))
+        {
+            Some(i) => {
+                self.ids[i] = id;
+                self.counters[i] = Some(std::sync::Arc::new(c));
+                i
+            }
+            None => {
+                self.ids.push(id);
+                self.counters.push(Some(std::sync::Arc::new(c)));
+                self.ids.len() - 1
+            }
+        };
+        if self.running {
+            self.spawn(who);
+        }
+        who
+    }
+
+    /// The reader for one slot: samples until the counter goes quiet, then a
+    /// single Gone and the thread ends.
+    fn spawn(&self, who: usize) {
+        let Some(c) = self.counters[who].clone() else { return };
+        let tx = self.tx.clone();
+        c.heartbeat(true);
+        std::thread::spawn(move || {
+            loop {
+                match c.next_sample(Duration::from_millis(2500)) {
+                    Some(v) => {
+                        if tx.send(Tube::Sample { who, when: clock::now(), counts: v as u32 })
+                            .is_err()
+                        {
+                            return;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            let _ = tx.send(Tube::Gone { who });
+        });
+    }
+
+    fn identity(&self, spans: &[f64]) -> broker::Identity {
+        broker::Identity { counters: self.ids.clone(), spans: spans.to_vec() }
+    }
+
+    fn len(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// The ports currently held, for a rescan that wants to skip them.
+    fn live_paths(&self) -> Vec<String> {
+        self.counters
+            .iter()
+            .filter_map(|c| c.as_ref().map(|c| c.path.clone()))
+            .collect()
+    }
+
+    fn live(&self) -> Vec<std::sync::Arc<counter::Counter>> {
+        self.counters.iter().flatten().cloned().collect()
+    }
+
+    /// Begin reading. Nothing arrives before this, and it must not be called
+    /// until every port conversation -- the backfill above all -- is over.
     ///
     /// SEPARATE FROM `open`, AND THE SEPARATION IS LOAD-BEARING. Before the
     /// samples start there is a conversation to have with each counter --
@@ -373,59 +476,32 @@ impl Bank {
     /// the monitor showed `16383 counts this second` -- which is the count
     /// mask, every bit set -- and a run of a quarter of a million counts in
     /// one second. Nothing about it looked like a race; it looked like a
-    /// broken counter. So the port conversations happen first and this is
-    /// called when they are done.
+    /// broken counter.
     fn start(&mut self) {
-        let Some(tx) = self.tx.take() else {
+        if self.running {
             return;
-        };
-        for (i, c) in self.counters.iter().enumerate() {
-            // THE COUNTER HAS TO BE ASKED TO TALK, and each one separately.
-            c.heartbeat(true);
-            let c = c.clone();
-            let tx = tx.clone();
-            std::thread::spawn(move || loop {
-                match c.next_sample(Duration::from_millis(2500)) {
-                    Some(v) => {
-                        if tx.send((i, clock::now(), v as u32)).is_err() {
-                            return;
-                        }
-                    }
-                    // This counter has gone quiet. Its thread ends; the
-                    // others carry on, and the bank is only finished when
-                    // every sender has been dropped.
-                    None => return,
-                }
-            });
+        }
+        self.running = true;
+        for who in 0..self.counters.len() {
+            self.spawn(who);
         }
     }
 
-    fn identity(&self, spans: &[f64]) -> broker::Identity {
-        broker::Identity {
-            counters: self
-                .counters
-                .iter()
-                .map(|c| broker::CounterId {
-                    path: c.path.clone(),
-                    baud: c.baud,
-                    version: c.version.clone(),
-                    serial_no: c.serial_no.clone(),
-                })
-                .collect(),
-            spans: spans.to_vec(),
-        }
-    }
-
-    fn len(&self) -> usize {
-        self.counters.len()
-    }
-
-    fn next(&self, timeout: Duration) -> Option<(usize, f64, u32)> {
+    /// None means nothing arrived in `timeout` -- NOT that the bank is over.
+    /// An empty bank is one waiting for a counter to be plugged in.
+    fn next(&self, timeout: Duration) -> Option<Tube> {
         self.rx.recv_timeout(timeout).ok()
     }
 
+    /// Forget a tube that has stopped answering, releasing its port.
+    fn retire(&mut self, who: usize) {
+        if let Some(slot) = self.counters.get_mut(who) {
+            *slot = None;
+        }
+    }
+
     fn stop(&self) {
-        for c in &self.counters {
+        for c in self.counters.iter().flatten() {
             c.heartbeat(false);
         }
     }
@@ -531,10 +607,10 @@ impl Feed {
     /// The ports, for the things that genuinely need to talk to a counter --
     /// reading its flash, setting its clock. An attached feed has none, and
     /// the caller must have something sensible to do about that.
-    fn counters(&self) -> &[std::sync::Arc<counter::Counter>] {
+    fn counters(&self) -> Vec<std::sync::Arc<counter::Counter>> {
         match self {
-            Feed::Own { bank, .. } => &bank.counters,
-            Feed::Attached(_) => &[],
+            Feed::Own { bank, .. } => bank.live(),
+            Feed::Attached(_) => Vec::new(),
         }
     }
 
@@ -590,11 +666,19 @@ impl Feed {
                 // was taken has to mean something to it, and "412.7 seconds
                 // after some other program started" does not. It is also the
                 // only clock two counters can be placed on together.
-                let (who, when, counts) = bank.next(timeout)?;
-                if let Some(s) = srv.as_mut() {
-                    s.publish_sample(who, when, counts);
+                match bank.next(timeout)? {
+                    Tube::Sample { who, when, counts } => {
+                        if let Some(s) = srv.as_mut() {
+                            s.publish_sample(who, when, counts);
+                        }
+                        Some(Tick::Sample { who, when, counts })
+                    }
+                    // A tube that has gone quiet in the MONITOR is the end of
+                    // it: `watch` is a session somebody is sitting in front
+                    // of, not a service, and it says so and stops rather than
+                    // waiting for a counter to come back.
+                    Tube::Gone { .. } => None,
                 }
-                Some(Tick::Sample { who, when, counts })
             }
             Feed::Attached(c) => match c.next(timeout)? {
                 broker::Event::Sample { who, when, counts } => {
@@ -605,6 +689,13 @@ impl Feed {
                     Some(Tick::Random { who, hex, at, suspect })
                 }
                 broker::Event::Live => Some(Tick::Live),
+                // An attached monitor draws one counter's worth of screen and
+                // does not redraw itself for a tube joining mid-session; the
+                // samples still arrive and still count. The window is what
+                // grows a needle for it.
+                broker::Event::Counter { .. } | broker::Event::Gone { .. } => {
+                    Some(Tick::Live)
+                }
             },
         }
     }
@@ -1334,6 +1425,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     // Every port conversation is over -- the backfill above ran before the
     // bank existed -- so the counters can start streaming.
     bank.start();
+    let mut swept = clock::now();
     loop {
         // Whoever turned up while we were waiting for this second. Before the
         // read, so a window that has just opened is greeted within a second
@@ -1341,12 +1433,81 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
         if let Some(s) = srv.as_mut() {
             s.accept_pending();
         }
-        // EVERY SENDER GONE MEANS EVERY COUNTER GONE. One tube unplugged ends
-        // its thread and nothing else; the bank is finished only when the
-        // last one has stopped talking.
+        if stopping() {
+            break;
+        }
+        if duration.map(|d| clock::now() - started >= d).unwrap_or(false) {
+            break;
+        }
+        // ---- A COUNTER PLUGGED INTO A RUNNING SERVICE ------------------
+        //
+        // Once a log cycle, look for one. Plugging a second tube in used to
+        // mean restarting the service, which means a hole in every tube's
+        // record to pick up one of them -- and nothing about the fan-out
+        // needed it: a counter is a thread, a logger and a line on the wire,
+        // and all three can be made while the others are running.
+        //
+        // The flock does the filtering. A port this process already holds
+        // fails to open exactly as another process's would, so every
+        // candidate can be tried and the ones already held fall out on their
+        // own, with no list to keep and no list to go stale.
+        if clock::now() - swept >= RESCAN {
+            swept = clock::now();
+            let held = bank.live_paths();
+            let ports: Vec<String> = if devices.is_empty() {
+                counter::candidate_ports()
+            } else {
+                devices.to_vec()
+            };
+            for port in ports.into_iter().filter(|p| !held.contains(p)) {
+                let Some(c) = counter::open_at(&port, baud) else { continue };
+                let (path, version, serial) =
+                    (c.path.clone(), c.version.clone(), c.serial_no.clone());
+                let who = bank.adopt(c);
+                // Its own flash first, exactly as at start: this tube was
+                // recording while nobody was listening to it.
+                if let Some((bytes, max_gap)) = backfill {
+                    if let Some(k) = bank.counters.get(who).and_then(|c| c.clone()) {
+                        println!("radbeeper: {}",
+                                 backfill_at_start(&k, &dir, spans, every, bytes, max_gap, false));
+                    }
+                }
+                if who == each.len() {
+                    each.push(Windows::new(spans));
+                    pools.push(entropy::Entropy::default());
+                    loggers.push(Logger::new(spans, dir.clone(), &serial, every));
+                } else {
+                    // A tube that has come back: its windows start again, its
+                    // log does not.
+                    each[who] = Windows::new(spans);
+                }
+                let id = bank.identity(spans);
+                if let (Some(s), Some(c)) = (srv.as_mut(), id.counters.get(who)) {
+                    s.announce(who, c);
+                }
+                log::write_status(&dir, &format!("monitoring {} ({})", path, version));
+                println!("radbeeper: {} joined -- {} ({})", path, version, serial);
+            }
+        }
         let (who, when, counts) = match bank.next(Duration::from_millis(2500)) {
-            Some(v) => v,
-            None => break,
+            Some(Tube::Sample { who, when, counts }) => (who, when, counts),
+            // A TUBE GOING QUIET IS NOT THE END OF THE SERVICE any more. Its
+            // port is released so it can be taken again, everybody watching
+            // is told, and the sweep above will pick it back up when it is
+            // plugged in. Nothing is exited: a service that stopped logging
+            // the counters still present because one was unplugged would be
+            // the worst possible reading of "one counter went away".
+            Some(Tube::Gone { who }) => {
+                bank.retire(who);
+                if let Some(s) = srv.as_mut() {
+                    s.publish_gone(who);
+                }
+                let name = bank.ids.get(who).map(|c| c.path.clone()).unwrap_or_default();
+                println!("radbeeper: {} stopped answering -- waiting for it", name);
+                log::write_status(&dir, &format!("waiting: {} stopped answering", name));
+                continue;
+            }
+            None => continue,
         };
         each[who].add(when, counts);
         if let Some(s) = srv.as_mut() {
@@ -1395,15 +1556,6 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
                 eprintln!("radbeeper: could not write the log -- {}", e);
                 break;
             }
-        }
-        if stopping() {
-            break;
-        }
-        // --duration is what makes this path testable at all: without it the
-        // only way to exercise the logger is to start a daemon and kill it,
-        // which is not something a test suite should do.
-        if duration.map(|d| each[who].elapsed() >= d).unwrap_or(false) {
-            break;
         }
     }
     for (k, lg) in loggers.iter_mut().enumerate() {

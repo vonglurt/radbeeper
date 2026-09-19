@@ -298,7 +298,35 @@ is one tube's reading. Every tier to its left is a mean over both and takes the
 ordinary level colours: by then the two have merged into one number. The
 hand-over is therefore visible rather than asserted.
 
-### E. Records stay apart; displays may average
+### E. A counter plugged into a running service
+
+Once a log cycle, the service looks for a port it is not already reading. The
+**flock does the filtering**: a port this process already holds fails to open
+exactly as another process's would, so every candidate can be tried and the ones
+already held fall out on their own, with no list to keep and no list to go
+stale.
+
+A counter found that way is adopted live — backfilled from its own flash,
+given its own log, its own windows and its own pool, and announced on the wire
+so every attached window learns about it. `Event::Counter` carries the new
+index; the client updates the identity it reports, so a caller that asks after
+the fact gets the tube rather than indexing past the end of a list.
+
+**A slot belongs to a serial.** A tube that stops answering has its `Counter`
+dropped — which closes the descriptor and releases the flock, so the port can be
+taken again — while its slot, its index and its log are kept. Plugging it back
+in returns it to the same place. A serial only reclaims a slot that is *empty*:
+matching on the serial alone let a second counter reporting the same one take
+over a live slot and close the port of the counter already in it, which no two
+real tubes would do but every synthetic counter does.
+
+**And the service no longer exits when a counter goes quiet.** It reports the
+departure, keeps logging whatever else is present, and picks the tube back up on
+a later sweep. Exiting was defensible when a service read one counter and a
+counter going away meant there was nothing to do; with several, it would mean
+one unplugged tube stopping the record of all the others.
+
+### F. Records stay apart; displays may average
 
 Each tube keeps its own log file, its own backfill from its own flash, and its
 own entropy pool. The service records; it does not average. A row blending two

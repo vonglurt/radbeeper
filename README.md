@@ -545,6 +545,20 @@ window's layout and the application's structure.
 **Plug in a second GMC and `radbeeper service` reads both.** No flag is needed;
 with no `-d` it takes every counter that answers, and `-d A -d B` names them.
 
+**And it does not have to be restarted for one.** Once a log cycle the service
+looks for a counter that was not there before and adopts it on the spot: its own
+backfill from its own flash, its own log, its own entropy pool, and a line on
+the wire telling every attached window. A window that is already open grows a
+needle, a colour, a column and a finer cascade tier — `1/2s/bar` becomes
+`1/3s/bar` — without being touched. A tube that stops answering has its port
+released and its slot kept, so plugging it back in returns it to the same
+index, the same colour and the same log; the service does not exit, because a
+service that stopped recording the counters still present because one was
+unplugged would be the worst possible reading of "one counter went away".
+
+Naming ports with `-d` scopes that search to the names given, which is what you
+want when a machine has serial hardware that is not a Geiger counter.
+
 Two tubes watching one room are two measurements of one number. They do **not**
 double the dose — what doubles is the evidence:
 

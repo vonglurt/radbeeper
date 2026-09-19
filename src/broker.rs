@@ -121,6 +121,12 @@ pub enum Event {
     /// That counter's pool drew a line. The hex on a client's screen is
     /// always this one, never a locally computed one -- see Feed in main.rs.
     Random { who: usize, hex: String, at: String, suspect: bool },
+    /// A counter joined the running service. `who` is its index from here
+    /// on, and it may be one already seen -- a tube that was unplugged and
+    /// put back keeps the index its serial had.
+    Counter { who: usize, id: CounterId },
+    /// A counter stopped answering. Its index stays reserved for it.
+    Gone { who: usize },
     /// Everything before this was history; everything after it is live.
     Live,
 }
@@ -137,6 +143,28 @@ fn t(v: f64) -> String {
     format!("{:.3}", v)
 }
 
+/// The greeting for an identity: what is true now, in the order it is read.
+fn greeting_for(id: &Identity) -> String {
+    let spans = id.spans.iter().map(|s| crate::log::g(*s)).collect::<Vec<_>>().join(",");
+    let mut out = tab(&[
+        "hello",
+        &PROTOCOL.to_string(),
+        &spans,
+        &id.counters.len().to_string(),
+    ]);
+    for (i, c) in id.counters.iter().enumerate() {
+        out.push_str(&tab(&[
+            "c",
+            &i.to_string(),
+            &c.path,
+            &c.baud.to_string(),
+            &c.version,
+            &c.serial_no,
+        ]));
+    }
+    out
+}
+
 // ------------------------------------------------------------------ server ---
 
 /// The port-holder's end. Anything that owns the flock can run one.
@@ -146,6 +174,7 @@ pub struct Server {
     clients: Vec<UnixStream>,
     ring: VecDeque<(usize, f64, u32)>,
     rows: VecDeque<(usize, String)>,
+    id: Identity,
     greeting: String,
 }
 
@@ -172,29 +201,14 @@ impl Server {
         // the answer to "may this person have the counter".
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660));
-        let spans = id.spans.iter().map(|s| crate::log::g(*s)).collect::<Vec<_>>().join(",");
-        let mut greeting = tab(&[
-            "hello",
-            &PROTOCOL.to_string(),
-            &spans,
-            &id.counters.len().to_string(),
-        ]);
-        for (i, c) in id.counters.iter().enumerate() {
-            greeting.push_str(&tab(&[
-                "c",
-                &i.to_string(),
-                &c.path,
-                &c.baud.to_string(),
-                &c.version,
-                &c.serial_no,
-            ]));
-        }
+        let greeting = greeting_for(id);
         Ok(Server {
             listener,
             path,
             clients: Vec::new(),
             ring: VecDeque::with_capacity(RING),
             rows: VecDeque::with_capacity(ROWS),
+            id: id.clone(),
             greeting,
         })
     }
@@ -270,6 +284,36 @@ impl Server {
         // window stop the logger for every other process on the machine.
         stream.set_nonblocking(true).ok()?;
         Some(stream)
+    }
+
+    /// A counter has joined, or rejoined. Everyone attached is told, and
+    /// everyone who attaches later is greeted with it.
+    ///
+    /// THE GREETING IS REBUILT, NOT APPENDED TO. A client that connects a
+    /// minute after a tube was plugged in must be told about it in the same
+    /// breath as the others -- there is no "since when" in this protocol and
+    /// there does not need to be, because the greeting is simply what is true
+    /// now.
+    pub fn announce(&mut self, who: usize, id: &CounterId) {
+        if who < self.id.counters.len() {
+            self.id.counters[who] = id.clone();
+        } else {
+            self.id.counters.resize(who + 1, id.clone());
+        }
+        self.greeting = greeting_for(&self.id);
+        self.publish(&tab(&[
+            "c",
+            &who.to_string(),
+            &id.path,
+            &id.baud.to_string(),
+            &id.version,
+            &id.serial_no,
+        ]));
+    }
+
+    /// A counter stopped answering.
+    pub fn publish_gone(&mut self, who: usize) {
+        self.publish(&tab(&["gone", &who.to_string()]));
     }
 
     /// One second of one counter, to everyone attached.
@@ -382,6 +426,17 @@ impl Client {
                 Ok(_) => {}
             }
             if let Some(e) = parse(line.trim_end()) {
+                // THE IDENTITY IS KEPT UP TO DATE HERE, so a caller that asks
+                // `identity()` after a tube joined gets the tube. Every client
+                // would otherwise have to do this itself, and one that forgot
+                // would index a sample into a counter list too short for it.
+                if let Event::Counter { who, id } = &e {
+                    if *who < self.identity.counters.len() {
+                        self.identity.counters[*who] = id.clone();
+                    } else {
+                        self.identity.counters.resize(*who + 1, id.clone());
+                    }
+                }
                 return Some(e);
             }
             // An unknown verb is skipped, not fatal: see PROTOCOL.
@@ -415,6 +470,16 @@ fn parse(line: &str) -> Option<Event> {
             at: f[3].to_string(),
             suspect: f[4] == "1",
         }),
+        "c" if f.len() >= 6 => Some(Event::Counter {
+            who: f[1].parse().ok()?,
+            id: CounterId {
+                path: f[2].to_string(),
+                baud: f[3].parse().ok()?,
+                version: f[4].to_string(),
+                serial_no: f[5].to_string(),
+            },
+        }),
+        "gone" if f.len() >= 2 => Some(Event::Gone { who: f[1].parse().ok()? }),
         "live" => Some(Event::Live),
         _ => None,
     }

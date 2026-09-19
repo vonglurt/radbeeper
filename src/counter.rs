@@ -352,6 +352,17 @@ pub fn model_of(version: &str) -> String {
 /// all of them and everything else finds one.
 ///
 /// Returns what it found, and -- only when that is nothing -- why.
+/// One port, identified, or None for anything that is not a counter we can
+/// have -- not a GMC, not answering, or locked by somebody else.
+///
+/// THE LOCK IS THE FILTER. A port this process already holds fails at the
+/// flock exactly as another process's would, so a rescan can simply try every
+/// candidate and let the ones it already has fall out. That costs one open
+/// and one close per port per scan and needs no bookkeeping to go stale.
+pub fn open_at(path: &str, baud: Option<u32>) -> Option<Counter> {
+    identify(path, baud).ok().flatten()
+}
+
 pub fn find_all(devices: &[String], baud: Option<u32>) -> (Vec<Counter>, Option<NotFound>) {
     let ports: Vec<String> = if devices.is_empty() {
         candidate_ports()

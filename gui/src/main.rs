@@ -1287,8 +1287,15 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                     std::thread::sleep(Duration::from_secs(2));
                     continue;
                 };
-                let id = client.identity().clone();
-                let tubes = id.len().max(1);
+                // BOTH CHANGE WHILE THE WINDOW IS OPEN. A counter plugged
+                // into the running service arrives as an event, not a
+                // reconnection, so everything sized by the tube count has to
+                // be able to grow: the windows, the pools, the colours, the
+                // divisor under every combined figure and the unit of the
+                // cascade's finest tier.
+                let mut id = client.identity().clone();
+                let mut tubes = id.len().max(1);
+                let mut present: Vec<bool> = vec![true; tubes];
                 let columns = log::columns(&log::header(&id.spans));
                 // One set of windows per tube, and one across all of them.
                 let mut each: Vec<Windows> =
@@ -1384,6 +1391,27 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                             }
                         }
                         Event::Live => replaying = false,
+                        // A tube joined, or came back. Its slot is its
+                        // serial's, so a counter that was unplugged and put
+                        // back resumes its own colour and its own windows
+                        // rather than appearing as a stranger.
+                        Event::Counter { who, .. } => {
+                            id = client.identity().clone();
+                            tubes = id.len().max(1);
+                            while each.len() < tubes {
+                                each.push(Windows::new(&id.spans));
+                            }
+                            present.resize(tubes, false);
+                            if let Some(p) = present.get_mut(who) {
+                                *p = true;
+                            }
+                            each[who] = Windows::new(&id.spans);
+                        }
+                        Event::Gone { who } => {
+                            if let Some(p) = present.get_mut(who) {
+                                *p = false;
+                            }
+                        }
                         Event::Random { who, hex, at, suspect } => {
                             random = Some((who.min(tubes - 1), hex, at, suspect));
                             pool.reset();
@@ -1432,8 +1460,15 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                                 (*s, m, m.and_then(|v| sigma_of(v, *s, tubes)))
                             })
                             .collect(),
+                        // A TUBE THAT HAS STOPPED ANSWERING READS `--`, not
+                        // its last number. A stale reading on a dial is worse
+                        // than no reading: it is the instrument claiming to
+                        // still be measuring.
                         per: (0..tubes)
                             .map(|k| {
+                                if !present.get(k).copied().unwrap_or(false) {
+                                    return None;
+                                }
                                 each[k].average(HEADLINE).or_else(|| {
                                     id.spans.last().and_then(|s| each[k].average(*s))
                                 })
