@@ -23,9 +23,10 @@ Do this once, by hand. After it, every release is a tag.
    [Account Settings](https://crates.io/settings/profile). crates.io will not
    let an unverified account publish.
 
-2. **Claim the name.** As of writing, `radbeeper` is unregistered — crates.io
-   is first come, first served and names are never reused, so the name is
-   only yours once a version exists under it. From a clean tree:
+2. **Claim the name.** *(Done — `radbeeper` was published on 2026-09-19 and
+   the name is held.)* crates.io is first come, first served and names are
+   never reused, so a name is only yours once a version exists under it. From
+   a clean tree:
 
    ```sh
    make publish-dry                 # everything but the upload
@@ -56,9 +57,12 @@ Do this once, by hand. After it, every release is a tag.
    rotate. Revoke the token you used in step 2 at
    [crates.io/settings/tokens](https://crates.io/settings/tokens).
 
-4. **Turn the workflow's publish step on.** It ships switched off, so that a
-   tag pushed before any of the above still builds binaries and cuts a GitHub
-   release instead of failing on a publish that could not have worked:
+4. **Turn the workflow's publish step on.** *(Done — `CRATES_IO_TRUSTED` is
+   set on this repository.)* It ships switched off, so that a tag pushed
+   before any of the above still builds binaries and cuts a GitHub release
+   instead of failing on a publish that could not have worked. Note that an
+   unset variable makes the job **skip**, not fail: three releases went out
+   green with nothing reaching crates.io before anyone noticed.
 
    ```sh
    gh variable set CRATES_IO_TRUSTED --body true
@@ -81,6 +85,40 @@ make release-check V=0.2.0     # clean tree, no such tag, both suites pass
 make release       V=0.2.0     # bumps, refreshes the lock, commits, dry-runs, tags
 git push origin main && git push origin v0.2.0
 ```
+
+`V` is optional: with it omitted, `make release` takes the next minor from
+`Cargo.toml` and prints the answer before it writes anything.
+
+> **Push `main` before the tag, and do not rewrite history once the tag
+> exists.** `make release` tags the commit it has just made, locally. Anything
+> that rewrites that commit afterwards -- `git commit --amend`, a rebase, a
+> squash -- leaves the tag pointing at the object it was made from, so the
+> released version stops being reachable from `main`. The release itself is
+> unharmed, because the workflow fires on the tag and not on the branch; what
+> breaks is everything that reads history afterwards. `git describe` on `main`
+> never names the version, and the compare links on the release page have no
+> path to walk.
+>
+> If it has already happened, move `main` back onto the tagged commit rather
+> than moving the tag -- the tag is signed and published, and the branch is the
+> cheaper of the two to rewrite:
+>
+> ```sh
+> git fetch origin
+> git reset --hard 'v0.2.0^{}'
+> git push --force-with-lease=main:$(git rev-parse origin/main) origin main
+> ```
+>
+> The `^{}` is not decoration. Tags here are signed, so `v0.2.0` names an
+> annotated *tag object*, not a commit. `git push origin v0.2.0:main` therefore
+> asks GitHub to point a branch at a tag object; it refuses, and the whole of
+> what it says about why is
+>
+> ```
+>  ! [remote rejected] v0.2.0 -> main (failed)
+> ```
+>
+> which reads exactly like a branch protection rule and is not one.
 
 The workflow then, in this order:
 
