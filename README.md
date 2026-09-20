@@ -3,7 +3,7 @@
 **A GQ GMC-320 Plus Geiger-Muller counter on the desk, read from Alpine Linux —
 and from [Copal](https://github.com/vonglurt/copal), its distillation.**
 
-MIT · `0.4.2` · `cargo install radbeeper` · one dependency, and it is `libc`
+MIT · `0.5.0` · `cargo install radbeeper` · one dependency, and it is `libc`
 
 **[vonglurt.github.io/radbeeper](https://vonglurt.github.io/radbeeper/)** — this
 page, the lab reports, and [a live counter's

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Monthly Record: Publishing a Continuous Measurement Without Publishing a Street Address — RadBeeper</title>
+<meta name="description" content="Paul Richeson · RadBeeper · Copal Linux">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/the-monthly-record.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="The Monthly Record: Publishing a Continuous Measurement Without Publishing a Street Address — RadBeeper">
+<meta property="og:description" content="Paul Richeson · RadBeeper · Copal Linux">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/the-monthly-record.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-monthly-record-publishing-a-continuous-measurement-without-publishing-a-street-address">The Monthly Record: Publishing a Continuous Measurement Without Publishing a Street Address</h1>
+<p><strong>Paul Richeson</strong> · RadBeeper · Copal Linux</p>
+<hr>
+<h2 id="abstract">Abstract</h2>
+<p><em>A radiation counter left running produces an unbounded record, and an unbounded record cannot be published: it outgrows a page, it outgrows a repository, and its provenance decays faster than its content. This report describes the release agenda RadBeeper adopted at version 0.5 — one release per month, carrying that month's counts — and the four design decisions the agenda forced. First, the record is dated by construction rather than rotated, so a month ending is not an event. Second, emissions are chained by <code>H(prev ‖ key)</code>, which is computed in both implementations from the emission log and never from the raw frames, keeping tamper-evidence inside the differential contract. Third, a record is identified by a serial number by default, by a named place when one is given, and by a coordinate only at a precision chosen when it is written — rounding on the way in rather than on the way out, which turns a display convention into a property of the file. Fourth, the published page embeds raw frames against a byte budget rather than a time window, because the thing being bounded is page weight. We report the measured costs, the three-implementation verification the frame format now carries, and what a month of record does not establish.</em></p>
+<p><strong>Index Terms</strong> — environmental monitoring, hash chain, tamper-evidence, data publication, location privacy, differential testing, Geiger–Müller counter, static site.</p>
+<hr>
+<h2 id="i-introduction">I. Introduction</h2>
+<p>A measurement that nobody else can check is an anecdote. RadBeeper has, since its first version, published the counts behind every claim it makes: the monitor page links the tab-separated log it was drawn from, and the audit page carries the per-second counts behind every random line so that any reader can recompute the digest. That worked while the record was small.</p>
+<p>It does not scale. A counter sampling once a second produces 31.5 million samples a year. The emission log grows without bound; the audit page grows with it; and the repository that carries both grows by the whole of it on every rebuild. At some size each of these stops being publishable, and the sizes are not large: a single year of continuous counting is about 30 MB of frames, which is past what a browser will happily parse inline and well past what anybody will download to check an arithmetic claim.</p>
+<p>The obvious answer — publish a summary — gives up the property that made the record worth publishing. This report describes the answer actually taken, which is to make the record <em>periodic</em> rather than <em>cumulative</em>, and to make each period independently checkable and cryptographically linked to the one before it.</p>
+<hr>
+<h2 id="ii-the-agenda">II. The Agenda</h2>
+<p>The release cadence is one version per month, or thereabouts. It is not automated and deliberately is not: <code>make release</code> is run by a person who has read what changed.</p>
+<table><thead><tr><th>step</th><th>what happens</th><th>who</th></tr></thead><tbody><tr><td>1</td><td>The month's <code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code> stops growing; the next month's begins.</td><td>nothing — see §III</td></tr><tr><td>2</td><td><code>radbeeper site</code> is confirmed or corrected, if the counter moved.</td><td>a person</td></tr><tr><td>3</td><td><code>make release</code> bumps the version, runs both suites, rebuilds every page, and tags.</td><td>a person</td></tr><tr><td>4</td><td>The tag builds binaries, publishes the crate, and deploys the pages.</td><td>CI</td></tr></tbody></table>
+<p>Step 2 is the only one that is a judgement rather than a command, and it is the reason the cadence is monthly rather than nightly. A fixed monitoring station does not move often enough to justify recording its position on every row, and does move often enough that recording it once, forever, would be a lie. A month is the interval at which "where has this been?" is a question with a short answer.</p>
+<hr>
+<h2 id="iii-rotation-by-construction">III. Rotation by Construction</h2>
+<p>There is no rotation code in RadBeeper, and there is no scheduled job that closes a file. A row is written to the file for <em>its own month</em>:</p>
+<pre><code class="language-rust">pub fn path(when: f64, directory: &amp;Path, serial: Option&lt;&amp;str&gt;) -&gt; PathBuf {
+    directory.join(format!("cpm-{}-{}.tsv",
+        serial.unwrap_or("unknown"), clock::format(when, "%Y-%m")))
+}</code></pre>
+<p>A month ending is therefore not an event. That file stops being appended to and the next one starts, with nothing renamed while a service holds it open and nothing to go wrong at midnight on the first. Version 0.5 extends the same rule to the emission record, which had been accumulating in undated files since the beginning:</p>
+<pre><code>random-&lt;serial&gt;-YYYY-MM.tsv     the audit trail: emissions with their counts
+random-&lt;serial&gt;-YYYY-MM.hex     the digits alone, one line per emission
+random-&lt;serial&gt;-YYYY-MM.bin     the raw seconds, one byte each</code></pre>
+<p><strong>The undated files are not migrated.</strong> <code>random_series()</code> reads <code>random-&lt;serial&gt;.&lt;ext&gt;</code> as though it were the oldest month, because it is. Rewriting a file whose hash somebody may have published is a worse failure than carrying a special case for one filename, and the special case is four lines.</p>
+<p>One subtlety is checked rather than assumed. A serial number may itself contain a dash, so <code>random-AB-CD.bin</code> is ambiguous between "counter <code>AB-CD</code>, undated" and "counter <code>AB</code>, some month <code>CD</code>". The suffix is therefore matched against the shape <code>-YYYY-MM</code> digit by digit, and <code>is_dash_month</code> has a test of its own for exactly this case.</p>
+<hr>
+<h2 id="iv-the-chain">IV. The Chain</h2>
+<p>Dating the record creates a new problem: the record is now a sequence of files, and a sequence of files can be reordered, truncated, or have a member quietly removed. Each file remains internally valid throughout.</p>
+<p>Version 0.5 adds a hash chain over emissions:</p>
+<pre><code>link₀ = H(LABEL ‖ 0…0 ‖ key₀)
+linkₙ = H(LABEL ‖ linkₙ₋₁ ‖ keyₙ)</code></pre>
+<p>with <code>LABEL = "radbeeper/chain/1"</code> and <code>H</code> = SHA-256. Three properties of this construction were chosen deliberately and each one costs something.</p>
+<h3 id="a-the-chain-is-beside-the-key-never-inside-it">A. The chain is beside the key, never inside it</h3>
+<p>The obvious design folds the previous link into the emission digest, so that the chain <em>is</em> the key. It was rejected. The digest is</p>
+<pre><code>key = SHA256("radbeeper/entropy/1" ‖ seq ‖ started ‖ packed_counts)</code></pre>
+<p>and it is computed identically by the Rust and by the Python reference implementation, which is what lets <code>radbeeper random --check</code> recompute any line ever published. Folding the previous link in would change every hex line the program has ever emitted, retroactively invalidate every recorded emission, and make each one uncheckable by the reference implementation. The chain is worth a great deal less than that.</p>
+<p>So independence is spent on <em>ordering</em> and not on <em>bits</em>, and the two claims stay separable: each emission is recomputable from its own counts alone, and the chain additionally attests the order.</p>
+<h3 id="b-it-is-tamper-evidence-not-tamper-proofing">B. It is tamper-evidence, not tamper-proofing</h3>
+<p>Anybody who can rewrite the file can recompute the whole chain. This is stated plainly on the page itself rather than left for a reader to work out. What the chain catches is the realistic accident — a truncated copy, a partial download, two months stitched back together in the wrong order, a frame lost to a full disk — and the realistic single-point edit, where one record is changed and the rest are left standing.</p>
+<p>The distinction is worth a test, because it is the failure mode per-record integrity <em>cannot</em> see:</p>
+<blockquote><p><code>a_missing_frame_breaks_the_chain_though_every_frame_still_verifies</code></p></blockquote>
+<p>Four frames are built, linked, and one is removed from the middle. Every remaining frame still verifies against its own counts — that assertion is in the test — and the chain does not.</p>
+<h3 id="c-the-chain-head-is-read-from-the-disk-not-held-in-memory">C. The chain head is read from the disk, not held in memory</h3>
+<p><code>write_frame</code> reads the last link out of the newest frame file on every append, by scanning backwards from the end for a magic that decodes and finishes exactly at EOF. Holding a chain head in memory is cheaper and is wrong: a service restart, a month boundary, or a second <code>radbeeper</code> started by hand against the same directory each leave an in-memory head stale or absent, and the chain forks silently. The file already knows what it ends with, so the file is asked. The cost is one backward scan per emission, which is once every few minutes.</p>
+<hr>
+<h2 id="v-identity-of-a-record">V. Identity of a Record</h2>
+<p>A count rate without a place is half a measurement. 40 CPM means one thing in a cellar and another on granite at altitude, and a reader who cannot tell which has been handed a number they cannot use.</p>
+<p>RadBeeper identifies a record by the first of these that exists:</p>
+<ol><li><strong>A coordinate</strong>, at the precision it was recorded with.</li><li><strong>A named place</strong> — "the north window" — which is what a human reader actually wants.</li><li><strong>A serial number</strong>, which is always available and identifies the instrument rather than the site.</li><li><strong>A braid of <em>n</em> counters</strong>, where more than one tube is running; see §VII.</li></ol>
+<p>All of these are properties of a <em>serial number over time</em>, not of a machine or of a file, and they live in append-only <code>sites.tsv</code>. A reading from last month resolves to where the counter was last month.</p>
+<hr>
+<h2 id="vi-precision-as-a-privacy-parameter">VI. Precision as a Privacy Parameter</h2>
+<p>Earlier versions refused to record coordinates at all, with this reasoning in the source:</p>
+<blockquote><p><em>A decimal fix to six places is a street address for whoever is holding the counter.</em></p></blockquote>
+<p>That reasoning is correct about the risk and wrong about the remedy. The hazard was never the coordinate; it was the <em>precision</em>. So precision became the control:</p>
+<table><thead><tr><th>places</th><th>≈ error</th><th>identifies</th></tr></thead><tbody><tr><td>1</td><td>11 km</td><td>a town and its surroundings</td></tr><tr><td>2</td><td>1.1 km</td><td>a district</td></tr><tr><td><strong>3</strong></td><td><strong>110 m</strong></td><td><strong>a street — the default</strong></td></tr><tr><td>4</td><td>11 m</td><td>a building</td></tr><tr><td>6</td><td>11 cm</td><td>a doorstep</td></tr></tbody></table>
+<pre><code class="language-sh">radbeeper site --name "the north window" --at 51.3172461,0.8914772
+# writes: 51.317   0.891</code></pre>
+<p><strong>The rounding happens on the way in.</strong> The file never holds the discarded digits, so it cannot be made to give them up — by a future version of this program, by a reader of the raw <code>.tsv</code>, or by anybody who obtains the repository. This is a stronger guarantee than a page that declines to print what it stores, and it is strictly less convenient: the precision cannot be recovered later if it turns out to have been wanted. That is the trade, and it is the right way round for a file that is published by default.</p>
+<p>Requesting more than four places prints a warning naming the ground distance it corresponds to. It is not refused. The counter may legitimately be somewhere that nobody lives.</p>
+<hr>
+<h2 id="vii-what-a-second-tube-buys-a-braid-not-a-blend">VII. What a Second Tube Buys — "A Braid, Not a Blend"</h2>
+<p>Running two counters invites an obvious claim: twice the entropy, pooled. The claim is false here, and the page says so explicitly rather than quietly benefiting from the ambiguity.</p>
+<p>Each tube keeps <strong>its own pool</strong>. An emission is an audit trail of one source and is recomputed from that source's own counts; a key mixed from two tubes could not be recomputed from either, so no downstream reader could check it. What two tubes actually provide is:</p>
+<ul><li><strong>Throughput.</strong> <em>n</em> pools reach 256 bits <em>n</em> times as often as one does. This is a linear gain and nothing cleverer.</li><li><strong>A witness.</strong> Two tubes in one room should agree to within counting statistics. When they stop agreeing, one is wrong — drifting, dying, shielded, or being pointed at something — and <em>a single tube cannot tell you that about itself at any price.</em> The monitor reports the agreement as a z-score.</li></ul>
+<p>The seconds themselves are interleaved rather than summed, one tier per tube, so that any second can be traced back to the tube that counted it. The shorthand for the arrangement is <strong>braided decay</strong>, and the distinction the phrase is carrying is exact: a blend would average the tubes and discard which was which, while a braid keeps every strand whole and legible along its entire length and takes its strength from the strands having been spun independently.</p>
+<hr>
+<h2 id="viii-bounding-the-page">VIII. Bounding the Page</h2>
+<p>The audit page embeds raw frames so that a copy saved to a disk still audits with nothing to fetch and no server to fetch it from. That property is the whole point of embedding — an audit trail that works only while a web server is up is not much of one — and it has to be paid for in bytes.</p>
+<p>The budget is <strong>2 MiB of raw frame data by default</strong>, <code>--frame-budget</code> otherwise, and it is a budget in bytes rather than a window in time because the thing that hurts is page weight. A quiet counter fits a year inside it; a busy one fits a fortnight; both produce a page that loads.</p>
+<p>Two measured costs justify the encoding:</p>
+<ul><li><strong>One byte per ordinary second.</strong> A second that arrived one second after the last one, carrying a count under 0xFD, is stored as a single byte that <em>is</em> the count. The test asserts the marginal cost directly: 540 more seconds cost exactly 540 more bytes.</li><li><strong>No general-purpose compression.</strong> Beyond the project's one-dependency rule, a DEFLATE header alone is most of what the encoding costs, and a stream of bytes valued 0–5 is the shape a generic compressor does worst on. The structure is the compression.</li></ul>
+<p>Files are embedded <strong>whole</strong>, newest first, stopping before the budget — never part of one. This is not tidiness. The reference implementation cannot see where a frame ends, because it is copying bytes it does not parse (§IX); a month is a unit both implementations can agree on without either of them understanding the contents.</p>
+<hr>
+<h2 id="ix-verification-across-three-implementations">IX. Verification Across Three Implementations</h2>
+<p>RadBeeper's central discipline is that the Rust and the Python reference implementation produce byte-identical output, enforced by <code>tests/test_differential.py</code>. The frame viewer threatened it directly: the audit page is compared byte for byte, and the Python has never heard of a frame.</p>
+<p>The resolution is a division of labour.</p>
+<table><thead><tr><th>artefact</th><th>built from</th><th>by whom</th></tr></thead><tbody><tr><td>joined table</td><td>emission <code>.tsv</code> + count <code>.tsv</code></td><td>both, identically</td></tr><tr><td>chain links</td><td>emission keys</td><td>both, identically</td></tr><tr><td>embedded frames</td><td><code>.bin</code>, base64, <strong>unparsed</strong></td><td>both, identically</td></tr><tr><td>frame decoding</td><td>the embedded bytes</td><td>the browser, once</td></tr></tbody></table>
+<p>Neither generator parses a frame. The viewer — <code>src/frames.js</code>, zero dependencies, no network, no bundler — does the decoding in the browser, where there is exactly one implementation of it. The Rust obtains it with <code>include_str!</code>; the Python is installed as a lone file and must carry a copy, which <code>tools/embedjs.py</code> generates and <code>tests/test_frames_js.py</code> verifies is byte-identical to the source.</p>
+<p>That leaves a third implementation of the frame format with nothing checking it, so a fourth artefact was added: <code>tests/fixtures/frames.bin</code>, four frames covering every branch the encoder has — an ordinary second, a count above 0xFD, a gap, and a suspect spectrum — committed, with the Rust's reading of them in <code>frames.json</code>. The Rust asserts it still writes those exact bytes; the JavaScript asserts it reads them to the same values, chain links included. Round-tripping proves nothing here: a format that drifts drifts in both directions at once and round-trips happily the whole way.</p>
+<p>The chain check is the part worth having. It requires two independent SHA-256 implementations and two hex conventions to agree, which is precisely the property that makes the chain <em>evidence</em>: a reader can recompute it without the writer's code.</p>
+<hr>
+<h2 id="x-limitations">X. Limitations</h2>
+<p><strong>A month is not attested.</strong> The chain says these emissions were produced in this order by this counter. It says nothing about when, beyond what the timestamps claim, and the timestamps are the recording machine's. There is no trusted timestamp anywhere in this record.</p>
+<p><strong>The chain does not survive a rewrite.</strong> See §IV-B. It detects accident and single-point edits, not an adversary with write access to the repository.</p>
+<p><strong>A fix is where somebody said the counter was.</strong> Nothing verifies it. The precision guarantee is about what the file <em>contains</em>, not about whether it is true.</p>
+<p><strong>Two tubes in one room are not two independent sites.</strong> They share a building, a mains supply, and whatever is in the air. They cross-check the instruments, not the environment.</p>
+<p><strong><code>counts</code> in the emission log is clamped at fifteen a second.</strong> That clamp is part of the digest, so the key still recomputes from it exactly — but it is lossy as a record of what the tube did. The unclamped record is the <code>.bin</code> frame, which is why the frames exist at all, and the table's header says so on every export.</p>
+<p><strong>The entropy is not certified.</strong> Measured min-entropy is a claim about the samples that were seen. It has not been through a statistical test battery and this report does not make it one.</p>
+<hr>
+<h2 id="xi-conclusion">XI. Conclusion</h2>
+<p>Making a continuous record publishable turned out not to be a compression problem. It was four separate decisions about <em>boundaries</em>: where a file ends (by construction, at a month), how one period is bound to the last (a chain beside the keys, never inside them), how much of a place to write down (as much as was asked for, decided before writing), and how much of the record a page carries (a byte budget, whole files only).</p>
+<p>Each of those has a failure mode that is silent if it is got wrong, and each is now covered by a test that names the failure rather than the behaviour. The one that took the longest to see was the smallest: a raw-string continuation put a single backslash at the head of the Python's copy of the viewer, and one byte of difference in a 70 KB page is indistinguishable, in a diff, from having built the wrong thing entirely.</p>
+<hr>
+<h2 id="references">References</h2>
+<p>[1] RadBeeper, "Random numbers out of decay," <code>docs/the-random.md</code>, 2026.</p>
+<p>[2] RadBeeper, "A signed chain of custody for a single-maintainer Rust crate," <code>docs/the-chain-of-custody.md</code>, 2026.</p>
+<p>[3] RadBeeper, "The cascade," <code>docs/cascade.md</code>, 2026.</p>
+<p>[4] NIST, "Recommendation for the Entropy Sources Used for Random Bit Generation," SP 800-90B, 2018.</p>
+<p>[5] NIST, "Secure Hash Standard," FIPS PUB 180-4, 2015.</p>
+<p>[6] GQ Electronics, "GMC-320 Plus communication protocol," rev. 1.4.</p>
+<p>[7] Copal Linux. [Online]. Available: https://github.com/vonglurt/copal</p>
+<hr>
+<p>MIT License — Copyright (c) 2026 Paul Richeson</p>
+<hr>
+<p><a href="../index.html">← back to the README</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>
