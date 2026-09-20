@@ -20,9 +20,25 @@ categories = ["command-line-utilities", "science"]
 # globs, so an unanchored "README.md" matches a README.md at ANY depth: it
 # quietly pulled logs/README.md into the .crate, which is the exact stray
 # file this list exists to keep out. "/README.md" is the root one and only it.
+#
+# AND IT IS A LIST OF PATTERNS, NOT A LIST OF LANGUAGES. This was
+# "/src/**/*.rs" alone until the audit page grew a viewer, at which point
+# src/frames.js -- pulled into the binary with include_str! -- was silently
+# left out of the .crate. The crate still built here, because the file was on
+# disk; it failed only in CI, building the PUBLISHED .crate from its own
+# contents, which is the one check that sees the difference.
 include = [
     "/src/**/*.rs",
+    "/src/**/*.js",
     "/examples/*.rs",
+    # The frame fixture and the test that reads it, so the PUBLISHED crate can
+    # check its own wire format rather than taking this repository's word for
+    # it. Four kilobytes, and without them cargo warns on every package that
+    # it is ignoring a test it can see but cannot ship -- a warning that would
+    # sit there until it was hiding a different one.
+    "/tests/frames_fixture.rs",
+    "/tests/fixtures/frames.bin",
+    "/tests/fixtures/frames.json",
     "/Cargo.toml",
     "/Cargo.lock",
     "/README.md",
