@@ -69,7 +69,7 @@ code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
 .note{color:var(--dim);font-size:.85rem;max-width:68ch}
 </style></head><body><main>
 <h1>Where the random comes from</h1>
-<p class="sub">radbeeper 0.5.0 &middot; counter F48824B8207F7E &middot; 9 emissions &middot; generated 2026-09-19 23:31</p>
+<p class="sub">radbeeper 0.5.0 &middot; counter F48824B8207F7E &middot; 9 emissions &middot; generated 2026-09-20 10:47</p>
 <p class="lede">The moment a nucleus decays is not determined by anything, which makes a Geiger&ndash;M&uuml;ller counter the textbook hardware entropy source. What is <em>not</em> textbook is how much randomness survives the journey down a serial cable, and that is what this page is for. <a href="monitor.html">Back to the monitor</a>.</p>
 <h2>What the serial link gives you</h2>
 <p class="note">Everything below follows from one line of the protocol. <code>&lt;HEARTBEAT1&gt;&gt;</code> makes the counter send <b>two bytes once per second</b>, and those two bytes are a count: how many arrivals landed in that second. The device drives the clock, so there is no drift between its second and ours &mdash; but there is also nothing finer. <b>One integer per second is the entire raw material.</b></p>
@@ -1189,6 +1189,40 @@ code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
   }
 })();
 </script>
+<h2>What is in the .bin, and how to check a key by hand</h2>
+<p class="note">The raw material behind every line on this page is a <code>.bin</code>: each second as it was counted, one file per counter per month, written beside the count log by <code>service</code> and <code>watch</code>, appended to and never rewritten. Where the file itself is published it is in the table at the foot of this page. There is no header at the top of one. Every frame carries its own magic and its own lengths, so a file truncated by a full disk or cut in half by a crash still reads &mdash; a reader that loses its place scans forward for the next magic and carries on. A header would have made the first bad byte the last readable one.</p>
+<h3>One frame</h3>
+<div class="tablewrap"><table class="budget"><tbody>
+<tr><th><code>RBF2</code></th><td>four bytes of magic. <code>RBF1</code> is the same layout without the trailing link, written before 0.5. A second magic rather than a version byte, so a reader meeting the wrong one sees a frame that is simply not there, instead of parsing a header it half understands and running off the end of it.</td></tr>
+<tr><th>suspect</th><td>one byte: 1 when the spectrum was not flat while this frame was being collected.</td></tr>
+<tr><th>seq</th><td>varint &mdash; this counter's emission number.</td></tr>
+<tr><th>started</th><td>varint &mdash; whole seconds since the epoch, of the <em>first</em> sample.</td></tr>
+<tr><th>n</th><td>varint &mdash; how many samples follow.</td></tr>
+<tr><th>samples</th><td><em>n</em> of them, and the ordinary second is <b>one byte</b>: one second after the one before it, and the byte is the count. Anything else &mdash; a gap, or a count above <code>0xFD</code> &mdash; is <code>0xFE</code> and then two varints, the gap in seconds and the count.</td></tr>
+<tr><th>key</th><td>varint length, then that many bytes: the 32 raw bytes of the SHA-256, not the 64 characters of its hex.</td></tr>
+<tr><th>link</th><td>the same again, for the chain. An <code>RBF1</code> frame has none.</td></tr>
+</tbody></table></div>
+<p class="note">A varint here is LEB128: seven bits of value a byte, lowest group first, the high bit set on every byte but the last.</p>
+<h3>The key, and the second it is dated to</h3>
+<p class="note"><b>The time is inside the key, not beside it.</b> A key is one SHA-256 over a preimage carrying the label, the sequence number and the second the frame started &mdash; so a frame cannot be moved to another time, or renumbered, and still produce the key written in it:</p>
+<pre>"radbeeper/entropy/1" 0x00 &lt;seq&gt; 0x00 &lt;started&gt; 0x00 &lt;counts&gt;</pre>
+<p class="note"><code>seq</code> and <code>started</code> are written out in decimal, as ASCII, and <code>started</code> is the same whole second the frame records above. <code>counts</code> is one hex character a second, the count in that second clamped at <code>f</code>: a second with sixteen counts in it is not doing the work here. The label is what stops a key ever being taken for anything else this program hashes.</p>
+<p class="note">The gaps are recorded but <em>not</em> hashed. Only the counts go into the digest, which is why a frame keeps both &mdash; the gaps are there so a reader can see where the record has holes.</p>
+<p class="note">To check one for yourself, take the frame out as JSON and do the hash by hand. Nothing in here needs this program to be trusted:</p>
+<pre>radbeeper frames export --serial &lt;serial&gt; --seq &lt;n&gt; --json &gt; frame.json
+
+python3 - &lt;&lt;'EOF'
+import json, hashlib
+f = json.load(open("frame.json"))[0]
+counts = "".join("%x" % min(c, 15) for _, c in f["samples"])
+pre = (b"radbeeper/entropy/1\0" + str(f["seq"]).encode()
+       + b"\0" + str(f["started"]).encode() + b"\0" + counts.encode())
+print(hashlib.sha256(pre).hexdigest() == f["key"])
+EOF</pre>
+<h3>And the link</h3>
+<p class="note">The chain link is a second hash, under a second label, and it never touches the key:</p>
+<pre>"radbeeper/chain/1" || previous link || key</pre>
+<p class="note">Both go in as their raw 32 bytes, not as hex text, and the first frame a counter ever wrote hangs from a genesis link of sixty-four zeros. <code>radbeeper frames verify</code> walks the whole of it from there.</p>
 <h2>Take the evidence with you</h2>
 <p class="note">Nothing on this page is a summary you have to take on trust. These are the files it was built from.</p>
 <div class="tablewrap"><table class="budget"><tbody>

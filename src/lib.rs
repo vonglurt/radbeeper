@@ -12,10 +12,12 @@
 // the Python would write, and the test is that they are the same characters.
 pub mod analysis;
 pub mod audit;
+pub mod browser;
 pub mod broker;
 pub mod clock;
 pub mod entropy;
 pub mod export;
+pub mod frames;
 pub mod history;
 pub mod log;
 pub mod sha256;

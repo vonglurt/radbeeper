@@ -384,10 +384,15 @@ play:
 # Pages serves them with no build step.
 site: build
 	./$(BIN) pages
-	@test -d logs && ./$(BIN) export --logs logs -o monitor.html \
+	@test -d logs && ./$(BIN) export --logs logs -o monitor.html --frames-page \
 	  || echo "  (no logs/ -- monitor.html left alone)"
 
 ## site-py: the same site, from the stdlib Python -- what the Action runs
+# EXCEPT frames.html, WHICH ONLY THE RUST WRITES. `--frames-page` reads the
+# .bin frames, which the Python has never decoded; the page it would have to
+# produce byte for byte does not exist on this side. So the Action leaves
+# whatever `make site` last committed, and the page says so on its own
+# footer rather than going quietly stale. See src/browser.rs.
 # BYTE FOR BYTE THE SAME PAGES, and tests/test_differential.py is what says
 # so. This one needs no toolchain, which is why the workflow uses it and why
 # it is not going anywhere.

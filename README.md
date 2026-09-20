@@ -63,6 +63,8 @@ radbeeper backfill         # fill the log's gaps from the counter's own flash
 radbeeper random           # 256 bits of hex, out of decay timing
 radbeeper site             # where this counter is, and where it has been
 radbeeper export           # build index.html and random.html from the logs
+radbeeper frames list      # the raw seconds on disk, by month
+radbeeper frames show      # one frame: its seconds, its spectrum, its key
 radbeeper log pull         # download the raw history to .bin and .csv
 radbeeper clock --set      # set the counter's clock from this machine's
 ```
@@ -389,6 +391,31 @@ turns it off.
 three ways this is normally done wrong, the measurement that replaced the model,
 and what the serial link's one-second resolution costs.
 
+### Browsing the raw seconds
+
+Every one of those keys came out of a particular stretch of decay, and that
+stretch is kept: `random-<serial>-YYYY-MM.bin`, appended, one byte for an
+ordinary second.
+
+```sh
+radbeeper frames list                     # what is on disk, by month
+radbeeper frames show --seq 124           # one frame: seconds, spectrum, key, link
+radbeeper export --logs logs -o monitor.html --frames-page   # and frames.html
+```
+
+`frames.html` is the browser: months, then days, then one frame at a time --
+as a strip of seconds you can zoom into, or as a spectrum, where **flat is the
+good answer**. A frame has its own address, so `frames.html#2026-09/124` opens
+that one.
+
+Getting the data out and back in is `frames export` and `frames import`; an
+imported frame is recomputed from its own counts before it is written and is
+relinked into this directory's chain rather than carrying somebody else's.
+**[Reading the raw record](docs/the-frame-browser.md)** is the full account,
+including the one thing to know before relying on any of it: only the process
+holding the serial port writes frames, so a service running an older build
+records emissions and no frames at all.
+
 ---
 
 ## Publish it
@@ -439,12 +466,16 @@ two programs can both write, and publishing in more detail.
 | `site` | where a counter is, and where it has been |
 | `export` | build `index.html` and `random.html` from the logs |
 | `pages` | build the landing page and the lab reports from the documents |
+| `frames list` / `show` | the raw frames on disk by month, and one frame in full |
+| `frames export` / `import` | those frames out as bytes, a table or json &mdash; and back in, recomputed first |
+| `frames verify` | every key and every chain link, from genesis |
 | `log info` / `log pull` | how much history the flash holds, and download it |
 
 Options: `--source sim`, `--sim-cpm`, `--seed`, `--spans 3,30,300`,
 `--cpm-per-usvh`, `--log-every`, `--duration`, `--clock-offset`,
 `--backfill-bytes`, `--max-gap`, `--entropy-bits`, `--device`, `--baud`,
-`--no-log`, `--no-backfill`, `--no-export`, `--no-frames`, `--entropy-bits`.
+`--no-log`, `--no-backfill`, `--no-export`, `--no-frames`, `--entropy-bits`,
+`--frames-page`, `--month`, `--seq`, `--json`/`--tsv`/`--bin`.
 
 ---
 
@@ -467,5 +498,6 @@ properly, with the arithmetic, the failures that shaped it, and the prior art.
 | [Prior art](docs/prior-art.md) | what else reads these counters, and what this does differently |
 | [Security](SECURITY.md) | what is in scope, what is not, and how the supply chain is kept small |
 | [A signed chain of custody](docs/the-chain-of-custody.md) | the four links from a commit on a Copal VM to a crate on crates.io, the three defects found building them, and what the arrangement does not establish |
+| [Reading the raw record](docs/the-frame-browser.md) | the frame browser and the three surfaces under it: what a frame costs measured, months and days out of an append-only file, and the procedure for getting frames in and out |
 | [The monthly record](docs/the-monthly-record.md) | how a record that never stops growing is published anyway: dated by construction, chained between months, and identified by a coordinate no finer than you asked for |
 | [Archive](docs/archive/) | the long-form README this replaced, kept as it stood at 0.3.1 |

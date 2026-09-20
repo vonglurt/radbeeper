@@ -145,7 +145,7 @@ fn float_cell(s: &str) -> Option<f64> {
 
 /// `os.path.abspath`: joined to the working directory, then normalised
 /// lexically -- no symlinks resolved.
-fn abspath(p: &str) -> String {
+pub(crate) fn abspath(p: &str) -> String {
     let joined = if p.starts_with('/') {
         p.to_string()
     } else {
@@ -166,7 +166,7 @@ fn abspath(p: &str) -> String {
 }
 
 /// `os.path.join(a, b)` for two parts.
-fn join(a: &str, b: &str) -> String {
+pub(crate) fn join(a: &str, b: &str) -> String {
     if b.starts_with('/') || a.is_empty() {
         b.to_string()
     } else if a.ends_with('/') {
@@ -176,7 +176,7 @@ fn join(a: &str, b: &str) -> String {
     }
 }
 
-fn dirname(p: &str) -> String {
+pub(crate) fn dirname(p: &str) -> String {
     match p.rfind('/') {
         Some(i) => {
             let head = &p[..=i];
@@ -191,7 +191,7 @@ fn dirname(p: &str) -> String {
     }
 }
 
-fn basename(p: &str) -> &str {
+pub(crate) fn basename(p: &str) -> &str {
     match p.rfind('/') {
         Some(i) => &p[i + 1..],
         None => p,
@@ -199,7 +199,7 @@ fn basename(p: &str) -> &str {
 }
 
 /// `os.path.relpath(path, start)`.
-fn relpath(path: &str, start: &str) -> String {
+pub(crate) fn relpath(path: &str, start: &str) -> String {
     let s = abspath(start);
     let p = abspath(path);
     let sl: Vec<&str> = s.split('/').filter(|x| !x.is_empty()).collect();
@@ -214,7 +214,7 @@ fn relpath(path: &str, start: &str) -> String {
     }
 }
 
-fn path_str(p: &Path) -> String {
+pub(crate) fn path_str(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
@@ -1768,7 +1768,7 @@ const VIEWER_JS: &str = include_str!("frames.js");
 /// data, since the browser hands it back verbatim -- it is looking for the
 /// end of the element, which any `</` can start. Breaking that one digraph is
 /// necessary and sufficient, and the viewer puts it back.
-fn esc_payload(text: &str) -> String {
+pub(crate) fn esc_payload(text: &str) -> String {
     text.replace("</", "<\\/")
 }
 
@@ -1785,7 +1785,7 @@ fn json_meta(serial: &str, audit: &Audit) -> String {
 }
 
 /// A JSON string literal, with the two escapes a <script> payload needs.
-fn json_str(s: &str) -> String {
+pub(crate) fn json_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
     for c in s.chars() {
@@ -1862,7 +1862,7 @@ impl Audit {
 }
 
 /// `n` bytes, as a person reads them.
-fn bytes_text(n: u64) -> String {
+pub fn bytes_text(n: u64) -> String {
     if n >= 1024 * 1024 {
         format!("{} MiB", f(1, n as f64 / (1024.0 * 1024.0)))
     } else if n >= 1024 {
@@ -2214,6 +2214,88 @@ pub fn render_random_html(serial: &str, pools: &[entropy::Emission], title: &str
     a!("<script id=\"rb-frames\" type=\"text/plain\">{}</script>",
        audit.frames.trim_end());
     a!("<script>{}</script>", VIEWER_JS);
+
+    // ------------------------------------------------------------ the .bin ---
+    a!("<h2>What is in the .bin, and how to check a key by hand</h2>");
+    a!("<p class=\"note\">The raw material behind every line on this page is \
+        a <code>.bin</code>: each second as it was counted, one file per \
+        counter per month, written beside the count log by \
+        <code>service</code> and <code>watch</code>, appended to and never \
+        rewritten. Where the file itself is published it is in the table at \
+        the foot of this page. There is no header at the top of one. Every \
+        frame carries \
+        its own magic and its own lengths, so a file truncated by a full disk \
+        or cut in half by a crash still reads &mdash; a reader that loses its \
+        place scans forward for the next magic and carries on. A header would \
+        have made the first bad byte the last readable one.</p>");
+    a!("<h3>One frame</h3>");
+    a!("<div class=\"tablewrap\"><table class=\"budget\"><tbody>");
+    a!("<tr><th><code>RBF2</code></th><td>four bytes of magic. \
+        <code>RBF1</code> is the same layout without the trailing link, \
+        written before 0.5. A second magic rather than a version byte, so a \
+        reader meeting the wrong one sees a frame that is simply not there, \
+        instead of parsing a header it half understands and running off the \
+        end of it.</td></tr>");
+    a!("<tr><th>suspect</th><td>one byte: 1 when the spectrum was not flat \
+        while this frame was being collected.</td></tr>");
+    a!("<tr><th>seq</th><td>varint &mdash; this counter's emission \
+        number.</td></tr>");
+    a!("<tr><th>started</th><td>varint &mdash; whole seconds since the epoch, \
+        of the <em>first</em> sample.</td></tr>");
+    a!("<tr><th>n</th><td>varint &mdash; how many samples follow.</td></tr>");
+    a!("<tr><th>samples</th><td><em>n</em> of them, and the ordinary second \
+        is <b>one byte</b>: one second after the one before it, and the byte \
+        is the count. Anything else &mdash; a gap, or a count above \
+        <code>0xFD</code> &mdash; is <code>0xFE</code> and then two varints, \
+        the gap in seconds and the count.</td></tr>");
+    a!("<tr><th>key</th><td>varint length, then that many bytes: the 32 raw \
+        bytes of the SHA-256, not the 64 characters of its hex.</td></tr>");
+    a!("<tr><th>link</th><td>the same again, for the chain. An \
+        <code>RBF1</code> frame has none.</td></tr>");
+    a!("</tbody></table></div>");
+    a!("<p class=\"note\">A varint here is LEB128: seven bits of value a \
+        byte, lowest group first, the high bit set on every byte but the \
+        last.</p>");
+    a!("<h3>The key, and the second it is dated to</h3>");
+    a!("<p class=\"note\"><b>The time is inside the key, not beside it.</b> A \
+        key is one SHA-256 over a preimage carrying the label, the sequence \
+        number and the second the frame started &mdash; so a frame cannot be \
+        moved to another time, or renumbered, and still produce the key \
+        written in it:</p>");
+    a!("<pre>\"radbeeper/entropy/1\" 0x00 &lt;seq&gt; 0x00 &lt;started&gt; \
+        0x00 &lt;counts&gt;</pre>");
+    a!("<p class=\"note\"><code>seq</code> and <code>started</code> are \
+        written out in decimal, as ASCII, and <code>started</code> is the \
+        same whole second the frame records above. <code>counts</code> is one \
+        hex character a second, the count in that second clamped at \
+        <code>f</code>: a second with sixteen counts in it is not doing the \
+        work here. The label is what stops a key ever being taken for \
+        anything else this program hashes.</p>");
+    a!("<p class=\"note\">The gaps are recorded but <em>not</em> hashed. Only \
+        the counts go into the digest, which is why a frame keeps both &mdash; \
+        the gaps are there so a reader can see where the record has \
+        holes.</p>");
+    a!("<p class=\"note\">To check one for yourself, take the frame out as \
+        JSON and do the hash by hand. Nothing in here needs this program to \
+        be trusted:</p>");
+    a!("<pre>radbeeper frames export --serial &lt;serial&gt; --seq &lt;n&gt; --json &gt; frame.json");
+    a!("");
+    a!("python3 - &lt;&lt;'EOF'");
+    a!("import json, hashlib");
+    a!("f = json.load(open(\"frame.json\"))[0]");
+    a!("counts = \"\".join(\"%x\" % min(c, 15) for _, c in f[\"samples\"])");
+    a!("pre = (b\"radbeeper/entropy/1\\0\" + str(f[\"seq\"]).encode()");
+    a!("       + b\"\\0\" + str(f[\"started\"]).encode() + b\"\\0\" + counts.encode())");
+    a!("print(hashlib.sha256(pre).hexdigest() == f[\"key\"])");
+    a!("EOF</pre>");
+    a!("<h3>And the link</h3>");
+    a!("<p class=\"note\">The chain link is a second hash, under a second \
+        label, and it never touches the key:</p>");
+    a!("<pre>\"radbeeper/chain/1\" || previous link || key</pre>");
+    a!("<p class=\"note\">Both go in as their raw 32 bytes, not as hex text, \
+        and the first frame a counter ever wrote hangs from a genesis link of \
+        sixty-four zeros. <code>radbeeper frames verify</code> walks the whole \
+        of it from there.</p>");
 
     // --------------------------------------------------------- the downloads ---
     if !audit.files.is_empty() {

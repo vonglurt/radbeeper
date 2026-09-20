@@ -11,6 +11,7 @@ mod counter;
 mod serial;
 
 use radbeeper::{analysis, broker, clock, entropy, history, log};
+use radbeeper::export::bytes_text;
 use analysis::{
     bar_rows, bar_rows_to, level, spectrum_columns, Ladder, Level, Windows,
 };
@@ -2319,6 +2320,373 @@ fn frames_report(path: &std::path::Path) -> i32 {
     if bad > 0 { 1 } else { 0 }
 }
 
+/// `frames <verb>`: the raw record, from the command line.
+///
+/// THE SAME ANSWERS THE PAGE GIVES, WITHOUT A BROWSER. `frames.html` is the
+/// comfortable way to read this and a terminal is the one that is always
+/// there -- over ssh, in a service's log, on a machine with no display at
+/// all -- so every view the page has is a verb here as well, and both of them
+/// read the files through `radbeeper::frames` rather than each other.
+fn frames_cmd(action: &str, dir: &std::path::Path, serial: Option<&str>,
+              month: Option<&str>, seq: Option<u64>, form: &str,
+              output: Option<&str>, file: Option<&std::path::Path>) -> i32 {
+    use radbeeper::frames as api;
+
+    // WHICH COUNTER, AND SAYING SO RATHER THAN GUESSING. One counter is the
+    // ordinary case and naming it every time would be noise; two is the case
+    // this machine is actually in, and picking one of them silently is how a
+    // person ends up auditing the wrong tube.
+    let found = api::counters(dir);
+    let chosen: Vec<String> = match serial {
+        Some(s) => vec![s.to_string()],
+        None if found.len() == 1 => found.clone(),
+        None if found.is_empty() => {
+            eprintln!("radbeeper: no frame files in {}", dir.display());
+            eprintln!("    frames are written by `radbeeper service` and `radbeeper watch`,");
+            eprintln!("    as random-<serial>-YYYY-MM.bin, unless --no-frames is given.");
+            return 1;
+        }
+        None if action == "list" || action == "verify" => found.clone(),
+        None => {
+            eprintln!("radbeeper: {} counters here -- name one with --serial:", found.len());
+            for s in &found {
+                eprintln!("    {}", s);
+            }
+            return 1;
+        }
+    };
+
+    match action {
+        "list" => {
+            for s in &chosen {
+                let series = api::Series::open(dir, s);
+                println!("counter {}", s);
+                if series.months().is_empty() {
+                    println!("  no frames");
+                    continue;
+                }
+                let mut samples = 0usize;
+                for m in series.months() {
+                    let frames = series.read(&m.label);
+                    let secs: usize = frames.iter().map(|f| f.samples.len()).sum();
+                    samples += secs;
+                    println!(
+                        "  {:<9} {:>6} frames  {:>9}  {:>9} seconds  {} .. {}",
+                        if m.label.is_empty() { "undated" } else { &m.label },
+                        m.frames,
+                        bytes_text(m.bytes),
+                        secs,
+                        clock::format(m.first as f64, "%Y-%m-%d"),
+                        clock::format(m.last as f64, "%Y-%m-%d"),
+                    );
+                }
+                let bytes = series.bytes();
+                println!(
+                    "  {} frames, {} seconds, {} -- {:.2} bytes a second",
+                    series.frames(), samples, bytes_text(bytes),
+                    if samples > 0 { bytes as f64 / samples as f64 } else { 0.0 }
+                );
+                println!("  chain head {}", api::head(dir, s));
+            }
+            0
+        }
+        "verify" => {
+            let mut bad = 0;
+            for s in &chosen {
+                let series = api::Series::open(dir, s);
+                let frames = series.read_all();
+                if frames.is_empty() {
+                    println!("counter {}: no frames", s);
+                    continue;
+                }
+                let v = api::verify(&frames, entropy::GENESIS_LINK);
+                println!(
+                    "counter {}: {} of {} recompute, {} of {} link{}",
+                    s, v.keys_ok, v.frames, v.links_ok,
+                    v.frames - v.unlinked,
+                    if v.unlinked > 0 {
+                        format!(", {} unlinked (written before the chain)", v.unlinked)
+                    } else {
+                        String::new()
+                    }
+                );
+                for seq in &v.broken {
+                    println!("  seq {} does not hold up", seq);
+                }
+                // THE HEAD IS CHECKED AGAINST THE DISK, not just recomputed.
+                // A chain that verifies internally but does not end where the
+                // next frame will be linked from is a fork waiting to happen.
+                let disk = api::head(dir, s);
+                if v.head != disk {
+                    println!("  chain head disagrees with the file:");
+                    println!("    recomputed {}", v.head);
+                    println!("    on disk    {}", disk);
+                    bad += 1;
+                }
+                if !v.broken.is_empty() {
+                    bad += 1;
+                }
+            }
+            if bad > 0 { 1 } else { 0 }
+        }
+        "show" => {
+            let s = &chosen[0];
+            let series = api::Series::open(dir, s);
+            let frames = match month {
+                Some(m) => series.read(m),
+                None => series.read_all(),
+            };
+            if frames.is_empty() {
+                eprintln!("radbeeper: no frames for {}{}", s,
+                          month.map(|m| format!(" in {}", m)).unwrap_or_default());
+                return 1;
+            }
+            let picked: Vec<&entropy::Frame> = match seq {
+                Some(n) => frames.iter().filter(|f| f.seq == n).collect(),
+                None => frames.last().into_iter().collect(),
+            };
+            if picked.is_empty() {
+                eprintln!("radbeeper: no frame with seq {} for {}", seq.unwrap_or(0), s);
+                eprintln!("    `seq` belongs to the pool and restarts; \
+                           `radbeeper frames list` has the months.");
+                return 1;
+            }
+            // seq RESTARTS, so asking for one can legitimately find several.
+            // Showing the first and saying nothing would be answering a
+            // different question than the one asked.
+            if picked.len() > 1 {
+                eprintln!("radbeeper: {} frames carry seq {} -- narrow it with --month:",
+                          picked.len(), seq.unwrap_or(0));
+                for f in &picked {
+                    eprintln!("    {}  {}", clock::stamp(f.started as f64),
+                              clock::format(f.started as f64, "%Y-%m"));
+                }
+                return 1;
+            }
+            inspect(picked[0], s);
+            0
+        }
+        "export" => {
+            let s = &chosen[0];
+            let series = api::Series::open(dir, s);
+            let frames = match month {
+                Some(m) => series.read(m),
+                None => series.read_all(),
+            };
+            if frames.is_empty() {
+                eprintln!("radbeeper: no frames to export for {}", s);
+                return 1;
+            }
+            let head = vec![
+                format!("radbeeper {} -- counter {}", VERSION, s),
+                format!("frames {}{}", frames.len(),
+                        month.map(|m| format!(" from {}", m)).unwrap_or_default()),
+            ];
+            let (bytes, what): (Vec<u8>, &str) = match form {
+                "bin" => (api::to_bytes(&frames), "bytes"),
+                "tsv" => (api::to_tsv(&frames, &head).into_bytes(), "rows"),
+                _ => (api::to_json(&frames).into_bytes(), "json"),
+            };
+            match output {
+                Some(path) => {
+                    if let Err(e) = std::fs::write(path, &bytes) {
+                        eprintln!("radbeeper: {}: {}", path, e);
+                        return 1;
+                    }
+                    println!("radbeeper: {} -- {} frames, {} of {}",
+                             path, frames.len(), bytes_text(bytes.len() as u64), what);
+                }
+                None if form == "bin" => {
+                    // Frame bytes contain every byte value there is, and a
+                    // terminal is not a file. `-o` is not a convenience here.
+                    eprintln!("radbeeper: --bin writes bytes -- give it -o FILE");
+                    return 2;
+                }
+                None => {
+                    print!("{}", String::from_utf8_lossy(&bytes));
+                }
+            }
+            0
+        }
+        "import" => {
+            let s = &chosen[0];
+            let Some(path) = file else {
+                eprintln!("radbeeper: frames import needs a file (.bin or .json)");
+                return 2;
+            };
+            let frames = match api::read_any(path) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("radbeeper: {}", e);
+                    return 1;
+                }
+            };
+            match api::import(dir, s, &frames) {
+                Ok(done) => {
+                    println!("radbeeper: {} of {} frames written to {}",
+                             done.written, done.offered, dir.display());
+                    for p in &done.files {
+                        println!("  {}", p.display());
+                    }
+                    if done.duplicates > 0 {
+                        println!("  {} already here, by key -- not written again",
+                                 done.duplicates);
+                    }
+                    for seq in &done.refused {
+                        println!("  seq {} does not produce its own key -- REFUSED", seq);
+                    }
+                    println!("  chain head {}", api::head(dir, s));
+                    if done.refused.is_empty() { 0 } else { 1 }
+                }
+                Err(e) => {
+                    eprintln!("radbeeper: import: {}", e);
+                    1
+                }
+            }
+        }
+        other => {
+            eprintln!("radbeeper: frames {}? -- list, show, export, import, verify", other);
+            2
+        }
+    }
+}
+
+/// One frame, in full: what it is, what it sounds like, and every second.
+///
+/// THE INSPECTOR'S JOB IS TO SHOW THE EVIDENCE, NOT A SUMMARY OF IT. The key
+/// is a claim about a particular stretch of decay; the seconds below are that
+/// stretch, unclamped, with the gaps where the counter was away marked -- so
+/// the line that says `recomputes` can be believed by someone who does the
+/// arithmetic themselves.
+fn inspect(f: &entropy::Frame, serial: &str) {
+    use radbeeper::frames as api;
+    let counts = f.counts();
+    let total: u64 = counts.iter().map(|c| *c as u64).sum();
+    let secs = f.seconds().max(1);
+    println!("counter    {}", serial);
+    println!("seq        {}", f.seq);
+    println!("started    {}", clock::stamp(f.started as f64));
+    println!("covers     {} seconds in {} samples", f.seconds(), counts.len());
+    println!("counts     {}, {:.2} a second, peak {}",
+             total, total as f64 / secs as f64, counts.iter().copied().max().unwrap_or(0));
+    println!("min-entropy {:.3} bits a sample (most-common-value)",
+             entropy::mcv_min_entropy(&counts));
+    println!("key        {}", f.key);
+    println!("link       {}", if f.link.is_empty() { "-- (written before the chain)" } else { &f.link });
+    println!("recomputes {}", if f.verifies() { "yes" } else { "NO -- this frame does not produce its key" });
+
+    // The gaps, because the counts alone cannot say the counter was away.
+    //
+    // A GAP AND A DOUBLED SECOND ARE NOT THE SAME DEPARTURE. Anything that
+    // is not one second is irregular, but a gap of four means the counter
+    // was away for three seconds and a gap of zero means two samples landed
+    // inside one second -- the opposite complaint. Calling both "the counter
+    // was away" is the kind of wrong label somebody reasons from later.
+    let holes: Vec<(usize, u32)> = f.samples.iter().enumerate().skip(1)
+        .filter(|(_, (g, _))| *g > 1).map(|(i, (g, _))| (i, *g)).collect();
+    let doubled = f.samples.iter().skip(1).filter(|(g, _)| *g == 0).count();
+    if holes.is_empty() {
+        println!("gaps       none -- every sample is one second after the last");
+    } else {
+        println!("gaps       {}", holes.len());
+        for (i, g) in holes.iter().take(8) {
+            println!("             at sample {}: {} seconds away", i, g);
+        }
+        if holes.len() > 8 {
+            println!("             ... and {} more", holes.len() - 8);
+        }
+    }
+    if doubled > 0 {
+        println!("doubled    {} sample{} landed inside a second already sampled",
+                 doubled, if doubled == 1 { "" } else { "s" });
+    }
+
+    match api::spectrum(&counts) {
+        None => println!("\nspectrum   too few seconds to say anything"),
+        Some(spec) => {
+            println!("\nspectrum   {} second window, {} averaged, flat is 1.0",
+                     spec.window, spec.runs);
+            let width = 60usize;
+            let cols = analysis::spectrum_columns(&spec.relative, width);
+            for row in analysis::bar_rows(&cols, width, 6) {
+                println!("  {}", row.into_iter().collect::<String>());
+            }
+            println!("  loudest {:.2} at a period of {:.0}s -- luck alone reaches {:.2}",
+                     spec.loudest.0, spec.period, spec.chance_max);
+            println!("  {}", if spec.suspect {
+                "NOT FLAT: something periodic is in this frame -- treat it as suspect"
+            } else {
+                "flat: this looks like decay"
+            });
+            if spec.suspect != f.suspect {
+                // NOT A CONTRADICTION. The flag came off the monitor's
+                // running ladder -- every second that process had seen, and
+                // the sum across both tubes when two were plugged in. This
+                // is the ladder over this frame alone. A period longer than
+                // the frame cannot appear here and is plain there.
+                println!("  the recorder wrote suspect={}, and this frame on its own \
+                          recomputes to {}", f.suspect, spec.suspect);
+                println!("  (the flag is drawn from the whole run, not from one frame)");
+            }
+        }
+    }
+
+    // Every second, as the digits the record keeps them in. Sixty to a line,
+    // so a minute is a line and a pattern has somewhere to show itself.
+    //
+    // ONE CHARACTER A SECOND STOPS MEANING ANYTHING ABOVE 35, which is a
+    // counter on a real source rather than on a desk. Rendering every one of
+    // those seconds as the same `+` is a blank reading, not a compressed
+    // one, so past that the numbers are written out. The page does the same.
+    let peak = counts.iter().copied().max().unwrap_or(0);
+    if peak > 35 {
+        println!("\nseconds    (counts, ten to a line, ... is a gap)");
+        let mut row: Vec<String> = Vec::new();
+        for (i, (gap, count)) in f.samples.iter().enumerate() {
+            if i > 0 && *gap > 1 {
+                row.push("...".to_string());
+            }
+            row.push(format!("{:>4}", count));
+            if row.len() >= 10 {
+                println!("  {}", row.join(" "));
+                row.clear();
+            }
+        }
+        if !row.is_empty() {
+            println!("  {}", row.join(" "));
+        }
+        return;
+    }
+    println!("\nseconds    (counts, one character a second, . is a gap)");
+    let mut line = String::new();
+    let mut at = 0usize;
+    for (i, (gap, count)) in f.samples.iter().enumerate() {
+        if i > 0 && *gap > 1 {
+            for _ in 0..(*gap).min(6).saturating_sub(1) {
+                line.push('.');
+                at += 1;
+                if at % 60 == 0 {
+                    println!("  {}", line);
+                    line.clear();
+                }
+            }
+        }
+        line.push(match count {
+            0..=9 => char::from(b'0' + *count as u8),
+            10..=35 => char::from(b'a' + (*count - 10) as u8),
+            _ => '+',
+        });
+        at += 1;
+        if at % 60 == 0 {
+            println!("  {}", line);
+            line.clear();
+        }
+    }
+    if !line.is_empty() {
+        println!("  {}", line);
+    }
+}
+
 fn check_random(path: &std::path::Path) -> i32 {
     let pools = entropy::read_emissions(path);
     if pools.is_empty() {
@@ -2740,6 +3108,11 @@ fn usage() {
     println!("  radbeeper random --frames F  the raw seconds behind those lines");
     println!("  radbeeper backfill         fill the log's gaps from the counter's flash");
     println!("  radbeeper log info|pull    what history it holds, or download it");
+    println!("  radbeeper frames list      the raw frames on disk, by month");
+    println!("  radbeeper frames show      one frame: its seconds, its spectrum, its key");
+    println!("  radbeeper frames export    those frames out, as bytes, a table or json");
+    println!("  radbeeper frames import F  frames in, recomputed before they are written");
+    println!("  radbeeper frames verify    every key and every chain link, from genesis");
     println!("  radbeeper export           index.html and random.html, from the logs");
     println!("  radbeeper pages            the landing page and lab reports, from the documents");
     println!("  radbeeper hotplug          sit in the session, open the monitor on plug-in");
@@ -2771,6 +3144,11 @@ fn usage() {
     println!("      --title TEXT           export: the page's heading");
     println!("      --random-output FILE   export: the audit page (default random.html beside it)");
     println!("      --frame-budget SIZE    export: raw frame bytes carried in the page (default 2M, 0 for none)");
+    println!("      --frames-page          export: also write frames.html, the frame browser (Rust only)");
+    println!("      --frames-output FILE   export: where the frame browser goes (default frames.html beside it)");
+    println!("      --month YYYY-MM        frames: one month rather than all of them");
+    println!("      --seq N                frames show: which frame (default the newest)");
+    println!("      --json | --tsv | --bin frames export: which form (default json)");
     println!("      --no-random-page       export: do not write the audit page");
     println!();
     println!("site and recompute are in the");
@@ -2813,6 +3191,14 @@ fn main() {
     let mut tries: u32 = 3;
     let mut tui = false;
     let mut log_action = "info".to_string();
+    // `frames` and its verb, which is a noun-then-verb command like `log`.
+    let mut frames_action = "list".to_string();
+    let mut frames_month: Option<String> = None;
+    let mut frames_seq: Option<u64> = None;
+    let mut frames_form = "json".to_string();
+    let mut frames_in: Option<PathBuf> = None;
+    let mut frames_page = false;
+    let mut frames_output: Option<PathBuf> = None;
     let mut serial: Option<String> = None;
     let mut title = radbeeper::export::DEFAULT_TITLE.to_string();
     let mut random_output: Option<PathBuf> = None;
@@ -2903,6 +3289,26 @@ fn main() {
                     .unwrap_or(frame_budget)
             }
             "info" | "pull" if command == "log" => log_action = a.to_string(),
+            // A VERB IS ONLY A VERB AFTER ITS NOUN. `export` is a command in
+            // its own right; `frames export` is a different thing entirely,
+            // and the guard is what keeps the two apart.
+            "list" | "show" | "export" | "import" | "verify" if command == "frames" => {
+                frames_action = a.to_string()
+            }
+            "--month" => frames_month = next(&mut i),
+            "--seq" => frames_seq = next(&mut i).and_then(|v| v.parse().ok()),
+            "--json" => frames_form = "json".to_string(),
+            "--tsv" => frames_form = "tsv".to_string(),
+            "--bin" => frames_form = "bin".to_string(),
+            "--frames-page" => frames_page = true,
+            "--frames-output" => frames_output = next(&mut i).map(PathBuf::from),
+            _ if command == "frames"
+                && frames_action == "import"
+                && frames_in.is_none()
+                && !a.starts_with('-') =>
+            {
+                frames_in = Some(PathBuf::from(a))
+            }
             "site" => {
                 eprintln!(
                     "radbeeper: `{}` is not in the Rust build -- it writes the log\n\
@@ -2932,13 +3338,54 @@ fn main() {
             serial.as_deref(), output.as_deref(),
         ));
     }
-    if command == "export" {
-        std::process::exit(radbeeper::export::run(
-            &logs.unwrap_or_else(log::state_dir),
-            Path::new(output.as_deref().unwrap_or("index.html")),
-            !no_random_page, cpm_per_usvh, &title, random_output.as_deref(),
-            frame_budget,
+    if command == "frames" {
+        std::process::exit(frames_cmd(
+            &frames_action,
+            &logs.clone().unwrap_or_else(log::state_dir),
+            serial.as_deref(),
+            frames_month.as_deref(),
+            frames_seq,
+            &frames_form,
+            output.as_deref(),
+            frames_in.as_deref(),
         ));
+    }
+    if command == "export" {
+        let dir = logs.unwrap_or_else(log::state_dir);
+        let out = PathBuf::from(output.as_deref().unwrap_or("index.html"));
+        let code = radbeeper::export::run(
+            &dir, &out, !no_random_page, cpm_per_usvh, &title,
+            random_output.as_deref(), frame_budget,
+        );
+        // THE FRAME PAGE IS ASKED FOR, NEVER ASSUMED. Without the flag this
+        // command prints and writes exactly what the Python prints and
+        // writes for the same arguments, which is what the differential
+        // suite compares -- and what a workflow with no Rust toolchain has
+        // to be able to reproduce. See the head of src/browser.rs.
+        if code == 0 && frames_page {
+            match radbeeper::browser::write_pages(
+                &dir, &out, &title, frame_budget, frames_output.as_deref(),
+            ) {
+                Ok(pages) if pages.is_empty() => {
+                    println!("radbeeper: no frames in {} -- no frame page written",
+                             dir.display());
+                    println!("    frames are the .bin files `service` and `watch` \
+                              write beside the log.");
+                }
+                Ok(pages) => {
+                    for p in pages {
+                        println!("radbeeper: {} -- {} frames in {} month{}",
+                                 p.path.display(), p.frames, p.months,
+                                 if p.months == 1 { "" } else { "s" });
+                    }
+                }
+                Err(e) => {
+                    eprintln!("radbeeper: frames page: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        std::process::exit(code);
     }
     if command == "log" {
         std::process::exit(log_cmd(&log_action, bytes, output.as_deref(),

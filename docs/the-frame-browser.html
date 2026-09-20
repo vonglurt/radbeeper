@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Reading the Raw Record: A Frame Browser for a Continuously Sampled Decay Log — RadBeeper</title>
+<meta name="description" content="Paul Richeson · RadBeeper · Copal Linux">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/the-frame-browser.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Reading the Raw Record: A Frame Browser for a Continuously Sampled Decay Log — RadBeeper">
+<meta property="og:description" content="Paul Richeson · RadBeeper · Copal Linux">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/the-frame-browser.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="reading-the-raw-record-a-frame-browser-for-a-continuously-sampled-decay-log">Reading the Raw Record: A Frame Browser for a Continuously Sampled Decay Log</h1>
+<p><strong>Paul Richeson</strong> · RadBeeper · Copal Linux</p>
+<hr>
+<h2 id="abstract">Abstract</h2>
+<p><em>RadBeeper has kept the raw seconds behind every random number it publishes since version 0.5, in an append-only binary format that costs one byte for an ordinary second. Until now those bytes could be summarised, audited and embedded in a page, but not browsed: there was no way to move through a month, pick a frame out of a day and look at what the tube actually did. This report describes the frame browser added alongside 0.5 — a generated page that navigates months, days and frames, and shows each frame both as a strip of seconds and as a spectrum — and the three programming surfaces underneath it: a library, a set of command-line verbs, and the live socket the recording process already serves. We give the measured cost of the format (81 fixed bytes a frame, 64 of them the key and the chain link, and 1.00 bytes a second thereafter), state the import procedure and its three rules, and report what pins each implementation to the others. We are explicit about two limitations: the page is written by the Rust build alone and is therefore not refreshed by the workflow that rebuilds the rest of the site, and only the process holding the serial port writes frames at all.</em></p>
+<p><strong>Index Terms</strong> — data browsing, binary log formats, append-only storage, spectral analysis, hash chain, differential testing, Geiger–Müller counter, entropy audit.</p>
+<hr>
+<h2 id="i-introduction">I. Introduction</h2>
+<p>A counter left running writes two records. The first is the count log: a row every thirty seconds, five averaging windows, the shape of a month. The second is the emission log: a line for every 256 bits of hex the decay timing has earned, with the counts that produced it. Both are text, both are published, and both have had a page to read them in since 0.2.</p>
+<p>The third record is newer and is not text. Since 0.5 every emission also writes a <strong>frame</strong> — the raw seconds behind that one key, unclamped, with the gaps where the counter was away kept as gaps. <a href="the-random.html">The random</a> describes why the frame exists and what is in it; <a href="the-monthly-record.html">the monthly record</a> describes the rotation and the chain that runs through it. Neither describes how to <em>read</em> one, because until now the answer was a summary table, a command that printed every frame in a file at once, or a base64 blob embedded in the audit page for a viewer that showed the rows and not the seconds.</p>
+<p>That is the gap this closes. A month of a busy counter is a few thousand frames and a few megabytes; the question a reader actually has — <em>what did the tube do at nine o'clock on the fourteenth</em> — was not answerable without writing a program.</p>
+<h2 id="ii-what-a-frame-holds-and-what-it-costs">II. What a Frame Holds, and What It Costs</h2>
+<p>A frame is the stretch of decay one key came out of:</p>
+<table><tbody><tr><td><code>started</code></td><td>whole seconds since the epoch, of the <strong>first</strong> sample — the same number that went into the digest, so a frame can recompute its own key</td></tr><tr><td><code>suspect</code></td><td>the spectrum was not flat when this was drawn</td></tr><tr><td><code>seq</code></td><td>which emission this is, for this counter; it restarts, so it is not an order</td></tr><tr><td>samples</td><td><code>(gap, count)</code> a second: how long since the previous sample, and exactly how many pulses were in this one</td></tr><tr><td><code>key</code></td><td>the 256 bits this frame produced</td></tr><tr><td><code>link</code></td><td><code>H("radbeeper/chain/1" ‖ previous link ‖ this key)</code>, hashed beside the key and never into it</td></tr></tbody></table>
+<p>The encoding is described in full in <a href="the-random.html#what-it-costs">the random</a>: a tag byte of <code>0x00</code>–<code>0xFD</code> <em>is</em> the count and means one second later, <code>0xFE</code> escapes to a varint gap and a varint count, and <code>0xFF</code> never appears so that padding cannot parse as data.</p>
+<p><strong>The measured cost, over 707 seconds of recorded frames:</strong></p>
+<pre><code>frames 8   samples 707   bytes 1355
+1.92 bytes a second overall
+81.0 bytes fixed per frame, and 1.00 bytes for every ordinary second after it</code></pre>
+<p>The interesting half of that is the fixed cost. Eighty-one bytes a frame, of which <strong>sixty-four are the key and the chain link</strong> — two thirty-two-byte digests that have nothing to do with how long the frame is. A frame covering 500 seconds of background therefore costs about 1.16 bytes a second; one covering 90 seconds costs 1.90. The compression is in the seconds, and the overhead is in the cryptography, and the ratio between them is a function of how long the pool takes to earn its bits — which is to say, of how quiet the room is.</p>
+<p><strong>There is no general-purpose compressor in this, and not only because the crate has one dependency and it is <code>libc</code>.</strong> A stream of bytes valued 0–5 is the shape DEFLATE does worst on, and a DEFLATE header alone is a fair fraction of what a short frame costs in total. The structure is the compression.</p>
+<h2 id="iii-appended-by-the-day-filed-by-the-month">III. Appended by the Day, Filed by the Month</h2>
+<p>Frames go into <code>random-&lt;serial&gt;-YYYY-MM.bin</code>, appended and never rewritten. The month in the name is the month the frame <strong>opened</strong> in, so a frame that starts at 23:58 on the last of the month is in that month's file whatever time it finishes — a reader that went looking for it by its end time would otherwise find nothing.</p>
+<p>Days are not a storage unit. They are derived from <code>started</code> when the record is read, in local time, which is the only way a day can mean what a person means by it: the files are UTC epochs and the reader is in a timezone. The browser groups by day; nothing on disk does. That is deliberate — a second index is a second copy of the truth, and this format's whole argument is that there is only ever one.</p>
+<p><strong>The magic is per frame, not per file.</strong> A reader that loses its place scans forward to the next magic, so a file cut short by a full disk still yields every complete frame before the cut, and a damaged frame costs one frame rather than the rest of the month. A frame is only accepted when the byte after it is another magic or the end of the file, because corrupting a length field does not make a frame fail to parse — it makes it parse as a <em>different</em> frame that swallows its neighbour.</p>
+<h2 id="iv-the-browser">IV. The Browser</h2>
+<p><code>radbeeper export --frames-page</code> writes <code>frames.html</code> beside the other pages. It opens on the newest month and narrows downward:</p>
+<p><strong>Months.</strong> Every <code>.bin</code> the counter has, with its frames and its size. Recent months are carried in the page as base64 against a byte budget, so a page saved to a stick and opened off <code>file://</code> still browses; older months are fetched when they are asked for, and say plainly when there is nothing to fetch from.</p>
+<p><strong>Days.</strong> A strip of bars, one a day, height by frame count, orange where a frame that day was recorded suspect. This is the shape of the month before any of it is read — a gap in the strip is a day the counter was off.</p>
+<p><strong>Frames.</strong> A sortable table: when it started, how long it covered, how many samples, the counts, the peak second, the rate, how many gaps, and whether the spectrum was flat.</p>
+<p><strong>One frame.</strong> Selecting a row opens the inspector, in two views:</p>
+<p><em>Second by second</em> — one bar a second on a real time axis, so a gap is drawn as distance rather than as a zero, with the gaps marked. Wheel to zoom, drag to pan.</p>
+<p><em>Spectrum</em> — the same arithmetic <code>radbeeper watch</code> draws live: a Hann taper, half-overlapped windows, power averaged, every bin against the average bin, on the widest of the 128/256/512-second rungs that has two windows in it. <strong>Flat — 1.0 — is the good answer.</strong> The line marked <em>luck</em> is how high the tallest bin gets by chance alone given how many windows were averaged.</p>
+<p><strong>The frame's spectrum and the frame's <code>suspect</code> flag are not the same measurement, and the browser says so when they differ.</strong> The flag is written out of the monitor's <em>running</em> ladder — every second that process has seen, summed across both tubes when two are plugged in — while the page recomputes from the frame's own samples and nothing else. A 363-second frame gives four 128-second windows; the recorder may have had a hundred, and a period an hour long is invisible to the frame and obvious to the run. The two answer different questions — <em>was the room periodic while this was drawn</em> against <em>is this frame periodic</em> — so a disagreement is information rather than a fault, and nothing in the suite requires them to match. This was found by recording against a deliberately periodic synthetic source, where the running ladder called every frame suspect and no individual frame was.</p>
+<p>Below both views the frame's seconds are written out — one character each for an ordinary counter, and the numbers themselves once a second can hold more than 35, because a grid that renders 150 and 180 identically is a blank reading rather than a compressed one.</p>
+<p><strong>A frame has an address.</strong> The page's fragment is <code>#&lt;month&gt;/&lt;seq&gt;</code> — <code>frames.html#2026-09/124</code> opens that month and that frame. An audit trail people quote at each other needs a link per frame, not one per page.</p>
+<h2 id="v-three-surfaces">V. Three Surfaces</h2>
+<p>The browser is a reader, not the reader. Everything it shows is available three other ways, and all four go through the same code.</p>
+<h3 id="a-the-library">A. The library</h3>
+<p><code>radbeeper::frames</code> is the documented surface, and it holds no format of its own — <code>entropy</code> owns the encoding and the chain, <code>analysis</code> owns the spectrum, and this composes them:</p>
+<pre><code class="language-rust">use radbeeper::frames;
+
+let series = frames::Series::open(dir, "F48824B8207F7E");
+for month in series.months() {
+    println!("{} {} frames {} bytes", month.label, month.frames, month.bytes);
+}
+let all = series.read_all();               // file order, which is chain order
+let days = frames::by_day(&amp;all);           // local days, derived not stored
+let spec = frames::spectrum(&amp;all[0].counts());
+let verdict = frames::verify(&amp;all, entropy::GENESIS_LINK);</code></pre>
+<p><code>Series::open</code> reads the files. A frame is about 450 bytes and a busy month a couple of megabytes, so a lazy handle that has to be asked twice for the same answer would cost more in surface than it saves in reads.</p>
+<h3 id="b-the-command-line">B. The command line</h3>
+<pre><code class="language-sh">radbeeper frames list                      # months, frames, bytes, span, chain head
+radbeeper frames show --seq 124            # one frame: seconds, spectrum, key, link
+radbeeper frames export --month 2026-09 --json
+radbeeper frames import september.bin
+radbeeper frames verify                    # every key, every link, from genesis</code></pre>
+<p><code>show</code> is the inspector in a terminal, spectrum included, because a terminal is the reader that is always there — over ssh, on a machine with no display — and a page that could show something the shell could not would be a reason to open a browser to read a file.</p>
+<h3 id="c-the-live-socket">C. The live socket</h3>
+<p>The process holding the port already serves what it reads on a socket beside the log, which is how a monitor attaches without a handover. That stream carries emissions as they are drawn. It is the only one of the three surfaces that answers about decay that has not happened yet; the other two answer about the record, which is finished.</p>
+<h2 id="vi-getting-data-out-and-back-in">VI. Getting Data Out, and Back In</h2>
+<p>Out is wider than in, on purpose.</p>
+<p><strong>Out</strong> has three forms. The <strong>bytes</strong> are canonical and lossless — the file, or a slice of it. The <strong>TSV</strong> is a row a frame, for a spreadsheet or an eye. The <strong>JSON</strong> is the frame as a structure, field for field, which is the form something else's program wants. <code>tests/fixtures/frames.json</code> is that shape, and the suite asserts it parses back to exactly what the bytes beside it decode to.</p>
+<p><strong>In</strong> takes bytes or JSON, and applies three rules:</p>
+<ol><li><strong>A frame must recompute.</strong> Its counts are hashed and the result has to be the key it carries. That is the only claim a frame makes and the only one checkable without trusting whoever sent it. A frame that fails is refused and named; the frames around it still land.</li><li><strong>A key already on disk is not written twice.</strong> Importing the same file twice leaves the record as it was, so a re-run after a half-finished transfer is safe.</li><li><strong>The link is recomputed here, never carried in.</strong> A chain is a property of the order frames landed in <em>this</em> directory. Keeping a sender's links would either fork the chain or silently claim their history happened here, so the head is read off the disk and the import joins it.</li></ol>
+<pre><code class="language-sh"># on the machine that recorded it
+radbeeper frames export --month 2026-09 --bin -o september.bin
+
+# on the machine that is going to keep it
+radbeeper frames import september.bin --serial F48824B8207F7E
+radbeeper frames verify</code></pre>
+<h2 id="vii-what-pins-what">VII. What Pins What</h2>
+<p>The frame format now has <strong>four</strong> implementations, and none of them is allowed to drift alone:</p>
+<table><thead><tr><th>implementation</th><th>what it does</th><th>what holds it</th></tr></thead><tbody><tr><td><code>src/entropy.rs</code></td><td>writes and reads the bytes</td><td><code>tests/frames_fixture.rs</code> pins the committed bytes</td></tr><tr><td><code>src/frames.js</code></td><td>reads them in the audit page</td><td><code>tests/test_frames_js.py</code> decodes the fixture</td></tr><tr><td><code>src/browser.js</code></td><td>reads them in the browser page</td><td><code>tests/test_browser_js.py</code> decodes the same fixture <strong>and compares frame for frame against <code>src/frames.js</code></strong></td></tr><tr><td><code>radbeeper</code> (Python)</td><td>writes the same log format</td><td><code>tests/test_differential.py</code>, byte for byte</td></tr></tbody></table>
+<p>The second javascript file is a deliberate duplication. <code>src/frames.js</code> is byte-locked to a copy pasted into the Python program, because the two have to produce <code>random.html</code> character for character; the browser page has no Python half and never will, so sharing that file would drag the whole parity apparatus across for no benefit. The condition of keeping the duplication is that a test decodes one fixture with both files and fails if they ever disagree.</p>
+<p>The browser's <strong>spectrum</strong> is pinned the same way, to the Python reference the Rust was ported from: the suite runs a deterministic 600-second sample — once quiet, once with a 64-second square wave in it — through both, and requires the same window, the same number of averages, the same loudest bin, the same verdict, and every relative bin equal to eight decimal places.</p>
+<h2 id="viii-limitations">VIII. Limitations</h2>
+<p><strong>Only the port-holder writes frames.</strong> A monitor attached to a running service shows the countdown but draws nothing: its pool exists for the display, and the emission and the frame are written by the one process that holds the port. A machine whose logging service is running an older build therefore records emissions and no frames at all, and nothing about the emission log looks wrong while that is true. <code>radbeeper frames list</code> on the log directory is the check.</p>
+<p><strong>The page is Rust-only, so the workflow does not refresh it.</strong> The site is rebuilt on every push by the Python program, which has no frame decoder. <code>frames.html</code> is written by <code>make site</code> from a machine with a toolchain and left alone by everything else. The page says so in its own footer rather than going quietly stale, but a reader who arrives at a month-old page has no way to know the record moved on unless they read it.</p>
+<p><strong>The browser does not verify.</strong> It decodes, groups and draws; it does not recompute keys or walk the chain, which is <code>random.html</code>'s job and <code>frames verify</code>'s. Adding a second verifier would mean a second SHA-256 in the page, and two verifiers that could disagree is worse than one that cannot.</p>
+<p><strong>The interactions are still checked by eye.</strong> The zoom and the pan are driven by pure functions the suite can call — <code>clampView</code> cannot produce a view outside its data — but nothing in the suite drives a pointer. The screenshot in <code>docs/screenshots/</code> is a person looking at it, which is not a regression test.</p>
+<h2 id="ix-conclusion">IX. Conclusion</h2>
+<p>The raw record was already being kept, already chained, and already published against a byte budget. What it lacked was a way in at human scale. Months, days and frames is the nesting the files are already in; a strip of seconds and a spectrum are the two questions anybody has about a stretch of decay; and a library, five verbs and a socket are the same answers for a program. The format did not change to make any of this possible, which is the outcome worth reporting: a record that has to be migrated to be read was not designed as a record.</p>
+<hr>
+<h2 id="references">References</h2>
+<ul><li><a href="the-random.html">The random</a> — how a frame comes to exist, and what a beep costs.</li><li><a href="the-monthly-record.html">The monthly record</a> — rotation, the chain, and bounding the page.</li><li><a href="the-spectrum.html">The spectrum</a> — why flat is the good answer.</li><li><a href="the-log.html">The log</a> — the count record the frames sit beside.</li></ul>
+<p><a href="../index.html">← back to the overview</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>
