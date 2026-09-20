@@ -982,14 +982,75 @@ class TestSites(unittest.TestCase):
         sites = radbeeper.read_sites(self.tmp)
         self.assertIsNone(radbeeper.site_at("B2", self.at(2026, 9, 4), sites))
 
-    def test_a_place_is_a_name_and_nothing_finer(self):
-        # These logs are published. A place name is what a reader needs; a
-        # decimal fix is a street address for whoever is holding the counter,
-        # so the file has no column to put one in.
+    def test_a_place_with_no_fix_writes_no_coordinate(self):
+        """A name on its own stays a name on its own.
+
+        The columns exist since 0.5, but nothing invents a value for them:
+        an assumed location is worse than none, because it is published, it
+        looks like a measurement, and nobody reading it later can tell.
+        """
         radbeeper.record_site("A1", "The bench", self.at(2026, 9, 1), self.tmp)
+        row = radbeeper.read_sites(self.tmp)[0]
+        self.assertEqual(row[2], "The bench")
+        self.assertIsNone(row[3])
+        self.assertIsNone(row[4])
+        self.assertEqual(radbeeper.fix_text(row), "")
+
+    def test_the_finer_digits_are_discarded_before_anything_is_written(self):
+        """THE PRECISION GUARANTEE, stated as a test.
+
+        These logs are published, and a decimal fix to six places is a street
+        address for whoever is holding the counter. The remedy is not a page
+        that declines to print what it stores -- it is a file that never held
+        the digits. So the rounding happens on the way IN, and what is on disk
+        is checked here character by character rather than through the reader,
+        which could otherwise hide a full-precision value behind a tidy
+        formatter.
+        """
+        fix = radbeeper.parse_fix("51.3172461, 0.8914772")   # default: 3 places
+        radbeeper.record_site("A1", "The bench", self.at(2026, 9, 1),
+                              self.tmp, fix=fix)
         with open(os.path.join(self.tmp, radbeeper.SITES_NAME)) as f:
-            for line in f:
-                self.assertEqual(len(line.rstrip("\n").split("\t")), 3)
+            body = f.read()
+        self.assertIn("51.317", body)
+        self.assertIn("0.891", body)
+        for leaked in ("51.3172", "0.89147", "2461", "4772"):
+            self.assertNotIn(leaked, body,
+                             "%r survived the rounding into the file" % leaked)
+
+    def test_precision_is_chosen_and_a_coarse_fix_stays_coarse(self):
+        """One place is a town. It must not be printed as though it were 110 m.
+
+        Padding 51.3 out to 51.300 asserts two digits that were deliberately
+        thrown away, which is the failure this whole arrangement exists to
+        prevent -- so the stored value decides how it is shown, not the
+        caller.
+        """
+        self.assertEqual(radbeeper.parse_fix("51.3172461, 0.8914772", 1),
+                         (51.3, 0.9))
+        self.assertEqual(radbeeper.parse_fix("51.3172461, 0.8914772", 4),
+                         (51.3172, 0.8915))
+        radbeeper.record_site("A1", "The hill", self.at(2026, 9, 1), self.tmp,
+                              fix=radbeeper.parse_fix("51.3172461, 0.8914772", 1))
+        self.assertEqual(radbeeper.fix_text(radbeeper.read_sites(self.tmp)[0]),
+                         "51.3, 0.9")
+
+    def test_a_fix_that_is_not_one_is_refused(self):
+        for bad in ("51.3", "51.3,0.8,9", "north, west", "", "91.0,0.0",
+                    "51.0,181.0"):
+            with self.assertRaises(ValueError, msg="accepted %r" % (bad,)):
+                radbeeper.parse_fix(bad)
+
+    def test_a_row_written_before_fixes_existed_still_reads(self):
+        """sites.tsv is append-only, so three-column rows are still in it."""
+        path = os.path.join(self.tmp, radbeeper.SITES_NAME)
+        with open(path, "w") as f:
+            f.write("#serial\tfrom\tname\n")
+            f.write("A1\t2026-09-01T00:00:00\tThe bench\n")
+        row = radbeeper.read_sites(self.tmp)[0]
+        self.assertEqual(row[2], "The bench")
+        self.assertIsNone(row[3])
+        self.assertEqual(radbeeper.fix_text(row), "")
 
 
 class TestExport(unittest.TestCase):

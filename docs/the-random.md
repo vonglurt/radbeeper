@@ -24,7 +24,7 @@ b17c9c60 d5deeb7b 4b102dfc bec14efc b523818b 18d3ada0 582bd912 e61ff856
   256 bits, min-entropy 258 measured, from 448 seconds at 0.68 counts/s
   440 bits is what a Poisson model would have claimed for the same 448 seconds
   spectrum flat -- the source looks like decay
-  recorded in /var/lib/radbeeper/random-F48824B8207F7E.tsv
+  recorded in /var/lib/radbeeper/random-F48824B8207F7E-2026-09.tsv
 ```
 
 That second line is the point: on this run the model would have handed over the
@@ -132,9 +132,19 @@ on disk.
         v
   a Frame:  started, and (gap, count) for every second
         |  Frame::encode()  -- one byte an ordinary second
+        |  entropy::chain(previous link, key)  -- tamper-evidence, alongside
         v
-  random-<serial>.bin, appended
+  random-<serial>-YYYY-MM.bin, appended
 ```
+
+Since 0.5 every frame also carries a **chain link**, `H("radbeeper/chain/1" ‖
+previous link ‖ this key)`. It is hashed *beside* the key and never into it:
+folding it in would change every hex line this program has ever produced and
+would make each one uncheckable by the reference implementation, which knows
+nothing about chains. What it buys is the one thing per-emission integrity
+cannot see — a record removed from the middle, where everything that remains
+still verifies perfectly well on its own. See [The monthly
+record](the-monthly-record.md) for the construction and its limits.
 
 **The beep is never timed, and that is the interface's fault rather than the
 tube's.** It is worth being exact about, because the obvious frame format is a
@@ -191,7 +201,7 @@ the failure the boundary check catches.
 ### Looking at one
 
 ```sh
-radbeeper random --frames logs/random-F48824B8207F7E.bin
+radbeeper random --frames logs/random-F48824B8207F7E-2026-09.bin
 ```
 
 ```
@@ -213,22 +223,22 @@ process holding the port.
 
 ## Reproducible is not the same as predictable
  The counts behind each line are
-written beside it in `random-<serial>.tsv`, so anyone can recompute it and check
+written beside it in `random-<serial>-YYYY-MM.tsv`, so anyone can recompute it and check
 it was not invented:
 
 ```sh
-radbeeper random --check logs/random-F48824B8207F7E.tsv
+radbeeper random --check logs/random-F48824B8207F7E-2026-09.tsv
 ```
 
 That is an audit trail. It says nothing about the *next* line, which comes from
 decays that have not happened yet.
 
 **For the numbers alone**, every line is also appended to
-`random-<serial>.hex` — the time it was drawn, two spaces, sixty-four hex
+`random-<serial>-YYYY-MM.hex` — the time it was drawn, two spaces, sixty-four hex
 digits — by `random` and by `watch` alike:
 
 ```sh
-tail -f /var/lib/radbeeper/random-F48824B8207F7E.hex | cut -c22-
+tail -f /var/lib/radbeeper/random-F48824B8207F7E-2026-09.hex | cut -c22-
 ```
 
 ---

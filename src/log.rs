@@ -959,6 +959,100 @@ fn ino_of(path: &Path) -> Option<u64> {
 }
 
 /// [(serial, from_time, name)] for every recorded move, oldest first.
+/// A row of `sites.tsv`: a counter, when it arrived, what the place is
+/// called, and -- when somebody chose to record one -- how coarse a fix.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SiteRow {
+    pub serial: String,
+    pub from: f64,
+    pub name: String,
+    pub lat: Option<f64>,
+    pub lon: Option<f64>,
+    pub elevation: Option<f64>,
+}
+
+impl SiteRow {
+    /// The fix as text, at the precision it is published at, or "" without one.
+    ///
+    /// The file holds no more precision than was asked for when it was
+    /// written, so this prints what is there rather than deciding how much of
+    /// it to reveal. See the note on precision in the Python's SITES_NAME
+    /// block: rounding on the way IN is what makes that a guarantee instead
+    /// of a habit.
+    pub fn fix(&self, _places: usize) -> String {
+        let (Some(lat), Some(lon)) = (self.lat, self.lon) else { return String::new() };
+        // PRINTED AS STORED, never padded to a fixed width. A fix recorded at
+        // one decimal place is 51.3, and writing it as 51.300 would assert
+        // two digits of precision that were deliberately thrown away when it
+        // was written down -- which is the one thing this whole arrangement
+        // exists to prevent. The file's precision IS the claim.
+        let mut out = format!("{}, {}", crate::log::exact(lat), crate::log::exact(lon));
+        if let Some(e) = self.elevation {
+            out.push_str(&format!(" ({}m)", crate::log::exact(e)));
+        }
+        out
+    }
+}
+
+/// How many decimal places a published fix is printed to.
+pub const FIX_PRECISION: usize = 3;
+
+/// Every row of `sites.tsv`, oldest first, with the optional columns read
+/// when they are there.
+///
+/// THREE COLUMNS AND SIX COLUMNS ARE BOTH VALID. The file is append-only --
+/// it is a history, not a setting -- so rows written before fixes existed are
+/// still in it and are not rewritten. A short row is a row with no fix, which
+/// is a different thing from a fix of zero.
+pub fn read_site_rows(directory: &Path) -> Vec<SiteRow> {
+    let text = match fs::read_to_string(directory.join("sites.tsv")) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let mut out: Vec<SiteRow> = Vec::new();
+    for line in text.lines() {
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let cells: Vec<&str> = line.split('\t').collect();
+        if cells.len() < 3 {
+            continue;
+        }
+        let Some(when) = clock::parse_stamp(cells[1]) else { continue };
+        let cell = |i: usize| -> Option<f64> {
+            cells.get(i).map(|c| c.trim()).filter(|c| !c.is_empty() && *c != "--")
+                 .and_then(|c| c.parse::<f64>().ok())
+        };
+        out.push(SiteRow {
+            serial: cells[0].to_string(),
+            from: when,
+            name: cells[2].to_string(),
+            lat: cell(3),
+            lon: cell(4),
+            elevation: cell(5),
+        });
+    }
+    out.sort_by(|a, b| {
+        (a.serial.as_str(), a.from)
+            .partial_cmp(&(b.serial.as_str(), b.from))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
+}
+
+/// The row in force for that counter at that moment.
+pub fn site_row_at(serial: &str, when: f64, rows: &[SiteRow]) -> Option<SiteRow> {
+    let mine: Vec<&SiteRow> = rows.iter().filter(|r| r.serial == serial).collect();
+    let first = mine.first()?;
+    let mut current = *first;
+    for row in &mine {
+        if row.from <= when {
+            current = row;
+        }
+    }
+    Some((*current).clone())
+}
+
 pub fn read_sites(directory: &Path) -> Vec<(String, f64, String)> {
     let text = match fs::read_to_string(directory.join("sites.tsv")) {
         Ok(t) => t,

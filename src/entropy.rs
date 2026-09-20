@@ -263,6 +263,9 @@ impl Entropy {
             suspect,
             samples,
             key: self.digest(seq),
+            // Filled in by `write_frame`, which is the only thing that knows
+            // what this frame is being appended to.
+            link: String::new(),
         }
     }
 
@@ -308,14 +311,135 @@ pub fn pool_status(pool: &Entropy, prefix: &str) -> String {
 /// An audit trail rather than a seed. Recomputing a past line from its counts
 /// proves the line was not invented; it says nothing about the next one,
 /// which comes from decays that have not happened.
+/// `random-<serial>-YYYY-MM.<ext>`, the file a record of that moment belongs in.
+///
+/// DATED THE SAME WAY THE COUNT LOGS ARE, and for the same reason: rotation
+/// by construction, so a month ending is not an event and nothing renames a
+/// file while a service is appending to it. It matters more here than there.
+/// The count log is a measurement and an old one is merely old; an emission
+/// log is an audit trail, and one that grows without bound is one that
+/// eventually cannot be published, downloaded or checked. A month is a unit
+/// somebody can hold.
+pub fn random_path(dir: &Path, serial: &str, ext: &str, when: f64) -> PathBuf {
+    dir.join(format!(
+        "random-{}-{}.{}",
+        if serial.is_empty() { "unknown" } else { serial },
+        clock::format(when, "%Y-%m"),
+        ext
+    ))
+}
+
+/// Every emission file of one extension for one counter, oldest first.
+///
+/// The undated `random-<serial>.<ext>` written before 0.5 sorts FIRST and is
+/// read as though it were the oldest month, because it is: it holds
+/// everything up to the release that started dating them. Nothing migrates
+/// it. A file somebody may have published the hash of is not a file to
+/// rewrite, and a reader that handles both costs less than a migration that
+/// has to be right the first time.
+pub fn random_series(dir: &Path, serial: &str, ext: &str) -> Vec<PathBuf> {
+    let serial = if serial.is_empty() { "unknown" } else { serial };
+    let head = format!("random-{}", serial);
+    let tail = format!(".{}", ext);
+    let mut dated: Vec<String> = Vec::new();
+    let mut legacy: Option<String> = None;
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    for e in entries.filter_map(|e| e.ok()) {
+        let Ok(name) = e.file_name().into_string() else { continue };
+        if !name.starts_with(&head) || !name.ends_with(&tail) {
+            continue;
+        }
+        let middle = &name[head.len()..name.len() - tail.len()];
+        if middle.is_empty() {
+            legacy = Some(name);
+        } else if is_dash_month(middle) {
+            dated.push(name);
+        }
+    }
+    dated.sort();
+    let mut out: Vec<PathBuf> = Vec::new();
+    if let Some(n) = legacy {
+        out.push(dir.join(n));
+    }
+    out.extend(dated.into_iter().map(|n| dir.join(n)));
+    out
+}
+
+/// Whether `s` is exactly `-YYYY-MM`.
+///
+/// Checked rather than assumed, so that a serial containing a dash cannot
+/// make `random-AB-CD.tsv` look like a dated file for counter `AB`.
+fn is_dash_month(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() == 8
+        && b[0] == b'-'
+        && b[5] == b'-'
+        && b[1..5].iter().all(|c| c.is_ascii_digit())
+        && b[6..].iter().all(|c| c.is_ascii_digit())
+}
+
+/// Where the chain has got to for this counter, across every month it has run.
+///
+/// Read from the end of the newest frame file at startup, so a service that
+/// is restarted -- or a month that has just rolled over -- carries on from
+/// the link it left rather than starting a second chain from genesis.
+pub fn last_link(dir: &Path, serial: &str) -> String {
+    let series = random_series(dir, serial, "bin");
+    for path in series.iter().rev() {
+        let Some(f) = tail_frame(path) else { continue };
+        if !f.link.is_empty() {
+            return f.link;
+        }
+        // A v1 tail. No links were ever written for this counter, so the
+        // chain is computed over everything on disk -- once, here, at the
+        // moment the first v2 frame is about to be appended.
+        let mut at = GENESIS_LINK.to_string();
+        for p in &series {
+            let mut frames = read_frames(p);
+            at = relink(&mut frames, &at);
+        }
+        return at;
+    }
+    GENESIS_LINK.to_string()
+}
+
+/// The last complete frame in a file, without reading the rest of it.
+///
+/// Scans BACKWARDS from the end for a magic that decodes and ends exactly at
+/// EOF. That last condition is what makes it safe: sample bytes can spell
+/// `RBF1` by coincidence -- a second holding 0x52 counts is not absurd -- and
+/// a coincidence in the middle of the file will not decode to something that
+/// finishes precisely where the file does.
+///
+/// A file whose final frame was cut short by a full disk has no such
+/// position, and this returns None rather than the frame before it: an
+/// interrupted append is resumed by appending, and the truncated bytes are
+/// left for `read_frames` to scan past.
+pub fn tail_frame(path: &Path) -> Option<Frame> {
+    let buf = fs::read(path).ok()?;
+    if buf.len() < 4 {
+        return None;
+    }
+    let mut at = buf.len() - 4;
+    loop {
+        if is_magic(&buf, at) {
+            if let Some((f, used)) = Frame::decode(&buf[at..]) {
+                if at + used == buf.len() {
+                    return Some(f);
+                }
+            }
+        }
+        if at == 0 {
+            return None;
+        }
+        at -= 1;
+    }
+}
+
 pub fn write_record(dir: &Path, record: &Record, serial: &str, suspect: bool)
     -> std::io::Result<PathBuf>
 {
-    let path = dir.join(format!("random-{}.tsv", if serial.is_empty() {
-        "unknown"
-    } else {
-        serial
-    }));
+    let path = random_path(dir, serial, "tsv", record.started);
     let fresh = fs::metadata(&path).map(|m| m.len() == 0).unwrap_or(true);
     let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
     if fresh {
@@ -333,7 +457,7 @@ pub fn write_record(dir: &Path, record: &Record, serial: &str, suspect: bool)
         record.hex,
         record.counts
     )?;
-    write_hex(dir, &record.hex, serial)?;
+    write_hex(dir, &record.hex, serial, record.started)?;
     Ok(path)
 }
 
@@ -343,12 +467,16 @@ pub fn write_record(dir: &Path, record: &Record, serial: &str, suspect: bool)
 /// The .tsv is the audit trail and carries the counts; this is the stream,
 /// for anything that just wants the numbers -- `tail -f` it, or cut the
 /// second field and feed it on.
-pub fn write_hex(dir: &Path, hex: &str, serial: &str) -> std::io::Result<PathBuf> {
-    let path = dir.join(format!("random-{}.hex", if serial.is_empty() {
-        "unknown"
-    } else {
-        serial
-    }));
+pub fn write_hex(dir: &Path, hex: &str, serial: &str, started: f64)
+    -> std::io::Result<PathBuf>
+{
+    // DATED BY WHEN THE POOL OPENED, not by when the line was drawn, so that
+    // the three files for one emission always agree about which month it
+    // belongs to. A pool that begins at 23:58 on the last of the month and
+    // fills at 00:04 on the first would otherwise put its counts in one file
+    // and its digits in the next, and a reader pairing them up would find the
+    // .hex line with no .tsv row to explain it.
+    let path = random_path(dir, serial, "hex", started);
     let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
     writeln!(f, "{}  {}", clock::stamp(clock::now()), hex)?;
     Ok(path)
@@ -394,6 +522,63 @@ pub fn write_hex(dir: &Path, hex: &str, serial: &str) -> std::io::Result<PathBuf
 /// carries on. A header at the top of the file would make the first bad byte
 /// the last readable one.
 pub const FRAME_MAGIC: &[u8; 4] = b"RBF1";
+
+/// The same format, plus the chain link. Written by everything from 0.5 on.
+///
+/// A SECOND MAGIC RATHER THAN A VERSION FIELD, because the magic is what a
+/// reader scans for when it has lost its place. A version byte inside the
+/// frame would mean a v1 reader finding a v2 frame, parsing its header
+/// happily, and running off the end into the next one -- the exact failure
+/// `ends_cleanly` exists to catch, arriving by a route it cannot see. Two
+/// magics make the wrong version a frame that is simply not there, which is
+/// the failure a scanner already handles.
+pub const FRAME_MAGIC_V2: &[u8; 4] = b"RBF2";
+
+/// What the chain hangs from: the link before the first frame.
+pub const GENESIS_LINK: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// The label under which links are hashed, so a link can never be mistaken
+/// for a key even if someone contrives the inputs.
+pub const CHAIN_LABEL: &[u8] = b"radbeeper/chain/1";
+
+/// `link(prev, key)` -- one step of the hash chain.
+///
+/// THIS IS NOT THE RANDOM OUTPUT AND MUST NEVER FEED IT. `digest()` is the
+/// emission: label, sequence, start second, counts, and nothing else, byte
+/// for byte what the Python computes. Folding the previous link into it would
+/// make every published hex line unrecomputable by the reference
+/// implementation and would retroactively invalidate every emission already
+/// written. So the chain rides ALONGSIDE the keys instead of inside them: it
+/// says these keys were emitted in this order by this counter and none has
+/// been removed, and it says nothing whatever about the bits.
+///
+/// Tamper-evidence only. Anyone able to rewrite the file can recompute the
+/// whole chain; what they cannot do is rewrite one frame and leave the rest
+/// standing, which is the realistic accident -- a truncated copy, a log
+/// stitched back together in the wrong order, a frame dropped by a full disk.
+pub fn chain(prev: &str, key: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(CHAIN_LABEL);
+    h.update(&hex_bytes(prev));
+    h.update(&hex_bytes(key));
+    hex(&h.finish())
+}
+
+/// Walk a run of frames and give each the link it has earned.
+///
+/// Frames read from a v1 file carry no link, and frames read from a v2 file
+/// carry the one they were written with. This recomputes from `prev`
+/// regardless and returns where the chain has got to, so a caller can verify
+/// (compare against what is stored) or repair (take what comes back).
+pub fn relink(frames: &mut [Frame], prev: &str) -> String {
+    let mut at = prev.to_string();
+    for f in frames.iter_mut() {
+        at = chain(&at, &f.key);
+        f.link = at.clone();
+    }
+    at
+}
 
 /// The tag that says "this sample is not the ordinary case".
 const FRAME_ESCAPE: u8 = 0xFE;
@@ -443,6 +628,11 @@ pub struct Frame {
     pub samples: Vec<(u32, u32)>,
     /// The key this frame produced, as hex.
     pub key: String,
+    /// This frame's place in the counter's chain: `H(prev_link || key)`.
+    ///
+    /// Empty on a frame decoded from a v1 file, which predates the chain --
+    /// `relink` fills it in. Never part of the digest; see `chain`.
+    pub link: String,
 }
 
 impl Frame {
@@ -469,7 +659,7 @@ impl Frame {
 
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(32 + self.samples.len() + 48);
-        out.extend_from_slice(FRAME_MAGIC);
+        out.extend_from_slice(FRAME_MAGIC_V2);
         out.push(if self.suspect { 1 } else { 0 });
         put_varint(&mut out, self.seq);
         put_varint(&mut out, self.started.max(0) as u64);
@@ -488,14 +678,22 @@ impl Frame {
         let key = hex_bytes(&self.key);
         put_varint(&mut out, key.len() as u64);
         out.extend_from_slice(&key);
+        let link = hex_bytes(&self.link);
+        put_varint(&mut out, link.len() as u64);
+        out.extend_from_slice(&link);
         out
     }
 
     /// One frame from the head of `buf`, and how many bytes it used.
     pub fn decode(buf: &[u8]) -> Option<(Frame, usize)> {
-        if buf.len() < 5 || &buf[..4] != FRAME_MAGIC {
+        if buf.len() < 5 {
             return None;
         }
+        let v2 = match &buf[..4] {
+            m if m == FRAME_MAGIC_V2 => true,
+            m if m == FRAME_MAGIC => false,
+            _ => return None,
+        };
         let mut at = 4;
         let suspect = buf[at] != 0;
         at += 1;
@@ -527,7 +725,21 @@ impl Frame {
         }
         let key = hex(&buf[at..at + klen]);
         at += klen;
-        Some((Frame { seq, started, suspect, samples, key }, at))
+        // A v1 frame stops at the key. Its link is not absent-because-damaged
+        // but absent-because-older, so it is left empty for `relink` rather
+        // than guessed at.
+        let link = if v2 {
+            let llen = get_varint(buf, &mut at)? as usize;
+            if llen > buf.len().saturating_sub(at) {
+                return None;
+            }
+            let l = hex(&buf[at..at + llen]);
+            at += llen;
+            l
+        } else {
+            String::new()
+        };
+        Some((Frame { seq, started, suspect, samples, key, link }, at))
     }
 }
 
@@ -541,12 +753,19 @@ fn hex_bytes(text: &str) -> Vec<u8> {
 }
 
 /// Append a frame to `random-<serial>.bin`.
+/// Append a frame to `random-<serial>-YYYY-MM.bin`, linking it to the one before.
+///
+/// THE LINK IS READ OFF THE DISK RATHER THAN CARRIED IN MEMORY, and that is
+/// the whole robustness argument for this design. A service restarts, a month
+/// rolls over, a second radbeeper is started by hand against the same
+/// directory -- in every one of those cases an in-memory chain head is stale
+/// or absent, and the chain silently forks. The file already knows what it
+/// ends with, so the file is asked. It costs one backward scan of the tail
+/// per emission, which is once every few minutes.
 pub fn write_frame(dir: &Path, frame: &Frame, serial: &str) -> std::io::Result<PathBuf> {
-    let path = dir.join(format!("random-{}.bin", if serial.is_empty() {
-        "unknown"
-    } else {
-        serial
-    }));
+    let mut frame = frame.clone();
+    frame.link = chain(&last_link(dir, serial), &frame.key);
+    let path = random_path(dir, serial, "bin", frame.started as f64);
     let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
     f.write_all(&frame.encode())?;
     f.flush()?;
@@ -578,7 +797,7 @@ pub fn read_frames(path: &Path) -> Vec<Frame> {
             }
             _ => {
                 at += 1;
-                while at + 4 <= buf.len() && &buf[at..at + 4] != FRAME_MAGIC {
+                while at + 4 <= buf.len() && !is_magic(&buf, at) {
                     at += 1;
                 }
             }
@@ -589,7 +808,13 @@ pub fn read_frames(path: &Path) -> Vec<Frame> {
 
 /// Whether `at` is the end of the file or the head of the next frame.
 fn ends_cleanly(buf: &[u8], at: usize) -> bool {
-    at == buf.len() || (at + 4 <= buf.len() && &buf[at..at + 4] == FRAME_MAGIC)
+    at == buf.len() || is_magic(buf, at)
+}
+
+/// Whether a frame of either version starts at `at`.
+fn is_magic(buf: &[u8], at: usize) -> bool {
+    at + 4 <= buf.len()
+        && (&buf[at..at + 4] == FRAME_MAGIC || &buf[at..at + 4] == FRAME_MAGIC_V2)
 }
 
 pub struct Emission {
@@ -797,14 +1022,30 @@ mod tests {
         for i in 0..60 {
             pool.add_at(t0 + i as f64, (i % 4) as u32);
         }
-        let frame = pool.frame(7, false);
-        let bytes = frame.encode();
-        // 4 magic + 1 flags + seq + started + n + 60 samples + len + 32 key.
-        assert_eq!(frame.samples.len(), 60);
-        assert!(bytes.len() < 60 + 48, "{} bytes for a minute", bytes.len());
+        let minute = pool.frame(7, false);
+        assert_eq!(minute.samples.len(), 60);
+
+        // THE MARGINAL COST IS WHAT THE CLAIM IS ABOUT, so it is measured
+        // against a longer frame rather than asserted as a total. A total
+        // would be a test of the header -- which has grown once already, for
+        // the chain link -- dressed up as a test of the encoding.
+        let span = |n: usize| {
+            let mut p = Entropy::default();
+            for i in 0..n {
+                p.add_at(t0 + i as f64, (i % 4) as u32);
+            }
+            p.frame(7, false).encode().len()
+        };
+        // BOTH LENGTHS ARE OVER 127 ON PURPOSE. The sample count is a varint,
+        // so 60 costs one byte and 600 costs two, and measuring across that
+        // boundary charges the encoding a byte that belongs to the header.
+        let grew = span(670) - span(130);
+        assert_eq!(grew, 540, "540 more seconds should cost 540 more bytes");
+
         // And the naive form -- eight bytes of timestamp and four of count --
         // would have been this much worse.
-        assert!(bytes.len() * 5 < 60 * 12, "{} vs {}", bytes.len(), 60 * 12);
+        let bytes = minute.encode().len();
+        assert!(bytes * 4 < 60 * 12, "{} vs {}", bytes, 60 * 12);
     }
 
     /// A frame reads back as the frame that was written, gaps and all.
@@ -878,7 +1119,12 @@ mod tests {
             write_frame(&dir, &f, "F48824B8207F7E").unwrap();
             whole.push(f);
         }
-        let path = dir.join("random-F48824B8207F7E.bin");
+        // The frames as they went in carry no link; the writer chains them as
+        // it appends, so that is what should come back out.
+        relink(&mut whole, GENESIS_LINK);
+        let series = random_series(&dir, "F48824B8207F7E", "bin");
+        assert_eq!(series.len(), 1, "one month, one file: {:?}", series);
+        let path = series[0].clone();
         assert_eq!(read_frames(&path), whole);
 
         // Corrupt the middle frame's body, leaving the others alone.
@@ -886,7 +1132,7 @@ mod tests {
         let second = buf
             .windows(4)
             .enumerate()
-            .filter(|(_, w)| *w == FRAME_MAGIC)
+            .filter(|(_, w)| *w == FRAME_MAGIC_V2)
             .map(|(i, _)| i)
             .nth(1)
             .unwrap();
@@ -901,6 +1147,208 @@ mod tests {
         // And a file truncated mid-frame yields everything before the cut.
         fs::write(&path, &buf[..buf.len() - 9]).unwrap();
         assert!(read_frames(&path).contains(&whole[0]));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A temporary directory of this test's own, removed on the way out.
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("radbeeper-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A pool that has counted `n` seconds from `t0`.
+    fn pool_of(t0: f64, n: usize, seed: u32) -> Entropy {
+        let mut p = Entropy::default();
+        for i in 0..n {
+            p.add_at(t0 + i as f64, (seed + i as u32) % 6);
+        }
+        p
+    }
+
+    /// THE CHAIN MUST NOT DEPEND ON THE PROCESS THAT WROTE IT. A service is
+    /// restarted, and the frame it writes afterwards has to hang off the one
+    /// before it -- which is on disk and nowhere else. This is the reason
+    /// `write_frame` reads the tail instead of carrying a chain head in
+    /// memory, so it is the reason stated as a test.
+    #[test]
+    fn the_chain_carries_on_across_a_restart_and_a_month_boundary() {
+        let dir = scratch("chain");
+        let serial = "F48824B8207F7E";
+        // Mid-November and mid-December 2023. A MONTH APART RATHER THAN AN
+        // HOUR, because the file name is formatted in local time and a pair
+        // that straddles midnight UTC lands in one month or two depending on
+        // the zone the test happens to run in.
+        for (seq, t0) in [(0u64, 1_700_000_000.0), (1, 1_702_592_000.0)] {
+            // A fresh pool each time, exactly as a restarted service has.
+            let f = pool_of(t0, 20, seq as u32).frame(seq, false);
+            write_frame(&dir, &f, serial).unwrap();
+        }
+        let series = random_series(&dir, serial, "bin");
+        assert_eq!(series.len(), 2, "two months, two files: {:?}", series);
+
+        let all: Vec<Frame> =
+            series.iter().flat_map(|p| read_frames(p)).collect();
+        assert_eq!(all.len(), 2);
+        let mut want = all.clone();
+        relink(&mut want, GENESIS_LINK);
+        assert_eq!(all[0].link, want[0].link, "the first link is not genesis-based");
+        assert_eq!(
+            all[1].link,
+            chain(&all[0].link, &all[1].key),
+            "December did not hang off November"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Dropping a frame out of the middle is what the chain exists to catch.
+    /// Every frame still verifies against its own counts -- that is the point:
+    /// per-frame integrity cannot see a deletion, and the chain can.
+    #[test]
+    fn a_missing_frame_breaks_the_chain_though_every_frame_still_verifies() {
+        let mut frames: Vec<Frame> = (0..4u64)
+            .map(|seq| pool_of(1_700_000_000.0 + seq as f64 * 100.0, 15, seq as u32)
+                .frame(seq, false))
+            .collect();
+        relink(&mut frames, GENESIS_LINK);
+        assert!(frames.iter().all(|f| f.verifies()));
+
+        let kept: Vec<Frame> =
+            frames.iter().enumerate().filter(|(i, _)| *i != 2)
+                  .map(|(_, f)| f.clone()).collect();
+        // Still individually sound, and that is exactly the blind spot.
+        assert!(kept.iter().all(|f| f.verifies()));
+        // The chain notices, because frame 3's link names frame 2's.
+        let mut recomputed = kept.clone();
+        relink(&mut recomputed, GENESIS_LINK);
+        assert_ne!(
+            recomputed.last().unwrap().link,
+            kept.last().unwrap().link,
+            "a deletion went unnoticed"
+        );
+    }
+
+    /// The chain rides alongside the key and never inside it, so an emission
+    /// written before 0.5 recomputes exactly as it always did.
+    #[test]
+    fn linking_a_frame_does_not_touch_the_key_it_carries() {
+        let pool = pool_of(1_700_000_000.0, 30, 3);
+        let bare = pool.frame(9, false);
+        let mut linked = vec![bare.clone()];
+        relink(&mut linked, GENESIS_LINK);
+        assert_eq!(bare.key, linked[0].key, "linking changed the emission");
+        assert!(linked[0].verifies());
+        assert!(bare.link.is_empty(), "a frame is born unlinked");
+        assert_ne!(linked[0].link, linked[0].key, "the link is not the key");
+    }
+
+    /// A v1 file predates the chain, so it reads back with no link rather
+    /// than with a guessed one -- and `relink` is what supplies it.
+    #[test]
+    fn a_v1_frame_reads_back_unlinked_and_can_be_linked_afterwards() {
+        let f = pool_of(1_700_000_000.0, 12, 1).frame(4, false);
+        // A v1 frame is a v2 frame without the trailing link, which is what
+        // the old encoder wrote: same body, same key, stopping at the key.
+        // A frame is born unlinked, and an unlinked frame encodes its link
+        // as a zero length -- so it has to be linked before there are 33
+        // bytes on the end to take off.
+        let mut linked = vec![f.clone()];
+        relink(&mut linked, GENESIS_LINK);
+        let v2 = linked[0].encode();
+        let cut = v2.len() - 33;
+        let mut v1 = Vec::from(&v2[..cut]);
+        v1[..4].copy_from_slice(FRAME_MAGIC);
+
+        let (got, used) = Frame::decode(&v1).expect("a v1 frame should decode");
+        assert_eq!(used, v1.len());
+        assert_eq!(got.key, f.key);
+        assert!(got.link.is_empty());
+        assert!(got.verifies(), "a v1 frame still recomputes its own key");
+
+        let mut one = vec![got];
+        relink(&mut one, GENESIS_LINK);
+        assert_eq!(one[0].link, chain(GENESIS_LINK, &f.key));
+    }
+
+    /// The undated file written before 0.5 is read as the oldest month, and a
+    /// serial with a dash in it does not masquerade as a date.
+    #[test]
+    fn the_series_puts_the_undated_file_first_and_is_not_fooled_by_a_dash() {
+        let dir = scratch("series");
+        for name in [
+            "random-A-B.bin",           // serial "A-B", no date
+            "random-A-B-2026-01.bin",   // serial "A-B", January
+            "random-A-B-2025-12.bin",   // serial "A-B", the December before
+            "random-A-B-notamonth.bin", // not a date, not this counter's
+            "random-OTHER-2026-01.bin",
+        ] {
+            fs::write(dir.join(name), b"").unwrap();
+        }
+        let got: Vec<String> = random_series(&dir, "A-B", "bin")
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "random-A-B.bin".to_string(),
+                "random-A-B-2025-12.bin".to_string(),
+                "random-A-B-2026-01.bin".to_string(),
+            ]
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// All three files for one emission carry the same month.
+    ///
+    /// The pool opens at 23:58 on the last day of a month and fills six
+    /// minutes later, in the next one. The .tsv row, the .hex line and the
+    /// .bin frame all belong to the month it OPENED in, because a reader
+    /// pairing them up by month should never find one without the others.
+    #[test]
+    fn an_emission_that_spans_midnight_lands_in_one_month_not_two() {
+        let dir = scratch("midnight");
+        let serial = "A1";
+        // 2023-11-30 23:58 local, wherever this test runs.
+        let open_at = {
+            let mut t = 1_701_388_680.0;
+            // Nudge to 23:58 local on the last of the month by asking the
+            // formatter rather than assuming a zone.
+            for _ in 0..48 {
+                if clock::format(t, "%d") == "30" && clock::format(t, "%H") == "23" {
+                    break;
+                }
+                t += 1800.0;
+            }
+            t
+        };
+        let pool = pool_of(open_at, 20, 1);
+        let record = Record {
+            seq: 0,
+            started: open_at,
+            seconds: 20,
+            bits: 256.0,
+            rate: pool.rate(),
+            counts: pack_counts(&pool.counts),
+            hex: pool.digest(0),
+        };
+        write_record(&dir, &record, serial, false).unwrap();
+        write_frame(&dir, &pool.frame(0, false), serial).unwrap();
+
+        let month = |ext: &str| -> Vec<String> {
+            random_series(&dir, serial, ext)
+                .iter()
+                .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+                .collect()
+        };
+        let tsv = month("tsv");
+        assert_eq!(tsv.len(), 1, "{:?}", tsv);
+        assert_eq!(month("hex"), tsv.iter().map(|n| n.replace(".tsv", ".hex"))
+                                    .collect::<Vec<_>>());
+        assert_eq!(month("bin"), tsv.iter().map(|n| n.replace(".tsv", ".bin"))
+                                    .collect::<Vec<_>>());
         let _ = fs::remove_dir_all(&dir);
     }
 

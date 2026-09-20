@@ -73,6 +73,7 @@
 #
 #  README.md, "What is native now", is the current line between the two.
 import argparse
+import base64
 import cmath
 import collections
 import hashlib
@@ -182,16 +183,40 @@ DEFAULT_MAX_GAP = 10.0
 # so a reading from last Tuesday resolves to where the counter was last
 # Tuesday and not to where it is now.
 #
-# A NAME AND NOT A COORDINATE, deliberately. These logs are meant to be
-# published -- the export builds a page for a fork to put on the web -- and a
-# place name is what a reader needs, while a decimal fix to six places is a
-# street address for whoever is holding the counter. Nothing here has any use
-# for the precision, so it is not collected.
+# A NAME FIRST, AND A COORDINATE ONLY AS COARSE AS YOU CHOOSE. These logs are
+# meant to be published -- the export builds a page for a fork to put on the
+# web -- and a place name is what a reader needs. A decimal fix to six places
+# is a street address for whoever is holding the counter, which is why this
+# used to refuse coordinates entirely.
+#
+# It no longer refuses them, because a fix is genuinely the thing a second
+# reader needs: background varies with geology and altitude, and "40 CPM at
+# Faversham" cannot be compared with anything, while "40 CPM at 51.317,
+# 0.891" can. The privacy problem was never the coordinate, it was the
+# PRECISION -- so precision is the control, and it is rounded at the moment it
+# is written rather than at the moment it is shown.
+#
+#   places  ~error   what it identifies
+#   1       11 km    a town and its surroundings
+#   2       1.1 km   a district
+#   3       110 m    a street -- the default, and as fine as a fixed
+#                    monitoring station ever needs
+#   4       11 m     a building
+#   6       11 cm    a doorstep
+#
+# A file that never held the sixth place cannot leak it, which is a stronger
+# guarantee than a page that declines to print it. `--precision` is how you
+# ask for something other than 110 m, and asking for 6 prints a warning.
 #
 # AND THERE IS NO DEFAULT PLACE. A site is recorded when somebody records one;
 # until then the column is empty, which is the truthful answer to "where was
 # this taken" and does not put an address on a public page by accident.
 SITES_NAME = "sites.tsv"
+
+# Decimal places kept in a published fix. Three is about 110 m: enough to put
+# a counter on a map and compare it with another one, not enough to knock on.
+DEFAULT_FIX_PRECISION = 3
+FINEST_PUBLIC_PRECISION = 4
 
 # How much of the flash tail a backfill reads when it is not told otherwise.
 # 64 KiB is around seventeen hours at the interval this counter records, and
@@ -2260,14 +2285,21 @@ def log_row(when, cps, counts, seconds, averages, peaks, src, site=""):
 
 # PORT: replaced by src/log.rs :: read_sites() -- same name
 def read_sites(directory=None):
-    """[(serial, from_time, name)], oldest first."""
+    """[(serial, from_time, name, lat, lon, elevation)], oldest first.
+
+    The last three are None on a row written before fixes were recorded, and
+    on any row that simply has not got one. A file with three columns and a
+    file with six are both valid and both read; the extra columns are read
+    when they are there and never required, because sites.tsv is append-only
+    and old rows are not rewritten.
+    """
     path = os.path.join(directory or state_dir(), SITES_NAME)
     out = []
     try:
         with open(path) as f:
             for line in f:
-                line = line.strip()
-                if not line or line.startswith("#"):
+                line = line.rstrip("\n")
+                if not line.strip() or line.startswith("#"):
                     continue
                 cells = line.split("\t")
                 if len(cells) < 3:
@@ -2275,11 +2307,45 @@ def read_sites(directory=None):
                 when = row_time(cells[1] + "\t")
                 if when is None:
                     continue
-                out.append((cells[0], when, cells[2]))
+                out.append((cells[0], when, cells[2],
+                            _fix_cell(cells, 3), _fix_cell(cells, 4),
+                            _fix_cell(cells, 5)))
     except IOError:
         pass
     out.sort(key=lambda r: (r[0], r[1]))
     return out
+
+
+def _fix_cell(cells, i):
+    """A float from an optional column, or None. Junk reads as absent."""
+    if i >= len(cells) or cells[i].strip() in ("", "--"):
+        return None
+    try:
+        return float(cells[i])
+    except ValueError:
+        return None
+
+
+def parse_fix(text, precision=DEFAULT_FIX_PRECISION):
+    """"LAT,LON" -> (lat, lon), rounded to `precision` places.
+
+    ROUNDED HERE, ON THE WAY IN. The rounding is not a display choice that a
+    later reader could undo -- the finer digits are discarded before anything
+    is written down, so the file cannot be made to give up a precision it was
+    never told.
+    """
+    parts = [p.strip() for p in str(text).replace(";", ",").split(",")]
+    if len(parts) != 2:
+        raise ValueError("a fix is LAT,LON -- got %r" % (text,))
+    try:
+        lat, lon = float(parts[0]), float(parts[1])
+    except ValueError:
+        raise ValueError("a fix is two decimal numbers -- got %r" % (text,))
+    if not -90.0 <= lat <= 90.0:
+        raise ValueError("latitude out of range: %s" % parts[0])
+    if not -180.0 <= lon <= 180.0:
+        raise ValueError("longitude out of range: %s" % parts[1])
+    return (round(lat, precision), round(lon, precision))
 
 
 # PORT: replaced by src/log.rs :: site_at() -- same name, same as-of lookup
@@ -2301,23 +2367,46 @@ def site_at(serial, when, sites):
     return current
 
 
+def fix_text(row, places=None):
+    """A site row's coordinates as text, or "" when it has none.
+
+    PRINTED AS STORED, never padded to a fixed width. A fix recorded at one
+    decimal place is 51.3, and writing it as 51.300 would assert two digits of
+    precision that were deliberately thrown away when it was written down --
+    which is the one thing this whole arrangement exists to prevent. The
+    file's precision IS the claim.
+    """
+    del places  # kept for callers; the stored value decides, not the caller
+    if not row or len(row) < 5 or row[3] is None or row[4] is None:
+        return ""
+    out = "%s, %s" % (exact(row[3]), exact(row[4]))
+    if len(row) > 5 and row[5] is not None:
+        out += " (%gm)" % row[5]
+    return out
+
+
 # PORT: NOT PORTED. The write side of `site` is still here.
-def record_site(serial, name, when=None, directory=None):
+def record_site(serial, name, when=None, directory=None, fix=None,
+                elevation=None):
     """Append a move. Append-only, because it is a history and not a setting."""
     d = directory or state_dir()
     path = os.path.join(d, SITES_NAME)
     fresh = not os.path.exists(path) or os.path.getsize(path) == 0
     with open(path, "a") as f:
         if fresh:
-            f.write("#serial\tfrom\tname\n")
+            f.write("#serial\tfrom\tname\tlat\tlon\televation\n")
         # `when` is 0 for the record that covers a counter's whole history,
         # and 0 is falsy -- so this asks whether it was given, not whether it
         # is true, which is the difference between "from the start" and "from
         # the moment somebody first ran this".
         stamp = time.time() if when is None else when
-        f.write("%s\t%s\t%s\n"
+        lat = "" if not fix else repr(fix[0])
+        lon = "" if not fix else repr(fix[1])
+        ele = "" if elevation is None else repr(float(elevation))
+        f.write("%s\t%s\t%s\t%s\t%s\t%s\n"
                 % (serial, time.strftime("%Y-%m-%dT%H:%M:%S",
-                                         time.localtime(stamp)), name))
+                                         time.localtime(stamp)), name,
+                   lat, lon, ele))
     return path
 
 
@@ -3059,9 +3148,29 @@ def cmd_site(args):
             print("no counter: %s -- name one with --serial" % e.reason,
                   file=sys.stderr)
             return 1
+    if args.at and not args.name:
+        print("a fix belongs to a place: give --name as well", file=sys.stderr)
+        return 2
     if args.name:
-        path = record_site(serial, args.name)
+        fix = None
+        if args.at:
+            places = max(0, min(8, args.precision))
+            try:
+                fix = parse_fix(args.at, places)
+            except ValueError as e:
+                print("radbeeper: %s" % e, file=sys.stderr)
+                return 2
+            if places > FINEST_PUBLIC_PRECISION:
+                print("radbeeper: %d decimal places is about %s -- finer than "
+                      "a published\n    monitoring station needs, and finer "
+                      "than most receivers are honest to."
+                      % (places, _precision_scale(places)), file=sys.stderr)
+        path = record_site(serial, args.name, fix=fix,
+                           elevation=args.elevation)
         print("%s moved to %s" % (serial, args.name))
+        if fix:
+            print("  at %s" % fix_text(("", 0, "", fix[0], fix[1],
+                                        args.elevation)))
         print("  recorded in %s" % path)
         return 0
     sites = ensure_site(serial)
@@ -3070,14 +3179,29 @@ def cmd_site(args):
     print("counter %s" % serial)
     print("now     %s" % (now[2] if now else
                           "nowhere recorded -- radbeeper site --name ..."))
+    where = fix_text(now) if now else ""
+    if where:
+        print("fix     %s" % where)
     if len(mine) > 1:
         print("history")
-        for _s, when, name in mine:
-            print("  %s  %s"
+        for row in mine:
+            when, name = row[1], row[2]
+            here = fix_text(row)
+            print("  %s  %s%s"
                   % ("from the start  " if when <= 0 else
                      time.strftime("%Y-%m-%d %H:%M", time.localtime(when)),
-                     name))
+                     name, ("  [" + here + "]") if here else ""))
     return 0
+
+
+def _precision_scale(places):
+    """Roughly what one unit in the last place spans on the ground."""
+    metres = 111320.0 / (10.0 ** places)
+    if metres >= 1000:
+        return "%g km" % round(metres / 1000.0, 1)
+    if metres >= 1:
+        return "%g m" % round(metres)
+    return "%g cm" % round(metres * 100)
 
 
 # ------------------------------------------------------------------ export ---
@@ -4186,8 +4310,1414 @@ RANDOM_CSS = (
 
 
 # PORT: replaced by src/export.rs :: render_random_html() -- same name; random.html is the same bytes from either
+# ---8<--- src/frames.js begins; written by tools/embedjs.py ---8<---
+VIEWER_JS = r"""/* SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 Paul Richeson
+ *
+ * The frame viewer: every second of decay that went into a random line, in a
+ * table you can sort, filter, and scrub through.
+ *
+ * ONE COPY, TWO EMBEDDERS. This file is compiled into the Rust with
+ * include_str! and pasted into the Python between markers by
+ * tools/embedjs.py, and tests/test_frames_js.py fails if the two ever differ.
+ * That is what lets `random.html` carry a frame viewer while ./radbeeper --
+ * which has never heard of a frame -- still produces the page byte for byte:
+ * both implementations copy these characters without reading them, and the
+ * decoding happens here, in the browser, once.
+ *
+ * ZERO DEPENDENCIES, AND NO FETCH FOR THE DEFAULT VIEW. The recent frames are
+ * embedded in the page as base64, so a random.html saved to a disk and opened
+ * off file:// still shows its data -- which matters, because the page is an
+ * audit trail and an audit trail that only works while a web server is up is
+ * not much of one. Older months are fetched on demand and simply stay
+ * unavailable when there is nothing to fetch from.
+ */
+(function () {
+  "use strict";
+
+  // ------------------------------------------------------------- reading ---
+
+  /** The JSON or text in a <script> the page embedded, or null. */
+  function payload(id) {
+    var el = document.getElementById(id);
+    return el ? el.textContent : null;
+  }
+
+  /** base64 -> Uint8Array, without assuming the string is clean. */
+  function unbase64(text) {
+    var clean = (text || "").replace(/[^A-Za-z0-9+/=]/g, "");
+    if (!clean) return new Uint8Array(0);
+    var raw;
+    try {
+      raw = atob(clean);
+    } catch (e) {
+      return new Uint8Array(0);
+    }
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i) & 0xff;
+    return out;
+  }
+
+  var MAGIC_V1 = [0x52, 0x42, 0x46, 0x31]; // "RBF1"
+  var MAGIC_V2 = [0x52, 0x42, 0x46, 0x32]; // "RBF2"
+  var ESCAPE = 0xfe;
+
+  function magicAt(buf, at) {
+    if (at + 4 > buf.length) return 0;
+    var m1 = true, m2 = true;
+    for (var i = 0; i < 4; i++) {
+      if (buf[at + i] !== MAGIC_V1[i]) m1 = false;
+      if (buf[at + i] !== MAGIC_V2[i]) m2 = false;
+    }
+    return m2 ? 2 : m1 ? 1 : 0;
+  }
+
+  function hex(buf, at, n) {
+    var s = "";
+    for (var i = 0; i < n; i++) {
+      var b = buf[at + i];
+      s += (b >> 4).toString(16) + (b & 15).toString(16);
+    }
+    return s;
+  }
+
+  /**
+   * One frame at `at`, or null.
+   *
+   * A PORT OF Frame::decode, AND IT HAS TO STAY ONE. The escape rule, the
+   * inline-count rule and the "a length that cannot fit is damage" rule are
+   * the same three rules in the same order; src/entropy.rs is the
+   * specification and this is the second implementation of it.
+   */
+  function decodeFrame(buf, at) {
+    var version = magicAt(buf, at);
+    if (!version || at + 5 > buf.length) return null;
+    var p = at + 4;
+    var suspect = buf[p++] !== 0;
+
+    var varint = function () {
+      var v = 0, shift = 0;
+      for (;;) {
+        if (p >= buf.length) return null;
+        var b = buf[p++];
+        v += (b & 0x7f) * Math.pow(2, shift);
+        if (!(b & 0x80)) return v;
+        shift += 7;
+        if (shift > 56) return null;
+      }
+    };
+
+    var seq = varint(); if (seq === null) return null;
+    var started = varint(); if (started === null) return null;
+    var n = varint(); if (n === null || n > buf.length) return null;
+
+    var samples = new Array(n);
+    for (var i = 0; i < n; i++) {
+      if (p >= buf.length) return null;
+      var tag = buf[p++];
+      if (tag === ESCAPE) {
+        var gap = varint(); if (gap === null) return null;
+        var count = varint(); if (count === null) return null;
+        samples[i] = [gap, count];
+      } else if (tag === 0xff) {
+        return null;
+      } else {
+        samples[i] = [1, tag];
+      }
+    }
+    var klen = varint();
+    if (klen === null || klen > buf.length - p) return null;
+    var key = hex(buf, p, klen);
+    p += klen;
+    var link = "";
+    if (version === 2) {
+      var llen = varint();
+      if (llen === null || llen > buf.length - p) return null;
+      link = hex(buf, p, llen);
+      p += llen;
+    }
+    return { seq: seq, started: started, suspect: suspect, samples: samples,
+             key: key, link: link, end: p };
+  }
+
+  /**
+   * Every frame in a buffer, damaged ones skipped.
+   *
+   * A decode is not enough; it has to LAND somewhere. Corrupting a length
+   * inside a frame does not make it fail to parse, it makes it parse as a
+   * different frame that ends in the middle of the next one -- so a frame is
+   * only accepted when what follows is another magic or the end.
+   */
+  function readFrames(buf) {
+    var out = [], at = 0;
+    while (at + 4 <= buf.length) {
+      var f = decodeFrame(buf, at);
+      if (f && f.end > at && (f.end === buf.length || magicAt(buf, f.end))) {
+        out.push(f);
+        at = f.end;
+      } else {
+        at++;
+        while (at + 4 <= buf.length && !magicAt(buf, at)) at++;
+      }
+    }
+    return out;
+  }
+
+  // ---------------------------------------------------------------- bands ---
+  //
+  // The same five names, the same five floors and the same five colours as
+  // the dial in radbeeper-gui and the legend on the monitor page. A viewer
+  // that invented its own thresholds would be a third opinion about what
+  // counts as a warning, which is the one thing a instrument must not have.
+
+  var BANDS = [
+    { name: "attenuated", floor: 0,   hue: "#739ed9" },
+    { name: "nominal",    floor: 30,  hue: "#66d98c" },
+    { name: "advisory",   floor: 120, hue: "#e8d24a" },
+    { name: "warning",    floor: 240, hue: "#fa9e40" },
+    { name: "deadly",     floor: 600, hue: "#e5484d" }
+  ];
+
+  /// Emissions dated before this were written by a build that put
+  /// time.monotonic() where the wall clock belonged, so they date themselves
+  /// to 1969. The audit page has always printed "not kept" for those rows
+  /// rather than the date, and the viewer uses the same cut.
+  ///
+  /// It matters more here than there. A record holding five bad rows and five
+  /// good ones spans fifty-seven years; every real bar lands in the last
+  /// pixel and the range selector is a blank box. So a stale row is treated
+  /// as UNDATED: it gets no vote on the scale, and -- because an undated row
+  /// is exempt from the range filter -- it is still listed, still counted,
+  /// and still chain-checked. It is evidence, not noise.
+  var EPOCH_FLOOR = new Date(2000, 0, 1).getTime() / 1000;
+
+  function bandOf(cpm) {
+    for (var i = BANDS.length - 1; i >= 0; i--) {
+      if (cpm >= BANDS[i].floor) return BANDS[i];
+    }
+    return BANDS[0];
+  }
+
+  // ------------------------------------------------------------- the data ---
+
+  function parseTsv(text) {
+    var rows = [], lines = (text || "").split("\n");
+    var head = null;
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      if (!line) continue;
+      if (line.charAt(0) === "#") {
+        // THE HEADER IS THE LAST `#` LINE WITH TABS IN IT. The file opens
+        // with a few lines of prose -- what counter, where it was, what the
+        // clamp means -- and taking the first `#` line as the header read the
+        // prose as column names and then dropped every row for being too
+        // short. Comments have no tabs; the header is nothing but tabs.
+        if (line.indexOf("\t") >= 0) head = line.slice(1).split("\t");
+        continue;
+      }
+      var c = line.split("\t");
+      if (!head || c.length < head.length) continue;
+      var row = {};
+      for (var k = 0; k < head.length; k++) row[head[k]] = c[k];
+      rows.push(row);
+    }
+    return rows;
+  }
+
+  function num(v) {
+    if (v === undefined || v === null || v === "" || v === "--") return null;
+    var n = parseFloat(v);
+    return isFinite(n) ? n : null;
+  }
+
+  /** "2026-09-14T22:13:20" -> epoch seconds, read as LOCAL time. */
+  function stampToEpoch(s) {
+    var m = /^(\d{4})-(\d\d)-(\d\d)[T ](\d\d):(\d\d):(\d\d)/.exec(s || "");
+    if (!m) return null;
+    return new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]).getTime() / 1000;
+  }
+
+  function pad(n) { return (n < 10 ? "0" : "") + n; }
+
+  function stamp(epoch) {
+    var d = new Date(epoch * 1000);
+    return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate())
+      + " " + pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+  }
+
+  function shortStamp(epoch) {
+    var d = new Date(epoch * 1000);
+    return pad(d.getMonth() + 1) + "-" + pad(d.getDate()) + " " + pad(d.getHours())
+      + ":" + pad(d.getMinutes());
+  }
+
+  function fmt(v, places) {
+    if (v === null || v === undefined || !isFinite(v)) return "--";
+    return v.toFixed(places === undefined ? 2 : places);
+  }
+
+  // --------------------------------------------------------------- sha256 ---
+  //
+  // WHY NOT crypto.subtle. It is missing outside a secure context, and
+  // file:// is not one in every browser -- which is exactly the case this
+  // page is meant to survive, since the point of embedding the frames is that
+  // a saved copy still audits. It is also asynchronous, and a chain check
+  // that has to be awaited turns every render path into a promise. Sixty
+  // lines of FIPS 180-4 costs less than either.
+
+  var K256 = [
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1,
+    0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786,
+    0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147,
+    0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b,
+    0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a,
+    0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
+  ];
+
+  function sha256(bytes) {
+    var h = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+             0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    var len = bytes.length;
+    var padded = new Uint8Array((((len + 8) >> 6) + 1) << 6);
+    padded.set(bytes);
+    padded[len] = 0x80;
+    // The length in bits, big-endian, in the last eight bytes. Lengths here
+    // are tens of bytes, so the high word is always zero -- but it is written
+    // rather than assumed, because a viewer is a thing people paste elsewhere.
+    var bits = len * 8;
+    var dv = new DataView(padded.buffer);
+    dv.setUint32(padded.length - 8, Math.floor(bits / 4294967296));
+    dv.setUint32(padded.length - 4, bits >>> 0);
+
+    var w = new Int32Array(64);
+    for (var off = 0; off < padded.length; off += 64) {
+      for (var i = 0; i < 16; i++) w[i] = dv.getInt32(off + i * 4);
+      for (i = 16; i < 64; i++) {
+        var s0 = ((w[i - 15] >>> 7) | (w[i - 15] << 25))
+               ^ ((w[i - 15] >>> 18) | (w[i - 15] << 14)) ^ (w[i - 15] >>> 3);
+        var s1 = ((w[i - 2] >>> 17) | (w[i - 2] << 15))
+               ^ ((w[i - 2] >>> 19) | (w[i - 2] << 13)) ^ (w[i - 2] >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) | 0;
+      }
+      var a = h[0], b = h[1], c = h[2], d = h[3];
+      var e = h[4], f = h[5], g = h[6], hh = h[7];
+      for (i = 0; i < 64; i++) {
+        var S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21))
+               ^ ((e >>> 25) | (e << 7));
+        var ch = (e & f) ^ (~e & g);
+        var t1 = (hh + S1 + ch + K256[i] + w[i]) | 0;
+        var S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19))
+               ^ ((a >>> 22) | (a << 10));
+        var maj = (a & b) ^ (a & c) ^ (b & c);
+        var t2 = (S0 + maj) | 0;
+        hh = g; g = f; f = e; e = (d + t1) | 0;
+        d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      h[0] = (h[0] + a) | 0; h[1] = (h[1] + b) | 0;
+      h[2] = (h[2] + c) | 0; h[3] = (h[3] + d) | 0;
+      h[4] = (h[4] + e) | 0; h[5] = (h[5] + f) | 0;
+      h[6] = (h[6] + g) | 0; h[7] = (h[7] + hh) | 0;
+    }
+    var out = "";
+    for (i = 0; i < 8; i++) out += ("00000000" + (h[i] >>> 0).toString(16)).slice(-8);
+    return out;
+  }
+
+  function fromHex(text) {
+    var n = Math.floor((text || "").length / 2);
+    var out = new Uint8Array(n);
+    for (var i = 0; i < n; i++) out[i] = parseInt(text.substr(i * 2, 2), 16) & 0xff;
+    return out;
+  }
+
+  function concatBytes(parts) {
+    var n = 0, i;
+    for (i = 0; i < parts.length; i++) n += parts[i].length;
+    var out = new Uint8Array(n), at = 0;
+    for (i = 0; i < parts.length; i++) { out.set(parts[i], at); at += parts[i].length; }
+    return out;
+  }
+
+  var CHAIN_LABEL = new Uint8Array(
+    [114, 97, 100, 98, 101, 101, 112, 101, 114, 47, 99, 104, 97, 105, 110, 47, 49]
+  ); // "radbeeper/chain/1"
+
+  var GENESIS = "0000000000000000000000000000000000000000000000000000000000000000";
+
+  /** One step of the chain: H(label || prev || key). Mirrors entropy::chain. */
+  function chainStep(prev, key) {
+    return sha256(concatBytes([CHAIN_LABEL, fromHex(prev), fromHex(key)]));
+  }
+
+  /**
+   * Walk the emissions in order and mark each one's chain state.
+   *
+   * `ok` means this row's stored link is the one its key and its predecessor
+   * imply. `broken` means it is not -- which, on a row whose own key still
+   * recomputes, means something was removed or reordered rather than edited.
+   * A row with no stored link at all (written before 0.5) is `absent`: not a
+   * failure, just a stretch of record the chain does not cover.
+   */
+  function verifyChain(rows) {
+    var prev = GENESIS, seen = false;
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r.key) { r.chain = "absent"; continue; }
+      var want = chainStep(prev, r.key);
+      if (!r.link) {
+        r.chain = "absent";
+        // An unlinked row still advances the chain, so the rows after it are
+        // judged against where the record actually is rather than against a
+        // chain that silently stopped.
+        prev = want;
+        continue;
+      }
+      r.chain = r.link === want ? "ok" : "broken";
+      if (r.chain === "broken") {
+        // Re-seat on what the file claims, so ONE bad link reports as one bad
+        // link instead of painting every row after it red.
+        prev = r.link;
+      } else {
+        prev = want;
+      }
+      seen = true;
+    }
+    return seen;
+  }
+
+  // ---------------------------------------------------------- the joining ---
+
+  /**
+   * One row per emission: what the .tsv recorded, plus the frame's seconds
+   * when the frame for it is here.
+   *
+   * THE TABLE IS DRIVEN BY THE TSV AND NOT BY THE FRAMES, which is what keeps
+   * the page honest about its own gaps. Frames are embedded up to a budget,
+   * so the older end of the record has rows with no frame behind them; those
+   * rows still appear, still carry their key and their chain link, and simply
+   * cannot be expanded. A viewer built the other way round would quietly show
+   * only the part of the history it happened to be carrying.
+   */
+  function build(meta, tsvText, frameBytes) {
+    var rows = parseTsv(tsvText);
+    var frames = readFrames(frameBytes);
+    var bySeq = {};
+    for (var i = 0; i < frames.length; i++) {
+      // Sequence numbers restart per counter, and a page is per counter, so
+      // seq is unique here. Later wins: a re-run that rewrote a frame is
+      // showing its newer self.
+      bySeq[frames[i].seq] = frames[i];
+    }
+    var out = [];
+    for (i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      var started = stampToEpoch(r.started || r.time);
+      var stale = started !== null && started < EPOCH_FLOOR;
+      if (stale) started = null;
+      // A pool's span in samples IS its span in seconds -- one count a
+      // second is the whole of what the protocol offers -- so there is one
+      // column and not two that could disagree.
+      var seconds = num(r.samples) || num(r.seconds) || 0;
+      var counts = num(r.counts);
+      var cpm = num(r.cpm);
+      if (cpm === null && counts !== null && seconds > 0) cpm = counts * 60 / seconds;
+      var f = bySeq[num(r.seq)];
+      out.push({
+        seq: num(r.seq),
+        started: started,
+        seconds: seconds,
+        samples: num(r.samples),
+        counts: counts,
+        cpm: cpm,
+        usvh: num(r.usvh),
+        bits: num(r.bits),
+        flat: (r.flat || "") === "yes",
+        stale: stale,
+        key: (r.key || r.hex || "").toLowerCase(),
+        link: (r.link || "").toLowerCase(),
+        cpm30: num(r.cpm30),
+        cpm300: num(r.cpm300),
+        frame: f || null,
+        chain: "absent"
+      });
+    }
+    // VERIFIED IN FILE ORDER, WHICH IS THE ORDER THE CHAIN WAS BUILT IN.
+    //
+    // This used to sort by `seq` first, on the assumption that a sequence
+    // number counts the record. It does not: `seq` is the POOL's counter and
+    // it restarts -- at a service restart, and separately for each tube -- so
+    // a real month of emissions reads 0 0 1 0 0 0 0 1 2 99. Sorting by it
+    // shuffles the rows out of the order their links were computed in and
+    // reports chain breaks in a chain that is perfectly sound. The first page
+    // rendered with real data claimed three.
+    //
+    // The table's own sorting is a separate thing entirely and happens in
+    // `visible()`, after every row already knows its chain state.
+    verifyChain(out);
+    for (i = 0; i < out.length; i++) {
+      out[i].band = bandOf(out[i].cpm === null ? 0 : out[i].cpm);
+      out[i].verified = out[i].frame ? frameKeyMatches(out[i]) : null;
+    }
+    return { rows: out, frames: frames, meta: meta };
+  }
+
+  /**
+   * Does the frame's seconds still add up to the count the .tsv recorded?
+   *
+   * NOT THE KEY ITSELF, deliberately. Recomputing the key means packing the
+   * counts to one nibble each and hashing them with the label and the start
+   * second -- doable here, and it would be a second implementation of the
+   * digest in a language with no integer type, which is how two
+   * implementations quietly stop agreeing. `radbeeper random --check` and
+   * `--frames` do that properly, in the same code that writes it. What this
+   * checks is the weaker, useful thing: the raw seconds and the summary row
+   * describe the same stretch of time.
+   */
+  function frameKeyMatches(row) {
+    var f = row.frame;
+    if (!f) return null;
+    if (f.key && row.key && f.key !== row.key) return false;
+    var total = 0;
+    for (var i = 0; i < f.samples.length; i++) total += f.samples[i][1];
+    if (row.samples !== null && f.samples.length !== row.samples) return false;
+    // The .tsv's counts column is clamped at fifteen a second, so it is a
+    // floor on the frame's total and never an equality.
+    if (row.counts !== null && total < row.counts) return false;
+    return true;
+  }
+
+  // ------------------------------------------------------------------ dom ---
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined && text !== null) e.textContent = String(text);
+    return e;
+  }
+
+  var STYLE = [
+    ".rb { --rb-line:#d8d2c4; --rb-dim:#6d6a63; --rb-bg:#fbf9f4; --rb-alt:#f3efe6;",
+    "      font: 13px/1.45 ui-monospace,Menlo,Consolas,monospace; margin:1.5rem 0; }",
+    "@media (prefers-color-scheme: dark) { .rb {",
+    "  --rb-line:#33383f; --rb-dim:#8b9099; --rb-bg:#15181c; --rb-alt:#1b1f24; } }",
+    ".rb-bar { display:flex; flex-wrap:wrap; gap:.5rem 1.2rem; align-items:center;",
+    "          margin-bottom:.6rem; }",
+    ".rb-bar label { color:var(--rb-dim); display:inline-flex; gap:.35rem;",
+    "                align-items:center; }",
+    ".rb input, .rb select, .rb button { font:inherit; padding:.2rem .4rem;",
+    "  border:1px solid var(--rb-line); background:var(--rb-bg); color:inherit;",
+    "  border-radius:3px; }",
+    ".rb button { cursor:pointer; }",
+    ".rb button:hover { border-color:var(--rb-dim); }",
+    ".rb-range { width:100%; height:92px; display:block; touch-action:none;",
+    "            border:1px solid var(--rb-line); border-radius:3px;",
+    "            background:var(--rb-bg); cursor:crosshair; }",
+    ".rb-note { color:var(--rb-dim); margin:.4rem 0 .8rem; }",
+    ".rb-wrap { overflow-x:auto; border:1px solid var(--rb-line); border-radius:3px; }",
+    ".rb-table { border-collapse:collapse; width:100%; font-size:12px; }",
+    ".rb-table th, .rb-table td { padding:.25rem .5rem; text-align:right;",
+    "  white-space:nowrap; border-bottom:1px solid var(--rb-line); }",
+    ".rb-table th { position:sticky; top:0; background:var(--rb-alt);",
+    "  cursor:pointer; user-select:none; z-index:1; }",
+    ".rb-table th.rb-sorted::after { content:' \\25BE'; }",
+    ".rb-table th.rb-sorted.rb-asc::after { content:' \\25B4'; }",
+    ".rb-table td.rb-l, .rb-table th.rb-l { text-align:left; }",
+    ".rb-row { cursor:pointer; }",
+    ".rb-row:hover td { background:var(--rb-alt); }",
+    ".rb-key { font-size:11px; color:var(--rb-dim); }",
+    ".rb-chip { display:inline-block; padding:0 .4rem; border-radius:2px;",
+    "  color:#101214; font-weight:600; font-size:11px; }",
+    ".rb-heat { position:relative; }",
+    ".rb-heat span { position:relative; z-index:1; }",
+    ".rb-heat i { position:absolute; left:0; top:2px; bottom:2px; z-index:0;",
+    "  opacity:.28; border-radius:2px; }",
+    ".rb-bad { color:#e5484d; font-weight:600; }",
+    ".rb-good { color:#3a9d5d; }",
+    ".rb-detail td { background:var(--rb-alt); }",
+    ".rb-secs { display:flex; flex-wrap:wrap; gap:2px; margin:.4rem 0; }",
+    ".rb-sec { width:22px; text-align:center; border-radius:2px; font-size:11px;",
+    "  color:#101214; }",
+    ".rb-empty { padding:1.2rem; text-align:center; color:var(--rb-dim); }",
+    ".rb-dl a { margin-right:.8rem; }"
+  ].join("\n");
+
+  var SVGNS = "http://www.w3.org/2000/svg";
+  function svg(tag, attrs) {
+    var e = document.createElementNS(SVGNS, tag);
+    for (var k in attrs) if (attrs.hasOwnProperty(k)) e.setAttribute(k, attrs[k]);
+    return e;
+  }
+
+  var COLUMNS = [
+    { key: "seq",     label: "seq",     align: "r", fmt: function (r) { return r.seq; } },
+    { key: "started", label: "started", align: "l",
+      fmt: function (r) {
+        if (r.started) return stamp(r.started);
+        // The same two words the audit page uses for these rows, so a reader
+        // moving between the table and the page is not told two stories.
+        return r.stale ? "not kept" : "--";
+      } },
+    { key: "seconds", label: "span s",  align: "r", fmt: function (r) { return r.seconds; } },
+    { key: "samples", label: "samples", align: "r",
+      fmt: function (r) { return r.samples === null ? "--" : r.samples; } },
+    { key: "counts",  label: "counts",  align: "r",
+      fmt: function (r) { return r.counts === null ? "--" : r.counts; } },
+    { key: "cpm",     label: "CPM",     align: "r", heat: true,
+      fmt: function (r) { return fmt(r.cpm, 1); } },
+    { key: "usvh",    label: "uSv/h",   align: "r",
+      fmt: function (r) { return fmt(r.usvh, 4); } },
+    { key: "bits",    label: "bits/s",  align: "r",
+      fmt: function (r) { return fmt(r.bits, 3); } },
+    { key: "band",    label: "band",    align: "l", band: true,
+      fmt: function (r) { return r.band.name; } },
+    { key: "chain",   label: "chain",   align: "l", chain: true,
+      fmt: function (r) { return r.chain; } },
+    { key: "key",     label: "key",     align: "l", mono: true,
+      fmt: function (r) { return r.key ? r.key.slice(0, 16) + "…" : "--"; } }
+  ];
+
+  function mount(model, host) {
+    var rows = model.rows;
+    var span = extent(rows);
+    var state = {
+      lo: span.lo, hi: span.hi,
+      sort: { key: "seq", asc: false },
+      bands: null,          // null = every band
+      minCpm: null, maxCpm: null,
+      search: "",
+      chainOnly: false,
+      framesOnly: false,
+      open: {}
+    };
+
+    var style = el("style");
+    style.textContent = STYLE;
+    host.appendChild(style);
+    var root = el("div", "rb");
+    host.appendChild(root);
+
+    var summary = el("p", "rb-note");
+    root.appendChild(summary);
+
+    var chart = svg("svg", { "class": "rb-range", preserveAspectRatio: "none" });
+    root.appendChild(chart);
+    var hint = el("p", "rb-note",
+      "Drag across the chart to select a span; drag the edges to resize, the "
+      + "middle to pan, scroll to zoom. Double-click to show everything.");
+    root.appendChild(hint);
+
+    var bar = el("div", "rb-bar");
+    root.appendChild(bar);
+    var stats = el("p", "rb-note");
+    root.appendChild(stats);
+    var wrap = el("div", "rb-wrap");
+    root.appendChild(wrap);
+
+    // ------------------------------------------------------------ toolbar ---
+    function field(label, node) {
+      var l = el("label", null, label);
+      l.appendChild(node);
+      bar.appendChild(l);
+      return node;
+    }
+    var fromBox = field("from ", el("input"));
+    var toBox = field("to ", el("input"));
+    fromBox.type = toBox.type = "date";
+    var minBox = field("CPM ≥ ", el("input"));
+    var maxBox = field("≤ ", el("input"));
+    minBox.type = maxBox.type = "number";
+    minBox.step = maxBox.step = "any";
+    minBox.style.width = maxBox.style.width = "6em";
+    var bandBox = field("band ", el("select"));
+    bandBox.appendChild(new Option("all", ""));
+    for (var bi = 0; bi < BANDS.length; bi++) {
+      bandBox.appendChild(new Option(BANDS[bi].name, BANDS[bi].name));
+    }
+    var searchBox = field("key ", el("input"));
+    searchBox.type = "search";
+    searchBox.placeholder = "hex prefix";
+    searchBox.style.width = "9em";
+    var chainBox = field("chain issues only ", el("input"));
+    chainBox.type = "checkbox";
+    var framesBox = field("with frames only ", el("input"));
+    framesBox.type = "checkbox";
+    var reset = el("button", null, "reset");
+    bar.appendChild(reset);
+    var dl = el("button", null, "download shown as TSV");
+    bar.appendChild(dl);
+
+    function readToolbar() {
+      state.minCpm = num(minBox.value);
+      state.maxCpm = num(maxBox.value);
+      state.bands = bandBox.value ? bandBox.value : null;
+      state.search = (searchBox.value || "").trim().toLowerCase();
+      state.chainOnly = chainBox.checked;
+      state.framesOnly = framesBox.checked;
+      var f = fromBox.value ? stampToEpoch(fromBox.value + "T00:00:00") : null;
+      var t = toBox.value ? stampToEpoch(toBox.value + "T23:59:59") : null;
+      if (f !== null) state.lo = f;
+      if (t !== null) state.hi = t;
+      draw();
+    }
+    [minBox, maxBox, searchBox].forEach(function (n) {
+      n.addEventListener("input", readToolbar);
+    });
+    [bandBox, chainBox, framesBox, fromBox, toBox].forEach(function (n) {
+      n.addEventListener("change", readToolbar);
+    });
+    reset.addEventListener("click", function () {
+      state.lo = span.lo; state.hi = span.hi;
+      minBox.value = maxBox.value = searchBox.value = "";
+      fromBox.value = toBox.value = "";
+      bandBox.value = ""; chainBox.checked = framesBox.checked = false;
+      state.minCpm = state.maxCpm = state.bands = null;
+      state.search = ""; state.chainOnly = state.framesOnly = false;
+      draw();
+    });
+    dl.addEventListener("click", function () { download(visible(), model.meta); });
+
+    // -------------------------------------------------------- the filter ---
+    function visible() {
+      var out = [];
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (r.started !== null && (r.started < state.lo || r.started > state.hi)) continue;
+        if (state.minCpm !== null && (r.cpm === null || r.cpm < state.minCpm)) continue;
+        if (state.maxCpm !== null && (r.cpm === null || r.cpm > state.maxCpm)) continue;
+        if (state.bands && r.band.name !== state.bands) continue;
+        if (state.search && r.key.indexOf(state.search) !== 0
+            && r.link.indexOf(state.search) !== 0) continue;
+        if (state.chainOnly && r.chain === "ok") continue;
+        if (state.framesOnly && !r.frame) continue;
+        out.push(r);
+      }
+      var k = state.sort.key, sign = state.sort.asc ? 1 : -1;
+      out.sort(function (a, b) {
+        var x = a[k], y = b[k];
+        if (k === "band") { x = a.band.floor; y = b.band.floor; }
+        if (x === null || x === undefined) x = -Infinity;
+        if (y === null || y === undefined) y = -Infinity;
+        if (typeof x === "string" || typeof y === "string") {
+          return sign * String(x).localeCompare(String(y));
+        }
+        return sign * (x - y);
+      });
+      return out;
+    }
+
+    // ------------------------------------------------------- the brush ---
+    //
+    // A RANGE SELECTOR OVER TIME, not over row number. The record is not
+    // evenly spaced -- a counter that was unplugged for a fortnight leaves a
+    // fortnight-shaped hole -- and a selector indexed by row would make that
+    // hole invisible by squeezing it to nothing.
+
+    function px(t, w) {
+      if (span.hi <= span.lo) return 0;
+      return (t - span.lo) / (span.hi - span.lo) * w;
+    }
+    function un(x, w) {
+      if (w <= 0) return span.lo;
+      return span.lo + (x / w) * (span.hi - span.lo);
+    }
+
+    function drawRange() {
+      while (chart.firstChild) chart.removeChild(chart.firstChild);
+      var w = chart.clientWidth || chart.parentNode.clientWidth || 900;
+      var h = 92, top = 8, bot = h - 16;
+      chart.setAttribute("viewBox", "0 0 " + w + " " + h);
+
+      var peak = 1;
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].cpm !== null && rows[i].cpm > peak) peak = rows[i].cpm;
+      }
+      // One bar per emission, at least a pixel wide so a single reading in a
+      // month-long record is still something you can aim at.
+      for (i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (r.started === null || r.cpm === null) continue;
+        var x = px(r.started, w);
+        var bh = Math.max(1, (r.cpm / peak) * (bot - top));
+        var inSel = r.started >= state.lo && r.started <= state.hi;
+        chart.appendChild(svg("rect", {
+          x: x, y: bot - bh, width: 1.6, height: bh,
+          fill: r.band.hue, opacity: inSel ? 0.95 : 0.25
+        }));
+      }
+      // The unselected ends, shaded.
+      var lx = px(state.lo, w), hx = px(state.hi, w);
+      chart.appendChild(svg("rect", { x: 0, y: 0, width: Math.max(0, lx),
+        height: h, fill: "currentColor", opacity: 0.12 }));
+      chart.appendChild(svg("rect", { x: hx, y: 0, width: Math.max(0, w - hx),
+        height: h, fill: "currentColor", opacity: 0.12 }));
+      [lx, hx].forEach(function (x) {
+        chart.appendChild(svg("rect", { x: x - 2, y: 0, width: 4, height: h,
+          fill: "currentColor", opacity: 0.55 }));
+      });
+      var lab = svg("text", { x: 4, y: h - 4, fill: "currentColor",
+        "font-size": "10", opacity: 0.7 });
+      lab.textContent = shortStamp(state.lo) + "  →  " + shortStamp(state.hi);
+      chart.appendChild(lab);
+    }
+
+    var drag = null;
+    chart.addEventListener("pointerdown", function (ev) {
+      var w = chart.clientWidth || 900;
+      var x = ev.clientX - chart.getBoundingClientRect().left;
+      var lx = px(state.lo, w), hx = px(state.hi, w);
+      var mode = Math.abs(x - lx) < 6 ? "lo"
+               : Math.abs(x - hx) < 6 ? "hi"
+               : (x > lx && x < hx) ? "pan" : "new";
+      if (mode === "new") {
+        state.lo = state.hi = un(x, w);
+        mode = "hi";
+      }
+      drag = { mode: mode, w: w, x: x, lo: state.lo, hi: state.hi };
+      chart.setPointerCapture(ev.pointerId);
+      ev.preventDefault();
+    });
+    chart.addEventListener("pointermove", function (ev) {
+      if (!drag) return;
+      var x = ev.clientX - chart.getBoundingClientRect().left;
+      var t = un(x, drag.w);
+      if (drag.mode === "lo") state.lo = Math.min(t, state.hi);
+      else if (drag.mode === "hi") state.hi = Math.max(t, state.lo);
+      else {
+        var shift = un(x, drag.w) - un(drag.x, drag.w);
+        var width = drag.hi - drag.lo;
+        state.lo = Math.max(span.lo, Math.min(span.hi - width, drag.lo + shift));
+        state.hi = state.lo + width;
+      }
+      clampSel();
+      draw();
+    });
+    function endDrag(ev) {
+      if (!drag) return;
+      drag = null;
+      try { chart.releasePointerCapture(ev.pointerId); } catch (e) { /* gone */ }
+    }
+    chart.addEventListener("pointerup", endDrag);
+    chart.addEventListener("pointercancel", endDrag);
+    chart.addEventListener("dblclick", function () {
+      state.lo = span.lo; state.hi = span.hi; draw();
+    });
+    chart.addEventListener("wheel", function (ev) {
+      var w = chart.clientWidth || 900;
+      var at = un(ev.clientX - chart.getBoundingClientRect().left, w);
+      var k = ev.deltaY > 0 ? 1.25 : 0.8;
+      state.lo = at - (at - state.lo) * k;
+      state.hi = at + (state.hi - at) * k;
+      clampSel();
+      draw();
+      ev.preventDefault();
+    }, { passive: false });
+
+    function clampSel() {
+      if (state.lo < span.lo) state.lo = span.lo;
+      if (state.hi > span.hi) state.hi = span.hi;
+      // A selection narrower than a second selects nothing and cannot be
+      // dragged back open, so it has a floor.
+      if (state.hi - state.lo < 1) state.hi = state.lo + 1;
+    }
+
+    // -------------------------------------------------------- the table ---
+
+    function drawTable(shown) {
+      while (wrap.firstChild) wrap.removeChild(wrap.firstChild);
+      if (!shown.length) {
+        wrap.appendChild(el("div", "rb-empty", "No emissions match these filters."));
+        return;
+      }
+      var table = el("table", "rb-table");
+      var thead = el("thead"), tr = el("tr");
+      COLUMNS.forEach(function (col) {
+        var th = el("th", col.align === "l" ? "rb-l" : null, col.label);
+        if (state.sort.key === col.key) {
+          th.className = (th.className ? th.className + " " : "")
+            + "rb-sorted" + (state.sort.asc ? " rb-asc" : "");
+        }
+        th.addEventListener("click", function () {
+          if (state.sort.key === col.key) state.sort.asc = !state.sort.asc;
+          else { state.sort.key = col.key; state.sort.asc = false; }
+          draw();
+        });
+        tr.appendChild(th);
+      });
+      thead.appendChild(tr);
+      table.appendChild(thead);
+
+      var peak = 1;
+      shown.forEach(function (r) { if (r.cpm > peak) peak = r.cpm; });
+
+      var tbody = el("tbody");
+      // A CAP ON RENDERED ROWS, not on matched ones. Ten thousand <tr> is
+      // where a browser starts to feel it, and the honest response is to say
+      // how many are being withheld and let the range selector do its job.
+      var LIMIT = 2000;
+      shown.slice(0, LIMIT).forEach(function (r) {
+        var row = el("tr", "rb-row");
+        COLUMNS.forEach(function (col) {
+          var td = el("td", col.align === "l" ? "rb-l" : null);
+          var text = col.fmt(r);
+          if (col.band) {
+            var chip = el("span", "rb-chip", text);
+            chip.style.background = r.band.hue;
+            td.appendChild(chip);
+          } else if (col.heat && r.cpm !== null) {
+            td.className += " rb-heat";
+            var fill = el("i");
+            fill.style.background = r.band.hue;
+            fill.style.width = Math.max(2, (r.cpm / peak) * 100) + "%";
+            td.appendChild(fill);
+            td.appendChild(el("span", null, text));
+          } else if (col.chain) {
+            td.className += r.chain === "broken" ? " rb-bad"
+                          : r.chain === "ok" ? " rb-good" : "";
+            td.textContent = text;
+          } else if (col.mono) {
+            td.className += " rb-key";
+            td.textContent = text;
+          } else {
+            td.textContent = text;
+          }
+          row.appendChild(td);
+        });
+        row.addEventListener("click", function () {
+          state.open[r.seq] = !state.open[r.seq];
+          draw();
+        });
+        tbody.appendChild(row);
+        if (state.open[r.seq]) tbody.appendChild(detail(r));
+      });
+      table.appendChild(tbody);
+      wrap.appendChild(table);
+      if (shown.length > LIMIT) {
+        wrap.appendChild(el("div", "rb-empty",
+          "Showing the first " + LIMIT + " of " + shown.length
+          + " -- narrow the range to see the rest."));
+      }
+    }
+
+    function detail(r) {
+      var tr = el("tr", "rb-detail");
+      var td = el("td");
+      td.colSpan = COLUMNS.length;
+      td.appendChild(el("div", null, "key  " + (r.key || "--")));
+      td.appendChild(el("div", null, "link " + (r.link || "(before the chain)")));
+      if (!r.frame) {
+        td.appendChild(el("div", "rb-note",
+          "The raw seconds for this emission are not in this page. "
+          + "They are in the month's .bin file, linked above."));
+      } else {
+        var f = r.frame;
+        var grid = el("div", "rb-secs");
+        var at = f.started;
+        for (var i = 0; i < f.samples.length; i++) {
+          at += f.samples[i][0];
+          var c = f.samples[i][1];
+          var cell = el("div", "rb-sec", c);
+          cell.style.background = bandOf(c * 60).hue;
+          cell.title = stamp(at) + " — " + c + " counts ("
+                     + (c * 60) + " CPM)";
+          grid.appendChild(cell);
+          if (f.samples[i][0] > 1) cell.style.outline = "2px solid #e5484d";
+        }
+        td.appendChild(el("div", "rb-note",
+          f.samples.length + " seconds, " + (f.suspect ? "spectrum NOT flat"
+          : "spectrum flat") + ". A red outline is a gap -- a second the "
+          + "counter was away. Hover for the time."));
+        td.appendChild(grid);
+      }
+      tr.appendChild(td);
+      return tr;
+    }
+
+    function drawStats(shown) {
+      var counts = 0, secs = 0, n = 0, broken = 0, framed = 0;
+      shown.forEach(function (r) {
+        if (r.counts !== null) counts += r.counts;
+        secs += r.seconds || 0;
+        if (r.chain === "broken") broken++;
+        if (r.frame) framed++;
+        n++;
+      });
+      var mean = secs > 0 ? counts * 60 / secs : null;
+      stats.textContent = n + " of " + rows.length + " emissions · "
+        + counts + " counts over " + secs + "s · mean "
+        + fmt(mean, 1) + " CPM · " + framed + " with raw seconds here"
+        + (broken ? " · " + broken + " CHAIN BREAKS" : "");
+    }
+
+    function draw() {
+      clampSel();
+      var shown = visible();
+      drawRange();
+      drawTable(shown);
+      drawStats(shown);
+    }
+
+    summary.textContent = model.meta.summary || "";
+    var resizeAt = 0;
+    window.addEventListener("resize", function () {
+      clearTimeout(resizeAt);
+      resizeAt = setTimeout(drawRange, 120);
+    });
+    draw();
+  }
+
+  function extent(rows) {
+    var lo = null, hi = null, i, t;
+    // Stale rows arrive here already undated, from `build`.
+    for (i = 0; i < rows.length; i++) {
+      t = rows[i].started;
+      if (t === null) continue;
+      if (lo === null || t < lo) lo = t;
+      if (hi === null || t > hi) hi = t;
+    }
+    if (lo === null) { lo = 0; hi = 1; }
+    if (hi <= lo) hi = lo + 1;
+    // A little air at each end, so the first and last bars are not half
+    // under the handles.
+    var pad = (hi - lo) * 0.02;
+    return { lo: lo - pad, hi: hi + pad };
+  }
+
+  /** What is on screen, as a TSV the browser saves. */
+  function download(shown, meta) {
+    var head = ["seq", "started", "seconds", "samples", "counts", "cpm",
+                "usvh", "bits", "flat", "band", "chain", "key", "link"];
+    var lines = ["# radbeeper " + (meta.version || "") + " -- counter "
+                 + (meta.serial || "") + (meta.place ? " at " + meta.place : ""),
+                 "#" + head.join("\t")];
+    shown.forEach(function (r) {
+      lines.push([r.seq, r.started ? stamp(r.started) : "", r.seconds,
+                  r.samples === null ? "" : r.samples,
+                  r.counts === null ? "" : r.counts,
+                  r.cpm === null ? "" : r.cpm.toFixed(4),
+                  r.usvh === null ? "" : r.usvh.toFixed(6),
+                  r.bits === null ? "" : r.bits.toFixed(4),
+                  r.flat ? "yes" : "no", r.band.name, r.chain, r.key, r.link
+                 ].join("\t"));
+    });
+    var blob = new Blob([lines.join("\n") + "\n"], { type: "text/tab-separated-values" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "radbeeper-" + (meta.serial || "frames") + ".tsv";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () {
+      URL.revokeObjectURL(a.href);
+      a.parentNode.removeChild(a);
+    }, 0);
+  }
+
+  // ----------------------------------------------------------------- boot ---
+
+  function boot() {
+    var host = document.getElementById("rb-viewer");
+    if (!host) return;
+    var meta = {};
+    try { meta = JSON.parse(payload("rb-meta") || "{}"); } catch (e) { meta = {}; }
+    var model = build(meta, payload("rb-joined") || "",
+                      unbase64(payload("rb-frames")));
+    if (!model.rows.length) {
+      host.appendChild(el("p", "rb-note", "No emissions recorded yet."));
+      return;
+    }
+    mount(model, host);
+  }
+
+  // The test harness loads this file under node, where there is no document
+  // at all -- so booting is conditional on there being a page to boot into.
+  if (typeof document !== "undefined") {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", boot);
+    } else {
+      boot();
+    }
+  }
+
+  // Exposed for the test harness, which runs this file under node with no DOM.
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = { readFrames: readFrames, sha256: sha256,
+                       chainStep: chainStep, verifyChain: verifyChain,
+                       parseTsv: parseTsv, bandOf: bandOf, GENESIS: GENESIS };
+  }
+})();
+"""
+# --->8--- src/frames.js ends ---8<---
+
+
+def f(places, v):
+    """"%.*f", which rounds half to even exactly as Rust's {:.*} does."""
+    return "%.*f" % (places, v)
+
+
+def exact(v):
+    """The shortest text that reads back as this float.
+
+    MATCHES RUST'S `{}` FOR f64, which is the point of it: this number goes
+    into a file that is compared byte for byte against the one the Rust
+    writes. The one place the two would otherwise differ is a whole number --
+    Rust prints `34`, Python's repr prints `34.0` -- so that case is handled
+    and the rest is repr, which is shortest-round-trip in both languages.
+    """
+    if v != v or v in (float("inf"), float("-inf")):
+        return ""
+    if v == int(v) and abs(v) < 1e16:
+        return str(int(v))
+    return repr(v)
+
+
+# The five bands, and their floors in CPM. THE SAME FIVE the dial in
+# radbeeper-gui and the legend on the monitor page use, and the same five
+# src/analysis.rs defines -- a viewer with its own thresholds would be a third
+# opinion about what counts as a warning, which is the one thing an instrument
+# must not have.
+#
+# NOTE THE FLOOR OF `nominal` IS 30 AND NOT 0. Between 3 and 30 is where a
+# counter reads when something is between it and the world, and calling that
+# "nominal" would be the most dangerous thing this scale could do: an
+# instrument reading low because it has FAILED must not look like an
+# instrument reading low because the room is clean.
+BAND_NOMINAL = 30.0
+BAND_ADVISORY = 120.0
+BAND_WARNING = 240.0
+BAND_DEADLY = 600.0
+
+
+def band_name(cpm):
+    """The band a reading falls in. Mirrors analysis::band()."""
+    if cpm >= BAND_DEADLY:
+        return "deadly"
+    if cpm >= BAND_WARNING:
+        return "warning"
+    if cpm >= BAND_ADVISORY:
+        return "advisory"
+    if cpm >= BAND_NOMINAL:
+        return "nominal"
+    return "attenuated"
+
+
+# ------------------------------------------------------------------- audit ---
+#
+# THE DIVISION OF LABOUR THAT LETS THIS PAGE CARRY A FRAME VIEWER. random.html
+# is compared byte for byte against the page the Rust writes, and this program
+# has never heard of a frame -- there is no RBF1 decoder anywhere below. It
+# does not need one. The joined table is built from the emission .tsv and the
+# count .tsv, two text formats this program has always read, and the frames go
+# into the page as base64 WITHOUT BEING PARSED. The decoding happens in the
+# browser, in src/frames.js, where there is exactly one implementation of it.
+#
+# The chain is computed here, in both languages, because it comes from the
+# KEYS in the emission log and not from the frames. That is on purpose: it
+# keeps the tamper-evidence inside the differential contract, so this program
+# can contradict the Rust about it.
+
+# How many raw bytes of frame data a page embeds before it starts leaving
+# months out. Two mebibytes is about three weeks of continuous counting.
+DEFAULT_FRAME_BUDGET = 2 * 1024 * 1024
+
+# The label under which chain links are hashed, so a link can never be
+# mistaken for a key even if somebody contrives the inputs.
+CHAIN_LABEL = b"radbeeper/chain/1"
+GENESIS_LINK = "0" * 64
+
+# How far from an emission a count-log row may be and still describe it. The
+# service writes a row every thirty seconds by default, so a minute either
+# side always finds one when the log was running, and never invents a reading
+# for an emission the log was not there for.
+JOIN_WINDOW = 60.0
+
+
+def chain_step(prev, key):
+    """One step of the hash chain. Mirrors entropy::chain in the Rust.
+
+    NOT THE RANDOM OUTPUT AND IT MUST NEVER FEED IT. The emission digest is
+    label, sequence, start second and counts, and nothing else. Folding the
+    previous link into it would make every published hex line unrecomputable
+    and would retroactively invalidate every emission already written.
+    """
+    h = hashlib.sha256()
+    h.update(CHAIN_LABEL)
+    h.update(bytes.fromhex(prev))
+    h.update(bytes.fromhex(key))
+    return h.hexdigest()
+
+
+def parse_bytes(text):
+    """A size with an optional K/M/G suffix, as --frame-budget takes it.
+
+    `0` is meaningful and is not an error: it asks for a page that embeds no
+    frames at all, which is what somebody publishing a very long record and
+    linking the files instead actually wants.
+    """
+    t = str(text).strip()
+    scale = 1
+    if t[-1:] in ("k", "K"):
+        t, scale = t[:-1], 1024
+    elif t[-1:] in ("m", "M"):
+        t, scale = t[:-1], 1024 * 1024
+    elif t[-1:] in ("g", "G"):
+        t, scale = t[:-1], 1024 * 1024 * 1024
+    try:
+        return int(t.strip()) * scale
+    except ValueError:
+        raise argparse.ArgumentTypeError("not a size: %r" % (text,))
+
+
+def bare_audit():
+    """An audit page for a counter with nothing recorded about it."""
+    return {"place": "", "fix": "", "joined": "", "frames": "",
+            "embedded": [], "files": [], "siblings": []}
+
+
+def audit_summary(audit):
+    """The line the viewer prints above itself."""
+    files, embedded = len(audit["files"]), len(audit["embedded"])
+    return ("%d emission file%s on record; %d month%s of raw seconds carried "
+            "in this page." % (files, "" if files == 1 else "s",
+                               embedded, "" if embedded == 1 else "s"))
+
+
+def bytes_text(n):
+    """`n` bytes, as a person reads them."""
+    if n >= 1024 * 1024:
+        return "%s MiB" % f(1, n / (1024.0 * 1024.0))
+    if n >= 1024:
+        return "%s KiB" % f(1, n / 1024.0)
+    return "%d B" % n
+
+
+def esc_payload(text):
+    """A payload's text, made safe to sit inside a <script> element.
+
+    THE ONLY SEQUENCE THAT MATTERS IS `</`. Inside a <script> the HTML parser
+    is not looking for entities -- escaping `&` or `"` here would corrupt the
+    data, since the browser hands it back verbatim -- it is looking for the
+    end of the element, which any `</` can start. Breaking that one digraph is
+    necessary and sufficient, and the viewer puts it back.
+    """
+    return text.replace("</", "<\\/")
+
+
+def json_str(text):
+    """A JSON string literal, with the two escapes a <script> payload needs."""
+    out = ['"']
+    for c in text:
+        if c == '"':
+            out.append('\\"')
+        elif c == "\\":
+            out.append("\\\\")
+        elif c == "\n":
+            out.append("\\n")
+        elif c == "\r":
+            out.append("\\r")
+        elif c == "\t":
+            out.append("\\t")
+        elif c == "<":
+            out.append("\\u003c")
+        elif ord(c) < 0x20:
+            out.append("\\u%04x" % ord(c))
+        else:
+            out.append(c)
+    out.append('"')
+    return "".join(out)
+
+
+def json_meta(serial, audit):
+    """The meta block the viewer reads: strings only, none of them user HTML."""
+    return ('{"version":%s,"serial":%s,"place":%s,"fix":%s,"summary":%s}'
+            % (json_str(VERSION), json_str(serial), json_str(audit["place"]),
+               json_str(audit["fix"]), json_str(audit_summary(audit))))
+
+
+def log_series(directory, serial):
+    """[(time, cpm_30)] for one counter, oldest first."""
+    out = []
+    for s, path in log_files(directory):
+        if s != serial:
+            continue
+        try:
+            f = open(path)
+        except IOError:
+            continue
+        with f:
+            cpm30 = None
+            for line in f:
+                if line.startswith("#"):
+                    # A file can carry more than one header, where the windows
+                    # changed mid-month; the column is found by NAME under the
+                    # last header seen, never by position.
+                    head = line[1:].rstrip("\n").split("\t")
+                    cpm30 = head.index("cpm_30") if "cpm_30" in head else None
+                    continue
+                if not line.strip():
+                    continue
+                cells = line.rstrip("\n").split("\t")
+                when = row_time(line)
+                if cpm30 is None or when is None or cpm30 >= len(cells):
+                    continue
+                try:
+                    out.append((when, float(cells[cpm30])))
+                except ValueError:
+                    continue
+    out.sort(key=lambda r: r[0])
+    return out
+
+
+def nearest_reading(series, when):
+    """The logged 30s average at that moment, or None if nothing is near."""
+    import bisect
+    if not series:
+        return None
+    times = [r[0] for r in series]
+    i = bisect.bisect_left(times, when)
+    best = None
+    for j in (i - 1, i, i + 1):
+        if 0 <= j < len(series):
+            d = abs(series[j][0] - when)
+            if d <= JOIN_WINDOW and (best is None or d < best[0]):
+                best = (d, series[j][1])
+    return None if best is None else best[1]
+
+
+def join_emissions(directory, serial, pools, cpm_per_usvh):
+    """Every emission for one counter, chained and joined to the count log."""
+    series = log_series(directory, serial)
+    rows = []
+    prev = GENESIS_LINK
+    for p in pools:
+        counts = sum(p["counts"])
+        cpm = p["rate"] * 60.0
+        when = row_time(p["time"] + "\t")
+        prev = chain_step(prev, p["hex"])
+        rows.append({
+            "seq": p["seq"], "started": p["time"], "samples": p["seconds"],
+            "counts": counts, "cpm": cpm,
+            "usvh": (cpm / cpm_per_usvh) if cpm_per_usvh > 0 else 0.0,
+            "bits": p["bits"], "flat": p["flat"],
+            "band": band_name(cpm),
+            "log_cpm": nearest_reading(series, when) if when is not None else None,
+            "key": p["hex"], "link": prev,
+        })
+    return rows
+
+
+def joined_tsv(rows, head):
+    """The joined table as the file the page links and the viewer reads."""
+    out = ["# " + line for line in head]
+    out.append("#seq\tstarted\tsamples\tcounts\tcpm\tusvh\tbits\tflat\t"
+               "band\tlog_cpm\tkey\tlink")
+    for r in rows:
+        out.append("\t".join([
+            str(r["seq"]), r["started"], str(r["samples"]), str(r["counts"]),
+            exact(round(r["cpm"], 4)), exact(round(r["usvh"], 6)),
+            exact(round(r["bits"], 4)), "yes" if r["flat"] else "no",
+            r["band"],
+            "--" if r["log_cpm"] is None else exact(round(r["log_cpm"], 1)),
+            r["key"], r["link"],
+        ]))
+    return "\n".join(out) + "\n"
+
+
+def frames_to_embed(directory, serial, budget):
+    """The frame files to embed, newest first, stopping before the budget.
+
+    WHOLE FILES AND NOT A BYTE COUNT INTO ONE, because this program cannot
+    see where a frame ends -- it is copying bytes it does not parse. A month
+    is a unit both implementations agree on without either understanding the
+    contents.
+    """
+    taken, total = [], 0
+    for path in reversed(random_series(directory, serial, "bin")):
+        try:
+            size = os.path.getsize(path)
+        except OSError:
+            continue
+        if size == 0:
+            continue
+        # The newest file goes in even when it is over budget on its own: a
+        # page with no frames at all is worse than a heavy one.
+        if taken and total + size > budget:
+            break
+        total += size
+        taken.append(path)
+    taken.reverse()
+    return taken
+
+
+def frames_bytes(paths):
+    """Those files' bytes, concatenated in order."""
+    out = b""
+    for p in paths:
+        try:
+            with open(p, "rb") as f:
+                out += f.read()
+        except IOError:
+            pass
+    return out
+
+
+def random_series(directory, serial, ext):
+    """Every emission file of one extension for one counter, oldest first.
+
+    The undated random-<serial>.<ext> written before 0.5 sorts FIRST and is
+    read as though it were the oldest month, because it is. Nothing migrates
+    it: a file somebody may have published the hash of is not a file to
+    rewrite.
+    """
+    serial = serial or "unknown"
+    head, tail = "random-" + serial, "." + ext
+    dated, legacy = [], None
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    for name in names:
+        if not name.startswith(head) or not name.endswith(tail):
+            continue
+        middle = name[len(head):len(name) - len(tail)]
+        if middle == "":
+            legacy = name
+        elif is_dash_month(middle):
+            dated.append(name)
+    dated.sort()
+    out = ([os.path.join(directory, legacy)] if legacy else [])
+    return out + [os.path.join(directory, n) for n in dated]
+
+
+def is_dash_month(text):
+    """Whether `text` is exactly -YYYY-MM.
+
+    Checked rather than assumed, so that a serial containing a dash cannot
+    make random-AB-CD.tsv look like a dated file for counter AB.
+    """
+    return (len(text) == 8 and text[0] == "-" and text[5] == "-"
+            and text[1:5].isdigit() and text[6:].isdigit())
+
+
+def audit_downloads(directory, serial):
+    """Every emission file for a counter, as (name, bytes), for the page."""
+    out = {}
+    for ext in ("tsv", "hex", "bin"):
+        for path in random_series(directory, serial, ext):
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                continue
+            if size:
+                out[os.path.basename(path)] = size
+    return sorted(out.items())
+
+
 def render_random_html(serial, pools, title="Where the random comes from",
-                       index="index.html"):
+                       index="index.html", audit=None):
     """The audit page: what the source is, what it is worth, and every line.
 
     Written because the claim on the front page -- 256 bits out of decay --
@@ -4196,6 +5726,7 @@ def render_random_html(serial, pools, title="Where the random comes from",
     is drawn against the model it replaced, and the arithmetic is small
     enough to redo by hand.
     """
+    audit = audit or bare_audit()
     samples = [x for p in pools for x in p["counts"]]
     b = entropy_budget(samples)
     out = page_head(title, RANDOM_CSS)
@@ -4207,12 +5738,80 @@ def render_random_html(serial, pools, title="Where the random comes from",
       + " &middot; generated "
       + esc(time.strftime("%Y-%m-%d %H:%M", time.localtime(export_now())))
       + "</p>")
+    # WHERE, BEFORE HOW MUCH. A count rate without a place is half a
+    # measurement: 40 CPM means one thing in a cellar and another on granite
+    # at altitude, and a reader who cannot see which has been given a number
+    # they cannot use. The fix is as coarse as whoever recorded it chose --
+    # see `radbeeper site --precision`.
+    if audit["place"] or audit["fix"]:
+        a('<p class="sub">'
+          + (("at " + esc(audit["place"])) if audit["place"] else "")
+          + (" &middot; " if audit["place"] and audit["fix"] else "")
+          + (('<span title="rounded when it was recorded, not when it was '
+              'shown">' + esc(audit["fix"]) + "</span>") if audit["fix"] else "")
+          + "</p>")
     a('<p class="lede">The moment a nucleus decays is not determined by '
       "anything, which makes a Geiger&ndash;M&uuml;ller counter the textbook "
       "hardware entropy source. What is <em>not</em> textbook is how much "
       "randomness survives the journey down a serial cable, and that is what "
       "this page is for. "
       '<a href="' + esc(index) + '">Back to the monitor</a>.</p>')
+
+    # THE HONEST VERSION OF THE TWO-COUNTER STORY. It would be easy, and
+    # wrong, to write that two tubes are pooled into one key. They are not,
+    # and the reason is in the export driver: an emission is an audit trail
+    # of ONE source and is recomputed from that source's own counts, so it
+    # cannot be merged with another's without becoming uncheckable. What two
+    # tubes actually buy is throughput and a witness, and that is what this
+    # says.
+    if audit["siblings"]:
+        n = len(audit["siblings"]) + 1
+        a("<h2>The braid: " + str(n) + " tubes, one record</h2>")
+        a('<p class="lede"><b>Braided decay.</b> This machine is watching '
+          + str(n) + " independent tubes, and their seconds are brokered into "
+          "one interleaved record &mdash; the braid &mdash; rather than being "
+          "averaged into one number. Each strand stays whole and stays "
+          "attributable, which is what makes the arrangement worth more than "
+          "a second opinion.</p>")
+        a('<div class="tablewrap"><table class="budget"><tbody>')
+        rows = [
+            ("Tubes braided",
+             "<b>" + str(n) + "</b> &mdash; this page is " + esc(serial)
+             + "; the others are "
+             + ", ".join(esc(x) for x in audit["siblings"])),
+            ("Lines per hour",
+             "<b>" + str(n) + "&times;</b> a single tube. Each tube fills its "
+             "own pool at its own rate, so " + str(n) + " pools reach "
+             + str(ENTROPY_BITS) + " bits " + str(n) + " times as often as "
+             "one does"),
+            ("What the braid is",
+             'the <a href="docs/cascade.html">cascade</a>: whole seconds, '
+             "interleaved in arrival order, one tier per tube. Nothing is "
+             "summed, so a second can always be traced back to the tube that "
+             "counted it"),
+            ("What it is <em>not</em>",
+             "<b>one key out of two tubes.</b> The digest of an emission is "
+             "taken over the counts of a single tube, and deliberately: a key "
+             "mixed from two sources cannot be recomputed from either one, so "
+             "nobody downstream could ever check it. Independence is spent on "
+             "<em>confidence</em> here, not on the bits"),
+            ("What it buys instead",
+             "<b>a witness.</b> Two tubes in one room should agree, to within "
+             "counting statistics. When they stop agreeing, one of them is "
+             "wrong &mdash; drifting, dying, shielded, or being pointed at "
+             "something &mdash; and a single tube cannot tell you that about "
+             "itself at any price. The monitor prints the agreement as a "
+             "z-score"),
+        ]
+        for k, v in rows:
+            a("<tr><th>" + k + "</th><td>" + v + "</td></tr>")
+        a("</tbody></table></div>")
+        a('<p class="note">The catchphrase is doing real work, so it is '
+          "worth unpacking once: <b>a braid, not a blend.</b> A blend would "
+          "average the tubes and throw away which was which; the braid keeps "
+          "every strand separate and legible along its whole length, and "
+          "gets its strength from the fact that the strands were spun "
+          "independently.</p>")
 
     if not b:
         a("<p>No emissions recorded yet.</p>")
@@ -4391,6 +5990,93 @@ def render_random_html(serial, pools, title="Where the random comes from",
       "battery, and %d bits of measured min-entropy is a claim about the "
       "samples that were seen, not a proof about the output.</p>"
       % ENTROPY_BITS)
+
+    # ---------------------------------------------- where the photons were ---
+    a("<h2>Where these photons were</h2>")
+    a('<p class="note">A tube counts what arrives, and what arrives '
+      "depends on where it is standing. Granite gives more than chalk, "
+      "altitude gives more than sea level, and a cellar gives less than "
+      "either &mdash; so a count rate without a place is a number nobody "
+      "else can use. The place is recorded against the counter's serial "
+      "number <em>over time</em>, because these things get carried about: "
+      "a reading from last month resolves to where the counter was last "
+      "month, not to where it is now.</p>")
+    if not audit["fix"]:
+        a('<p class="note">No fix has been recorded for this counter. '
+          '<code>radbeeper site --name "the north window" --at '
+          "51.317,0.891</code> writes one.</p>")
+    a('<p class="note"><b>The precision is the privacy control, and it is '
+      "applied on the way in.</b> A fix is rounded when it is written down, "
+      "not when it is displayed, so the file cannot be made to give up a "
+      "precision it was never told. Three decimal places &mdash; about 110 "
+      "m &mdash; is the default and is as fine as a fixed monitoring station "
+      "needs: enough to put it on a map and compare it with somebody else's, "
+      "not enough to knock on. One place is a town, two a district, four a "
+      "building, six a doorstep.</p>")
+
+    # ------------------------------------------------------------ viewer ---
+    a("<h2>Every second, as it was counted</h2>")
+    a('<p class="note">The table below is one row per emission, joined to '
+      "the count log that was running at the time. Click a row to open the "
+      "raw seconds behind it. Drag across the chart to narrow the range, "
+      "drag its edges to resize, scroll to zoom.</p>")
+    a('<p class="note"><b>The chain column is the point of it.</b> Every '
+      "emission carries <code>link = H(previous link || this key)</code>, so "
+      "the emissions form a hash chain: any one of them can still be "
+      "recomputed from its own counts, and the chain additionally says that "
+      "they were emitted <em>in this order</em> and that none has been taken "
+      "out. Per-emission integrity cannot see a deletion. The chain can. It "
+      "is tamper-<em>evidence</em> and not tamper-proofing &mdash; anybody "
+      "who can rewrite the file can recompute the whole chain &mdash; but "
+      "the realistic accident is a truncated copy or a log stitched back "
+      "together wrongly, and it catches those.</p>")
+    a('<p class="note">The link is hashed <em>alongside</em> the key and '
+      "never into it. Folding it in would change every hex line this program "
+      "has ever produced and would make each one uncheckable by the "
+      "reference implementation, which knows nothing about chains.</p>")
+    a('<div id="rb-viewer"></div>')
+    a('<script id="rb-meta" type="application/json">'
+      + json_meta(serial, audit) + "</script>")
+    a('<script id="rb-joined" type="text/tab-separated-values">'
+      + esc_payload(audit["joined"]) + "</script>")
+    a('<script id="rb-frames" type="text/plain">'
+      + audit["frames"].rstrip() + "</script>")
+    a("<script>" + VIEWER_JS + "</script>")
+
+    # --------------------------------------------------------- downloads ---
+    if audit["files"]:
+        a("<h2>Take the evidence with you</h2>")
+        a('<p class="note">Nothing on this page is a summary you have to '
+          "take on trust. These are the files it was built from.</p>")
+        a('<div class="tablewrap"><table class="budget"><tbody>')
+        for name, size in audit["files"]:
+            if name.endswith(".bin"):
+                what = ("the raw seconds, one byte each &mdash; open it in "
+                        "the viewer above, or <code>radbeeper random "
+                        "--frames</code>")
+            elif name.endswith(".hex"):
+                what = "the digits alone, one line per emission"
+            else:
+                what = ("the audit trail: every emission with the counts it "
+                        "came from &mdash; <code>radbeeper random "
+                        "--check</code> recomputes them")
+            a('<tr><th><a href="logs/' + esc(name) + '">' + esc(name)
+              + "</a></th><td>" + bytes_text(size) + " &mdash; " + what
+              + "</td></tr>")
+        a("</tbody></table></div>")
+        if not audit["embedded"]:
+            a('<p class="note">No frames are embedded in this page: the '
+              "viewer above is showing the summary rows only. The raw "
+              "seconds are in the <code>.bin</code> files.</p>")
+        else:
+            a('<p class="note">' + str(len(audit["embedded"]))
+              + " of those are carried <em>inside</em> this page, so a copy "
+              "saved to a disk still audits with nothing to fetch and no "
+              "server to fetch it from: "
+              + ", ".join("<code>" + esc(x) + "</code>"
+                          for x in audit["embedded"])
+              + ". Older months stay in the files.</p>")
+
     a("<footer>Generated by <code>radbeeper export</code> "
       + VERSION + ". <a href=\"" + esc(index) + "\">Back to the monitor</a>."
       " &middot; MIT License &mdash; Copyright (c) 2026 Paul Richeson"
@@ -4441,15 +6127,55 @@ def cmd_export(args):
     # The rest go beside it as `random-<serial>.html`.
     random_pages = []
     if not args.no_random_page:
+        every = [s for s, _ in randoms]
+        budget = getattr(args, "frame_budget", None)
+        if budget is None:
+            budget = DEFAULT_FRAME_BUDGET
         for i, (serial, pools) in enumerate(randoms):
             if i == 0:
                 target = args.random_output or os.path.join(
                     out_dir, "random.html")
             else:
                 target = os.path.join(out_dir, "random-%s.html" % serial)
+            # The place as it was at the LAST emission, not as it is now: the
+            # page describes a stretch of recording, and wherever the counter
+            # has been moved to since is not where those counts were taken.
+            last = row_time(pools[-1]["time"] + "\t")
+            here = site_at(serial, export_now() if last is None else last,
+                           sites)
+            joined = join_emissions(directory, serial, pools,
+                                    args.cpm_per_usvh)
+            head = ["radbeeper %s -- counter %s" % (VERSION, serial),
+                    "emissions %d" % len(pools)]
+            if here:
+                head.append("place %s" % here[2])
+                fix = fix_text(here)
+                if fix:
+                    head.append("fix %s" % fix)
+            head.append("counts is clamped at fifteen a second, as the "
+                        "emission log records it; the .bin frames hold it "
+                        "unclamped")
+            tsv = joined_tsv(joined, head)
+            # The table goes out as a file as well as into the page, because
+            # a table somebody can only read through javascript is a table
+            # they cannot check with anything else.
+            with open(os.path.join(out_dir, "frames-%s.tsv" % serial),
+                      "w") as f:
+                f.write(tsv)
+            embed = frames_to_embed(directory, serial, budget)
+            audit = {
+                "place": here[2] if here else "",
+                "fix": fix_text(here) if here else "",
+                "joined": tsv,
+                "frames": base64.encodebytes(
+                    frames_bytes(embed)).decode("ascii"),
+                "embedded": [os.path.basename(x) for x in embed],
+                "files": audit_downloads(directory, serial),
+                "siblings": [x for x in every if x != serial],
+            }
             with open(target, "w") as f:
                 f.write(render_random_html(
-                    serial, pools, index=os.path.basename(out)))
+                    serial, pools, index=os.path.basename(out), audit=audit))
             random_pages.append((serial, target, len(pools)))
     links = dict((serial, os.path.relpath(target, out_dir))
                  for serial, target, _ in random_pages)
@@ -4899,6 +6625,10 @@ def build_parser():
                          "(default random.html beside the index)")
     ex.add_argument("--no-random-page", action="store_true",
                     help="do not write the entropy audit page")
+    ex.add_argument("--frame-budget", type=parse_bytes,
+                    default=DEFAULT_FRAME_BUDGET, metavar="SIZE",
+                    help="raw frame bytes carried inside the page (default "
+                         "2M; 0 embeds none and links the files instead)")
     rn = sub.add_parser("random", help="one line of random hex, out of decay "
                                        "timing, with the accounting for it")
     rn.add_argument("--check", metavar="FILE",
@@ -4914,8 +6644,20 @@ def build_parser():
     st.add_argument("--serial", metavar="SERIAL",
                     help="which counter (default: ask the one plugged in)")
     st.add_argument("--name", help="move the counter: what the new place is "
-                                   "called. A name, not a coordinate -- these "
-                                   "logs are meant to be published")
+                                   "called. A name a reader recognises; the "
+                                   "coordinate, if you want one, is --at")
+    st.add_argument("--at", metavar="LAT,LON",
+                    help="a fix for the new place, in decimal degrees, "
+                         "rounded to --precision before it is written down")
+    st.add_argument("--precision", type=int, default=DEFAULT_FIX_PRECISION,
+                    metavar="PLACES",
+                    help="decimal places kept in the fix (default %d, about "
+                         "110 m). 1 is a town, 2 a district, 4 a building. "
+                         "The finer digits are discarded on the way in, not "
+                         "on the way out" % DEFAULT_FIX_PRECISION)
+    st.add_argument("--elevation", type=float, metavar="METRES",
+                    help="height above sea level, which background varies "
+                         "with as much as it varies with geology")
     lg = sub.add_parser("log", help="the counter's stored history")
     lg.add_argument("log_action", choices=("pull", "info"), nargs="?",
                     default="info")

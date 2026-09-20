@@ -11,6 +11,7 @@
 // prints what this crate would write, `tests/test_differential.py` prints what
 // the Python would write, and the test is that they are the same characters.
 pub mod analysis;
+pub mod audit;
 pub mod broker;
 pub mod clock;
 pub mod entropy;

@@ -22,6 +22,7 @@
 //
 // No plotting library, for the same reason there is no pyserial in the
 // Python: a line and some axes are not worth a dependency.
+use crate::audit;
 use crate::{analysis, clock, entropy, log};
 use std::collections::BTreeMap;
 use std::fs;
@@ -1753,6 +1754,56 @@ pub fn svg_bits(samples: &[u32]) -> String {
     out.concat()
 }
 
+/// The frame viewer, compiled in from the one copy of it.
+///
+/// tools/embedjs.py pastes these same characters into the Python between
+/// markers, and tests/test_frames_js.py fails if the two ever drift. See the
+/// header of src/frames.js for why it is done that way round.
+const VIEWER_JS: &str = include_str!("frames.js");
+
+/// A payload's text, made safe to sit inside a <script> element.
+///
+/// THE ONLY SEQUENCE THAT MATTERS IS `</`. Inside a <script>, the HTML parser
+/// is not looking for entities -- escaping `&` or `"` here would corrupt the
+/// data, since the browser hands it back verbatim -- it is looking for the
+/// end of the element, which any `</` can start. Breaking that one digraph is
+/// necessary and sufficient, and the viewer puts it back.
+fn esc_payload(text: &str) -> String {
+    text.replace("</", "<\\/")
+}
+
+/// The meta block the viewer reads: strings only, and none of them user HTML.
+fn json_meta(serial: &str, audit: &Audit) -> String {
+    format!(
+        "{{\"version\":{},\"serial\":{},\"place\":{},\"fix\":{},\"summary\":{}}}",
+        json_str(VERSION),
+        json_str(serial),
+        json_str(&audit.place),
+        json_str(&audit.fix),
+        json_str(&audit.summary())
+    )
+}
+
+/// A JSON string literal, with the two escapes a <script> payload needs.
+fn json_str(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '<' => out.push_str("\\u003c"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
 const RANDOM_CSS: &[&str] = &[
     ".hist .seen{fill:var(--accent)}",
     ".hist .modelled{fill:var(--dim);opacity:.45}",
@@ -1769,7 +1820,60 @@ const RANDOM_CSS: &[&str] = &[
 ///
 /// Written because the claim on the front page -- 256 bits out of decay --
 /// is the one thing on it a reader cannot check by looking.
-pub fn render_random_html(serial: &str, pools: &[entropy::Emission], title: &str, index: &str) -> String {
+/// Everything the audit page needs that is not in the emission log itself.
+pub struct Audit {
+    /// Where the counter was, and how coarse a fix, when one was recorded.
+    pub place: String,
+    pub fix: String,
+    /// The joined table: one row per emission, as the file and as the payload.
+    pub joined: String,
+    /// The frame files embedded in the page, base64, and which they were.
+    pub frames: String,
+    pub embedded: Vec<String>,
+    /// Every emission file for this counter, for the download list.
+    pub files: Vec<(String, u64)>,
+    /// How many other counters this machine is logging beside this one.
+    pub siblings: Vec<String>,
+}
+
+impl Audit {
+    /// The line the viewer prints above itself.
+    pub fn summary(&self) -> String {
+        let embedded = self.embedded.len();
+        let files = self.files.len();
+        format!(
+            "{} emission file{} on record; {} month{} of raw seconds carried in \
+             this page.",
+            files,
+            if files == 1 { "" } else { "s" },
+            embedded,
+            if embedded == 1 { "" } else { "s" }
+        )
+    }
+
+    /// An audit page for a counter with nothing recorded about it.
+    pub fn bare() -> Audit {
+        Audit {
+            place: String::new(), fix: String::new(), joined: String::new(),
+            frames: String::new(), embedded: Vec::new(), files: Vec::new(),
+            siblings: Vec::new(),
+        }
+    }
+}
+
+/// `n` bytes, as a person reads them.
+fn bytes_text(n: u64) -> String {
+    if n >= 1024 * 1024 {
+        format!("{} MiB", f(1, n as f64 / (1024.0 * 1024.0)))
+    } else if n >= 1024 {
+        format!("{} KiB", f(1, n as f64 / 1024.0))
+    } else {
+        format!("{} B", n)
+    }
+}
+
+pub fn render_random_html(serial: &str, pools: &[entropy::Emission], title: &str, index: &str,
+                          audit: &Audit) -> String {
     let samples: Vec<u32> = pools.iter().flat_map(|p| p.counts.iter().copied()).collect();
     let budget = entropy_budget(&samples);
     let mut out = page_head(title, RANDOM_CSS);
@@ -1785,12 +1889,68 @@ pub fn render_random_html(serial: &str, pools: &[entropy::Emission], title: &str
         if pools.len() == 1 { " emission" } else { " emissions" },
         esc(&clock::format(now(), "%Y-%m-%d %H:%M"))
     );
+    // WHERE, BEFORE HOW MUCH. A count rate without a place is half a
+    // measurement: 40 CPM means one thing in a cellar and another on granite
+    // at altitude, and a reader who cannot see which has been given a number
+    // they cannot use. The fix is as coarse as whoever recorded it chose --
+    // see `radbeeper site --precision`.
+    if !audit.place.is_empty() || !audit.fix.is_empty() {
+        a!("<p class=\"sub\">{}{}{}</p>",
+           if audit.place.is_empty() { String::new() } else { format!("at {}", esc(&audit.place)) },
+           if !audit.place.is_empty() && !audit.fix.is_empty() { " &middot; " } else { "" },
+           if audit.fix.is_empty() { String::new() } else { format!("<span title=\"rounded when it was recorded, not when it was shown\">{}</span>", esc(&audit.fix)) });
+    }
     a!("<p class=\"lede\">The moment a nucleus decays is not determined by \
         anything, which makes a Geiger&ndash;M&uuml;ller counter the textbook \
         hardware entropy source. What is <em>not</em> textbook is how much \
         randomness survives the journey down a serial cable, and that is what \
         this page is for. \
         <a href=\"{}\">Back to the monitor</a>.</p>", esc(index));
+
+    // ------------------------------------------------------- the braid ---
+    //
+    // THE HONEST VERSION OF THE TWO-COUNTER STORY. It would be easy, and
+    // wrong, to write that two tubes are pooled into one key. They are not,
+    // and the reason is in the export driver: an emission is an audit trail
+    // of ONE source and is recomputed from that source's own counts, so it
+    // cannot be merged with another's without becoming uncheckable. What two
+    // tubes actually buy is throughput and a witness, and that is what this
+    // says.
+    if !audit.siblings.is_empty() {
+        let n = audit.siblings.len() + 1;
+        a!("<h2>The braid: {} tubes, one record</h2>", n);
+        a!("<p class=\"lede\"><b>Braided decay.</b> This machine is watching \
+            {} independent tubes, and their seconds are brokered into one \
+            interleaved record &mdash; the braid &mdash; rather than being \
+            averaged into one number. Each strand stays whole and stays \
+            attributable, which is what makes the arrangement worth more than \
+            a second opinion.</p>", n);
+        a!("<div class=\"tablewrap\"><table class=\"budget\"><tbody>");
+        let rows: Vec<(String, String)> = vec![
+            ("Tubes braided".into(),
+             format!("<b>{}</b> &mdash; this page is {}; the others are {}",
+                     n, esc(serial),
+                     audit.siblings.iter().map(|s| esc(s)).collect::<Vec<_>>().join(", "))),
+            ("Lines per hour".into(),
+             format!("<b>{}&times;</b> a single tube. Each tube fills its own                       pool at its own rate, so {} pools reach {} bits {} times                       as often as one does", n, n, ENTROPY_BITS, n)),
+            ("What the braid is".into(),
+             "the <a href=\"docs/cascade.html\">cascade</a>: whole seconds, interleaved in arrival order, one tier per tube. Nothing is summed, so a second can always be traced back to the tube that counted it".into()),
+            ("What it is <em>not</em>".into(),
+             "<b>one key out of two tubes.</b> The digest of an emission is taken over the counts of a single tube, and deliberately: a key mixed from two sources cannot be recomputed from either one, so nobody downstream could ever check it. Independence is spent on <em>confidence</em> here, not on the bits".into()),
+            ("What it buys instead".into(),
+             "<b>a witness.</b> Two tubes in one room should agree, to within counting statistics. When they stop agreeing, one of them is wrong &mdash; drifting, dying, shielded, or being pointed at something &mdash; and a single tube cannot tell you that about itself at any price. The monitor prints the agreement as a z-score".into()),
+        ];
+        for (k, v) in &rows {
+            a!("<tr><th>{}</th><td>{}</td></tr>", k, v);
+        }
+        a!("</tbody></table></div>");
+        a!("<p class=\"note\">The catchphrase is doing real work, so it is \
+            worth unpacking once: <b>a braid, not a blend.</b> A blend would \
+            average the tubes and throw away which was which; the braid keeps \
+            every strand separate and legible along its whole length, and \
+            gets its strength from the fact that the strands were spun \
+            independently.</p>");
+    }
 
     let b = match budget {
         Some(b) => b,
@@ -2001,6 +2161,93 @@ pub fn render_random_html(serial: &str, pools: &[entropy::Emission], title: &str
         a certified one.</b> It has not been through a statistical test \
         battery, and {} bits of measured min-entropy is a claim about the \
         samples that were seen, not a proof about the output.</p>", ENTROPY_BITS);
+
+    // ------------------------------------------------ where the photons were ---
+    a!("<h2>Where these photons were</h2>");
+    a!("<p class=\"note\">A tube counts what arrives, and what arrives \
+        depends on where it is standing. Granite gives more than chalk, \
+        altitude gives more than sea level, and a cellar gives less than \
+        either &mdash; so a count rate without a place is a number nobody \
+        else can use. The place is recorded against the counter's serial \
+        number <em>over time</em>, because these things get carried about: \
+        a reading from last month resolves to where the counter was last \
+        month, not to where it is now.</p>");
+    if audit.fix.is_empty() {
+        a!("<p class=\"note\">No fix has been recorded for this counter. \
+            <code>radbeeper site --name \"the north window\" --at \
+            51.317,0.891</code> writes one.</p>");
+    }
+    a!("<p class=\"note\"><b>The precision is the privacy control, and it is \
+        applied on the way in.</b> A fix is rounded when it is written down, \
+        not when it is displayed, so the file cannot be made to give up a \
+        precision it was never told. Three decimal places &mdash; about 110 \
+        m &mdash; is the default and is as fine as a fixed monitoring station \
+        needs: enough to put it on a map and compare it with somebody else's, \
+        not enough to knock on. One place is a town, two a district, four a \
+        building, six a doorstep.</p>");
+
+    // ----------------------------------------------------------- the viewer ---
+    a!("<h2>Every second, as it was counted</h2>");
+    a!("<p class=\"note\">The table below is one row per emission, joined to \
+        the count log that was running at the time. Click a row to open the \
+        raw seconds behind it. Drag across the chart to narrow the range, \
+        drag its edges to resize, scroll to zoom.</p>");
+    a!("<p class=\"note\"><b>The chain column is the point of it.</b> Every \
+        emission carries <code>link = H(previous link || this key)</code>, so \
+        the emissions form a hash chain: any one of them can still be \
+        recomputed from its own counts, and the chain additionally says that \
+        they were emitted <em>in this order</em> and that none has been taken \
+        out. Per-emission integrity cannot see a deletion. The chain can. It \
+        is tamper-<em>evidence</em> and not tamper-proofing &mdash; anybody \
+        who can rewrite the file can recompute the whole chain &mdash; but \
+        the realistic accident is a truncated copy or a log stitched back \
+        together wrongly, and it catches those.</p>");
+    a!("<p class=\"note\">The link is hashed <em>alongside</em> the key and \
+        never into it. Folding it in would change every hex line this program \
+        has ever produced and would make each one uncheckable by the \
+        reference implementation, which knows nothing about chains.</p>");
+    a!("<div id=\"rb-viewer\"></div>");
+    a!("<script id=\"rb-meta\" type=\"application/json\">{}</script>",
+       json_meta(serial, audit));
+    a!("<script id=\"rb-joined\" type=\"text/tab-separated-values\">{}</script>",
+       esc_payload(&audit.joined));
+    a!("<script id=\"rb-frames\" type=\"text/plain\">{}</script>",
+       audit.frames.trim_end());
+    a!("<script>{}</script>", VIEWER_JS);
+
+    // --------------------------------------------------------- the downloads ---
+    if !audit.files.is_empty() {
+        a!("<h2>Take the evidence with you</h2>");
+        a!("<p class=\"note\">Nothing on this page is a summary you have to \
+            take on trust. These are the files it was built from.</p>");
+        a!("<div class=\"tablewrap\"><table class=\"budget\"><tbody>");
+        for (name, size) in &audit.files {
+            let what = if name.ends_with(".bin") {
+                "the raw seconds, one byte each &mdash; open it in the viewer above, or <code>radbeeper random --frames</code>"
+            } else if name.ends_with(".hex") {
+                "the digits alone, one line per emission"
+            } else {
+                "the audit trail: every emission with the counts it came from &mdash; <code>radbeeper random --check</code> recomputes them"
+            };
+            a!("<tr><th><a href=\"logs/{}\">{}</a></th><td>{} &mdash; {}</td></tr>",
+               esc(name), esc(name), bytes_text(*size), what);
+        }
+        a!("</tbody></table></div>");
+        if audit.embedded.is_empty() {
+            a!("<p class=\"note\">No frames are embedded in this page: the \
+                viewer above is showing the summary rows only. The raw \
+                seconds are in the <code>.bin</code> files.</p>");
+        } else {
+            a!("<p class=\"note\">{} of those are carried <em>inside</em> this \
+                page, so a copy saved to a disk still audits with nothing to \
+                fetch and no server to fetch it from: {}. Older months stay in \
+                the files.</p>",
+               audit.embedded.len(),
+               audit.embedded.iter().map(|n| format!("<code>{}</code>", esc(n)))
+                    .collect::<Vec<_>>().join(", "));
+        }
+    }
+
     a!("<footer>Generated by <code>radbeeper export</code> \
         {}. <a href=\"{}\">Back to the monitor</a>. \
         &middot; MIT License &mdash; Copyright (c) 2026 Paul Richeson\
@@ -2036,6 +2283,7 @@ pub fn export(
     cpm_per_usvh: f64,
     title: &str,
     random_output: Option<&Path>,
+    frame_budget: u64,
 ) -> io::Result<Report> {
     let mut counters = summarise(logs, cpm_per_usvh);
     let out = path_str(output);
@@ -2073,6 +2321,8 @@ pub fn export(
     // The rest go beside it as `random-<serial>.html`.
     let mut random_pages: Vec<(String, String, usize)> = Vec::new();
     if random_page {
+        let site_rows = log::read_site_rows(logs);
+        let every: Vec<String> = randoms.iter().map(|(s, _)| s.clone()).collect();
         for (i, (serial, pools)) in randoms.iter().enumerate() {
             let target = if i == 0 {
                 match random_output.filter(|p| !p.as_os_str().is_empty()) {
@@ -2082,7 +2332,49 @@ pub fn export(
             } else {
                 join(&out_dir, &format!("random-{}.html", serial))
             };
-            fs::write(&target, render_random_html(serial, pools, RANDOM_TITLE, basename(&out)))?;
+            // The place as it was at the LAST emission, not as it is now:
+            // the page describes a stretch of recording, and wherever the
+            // counter has been moved to since is not where those counts were
+            // taken.
+            let last = pools.last().and_then(|p| clock::parse_stamp(&p.time))
+                            .unwrap_or_else(now);
+            let here = log::site_row_at(serial, last, &site_rows);
+            let joined = audit::join(logs, serial, pools, cpm_per_usvh);
+            let mut head = vec![
+                format!("radbeeper {} -- counter {}", VERSION, serial),
+                format!("emissions {}", pools.len()),
+            ];
+            if let Some(h) = here.as_ref() {
+                head.push(format!("place {}", h.name));
+                let fix = h.fix(log::FIX_PRECISION);
+                if !fix.is_empty() {
+                    head.push(format!("fix {}", fix));
+                }
+            }
+            head.push(
+                "counts is clamped at fifteen a second, as the emission log \
+                 records it; the .bin frames hold it unclamped".into(),
+            );
+            let tsv = audit::joined_tsv(&joined, &head);
+            // The table goes out as a file as well as into the page, because
+            // a table somebody can only read through javascript is a table
+            // they cannot check with anything else.
+            let table = join(&out_dir, &format!("frames-{}.tsv", serial));
+            fs::write(&table, &tsv)?;
+            let embed = audit::frames_to_embed(logs, serial, frame_budget);
+            let audit_data = Audit {
+                place: here.as_ref().map(|h| h.name.clone()).unwrap_or_default(),
+                fix: here.as_ref().map(|h| h.fix(log::FIX_PRECISION))
+                         .unwrap_or_default(),
+                joined: tsv,
+                frames: audit::base64(&audit::frames_bytes(&embed)),
+                embedded: embed.iter()
+                    .map(|p| basename(&path_str(p)).to_string()).collect(),
+                files: audit::downloads(logs, serial),
+                siblings: every.iter().filter(|s| *s != serial).cloned().collect(),
+            };
+            fs::write(&target, render_random_html(serial, pools, RANDOM_TITLE,
+                                                  basename(&out), &audit_data))?;
             random_pages.push((serial.clone(), target, pools.len()));
         }
     }
@@ -2114,8 +2406,10 @@ pub fn run(
     cpm_per_usvh: f64,
     title: &str,
     random_output: Option<&Path>,
+    frame_budget: u64,
 ) -> i32 {
-    match export(logs, output, random_page, cpm_per_usvh, title, random_output) {
+    match export(logs, output, random_page, cpm_per_usvh, title, random_output,
+                 frame_budget) {
         Ok(r) => {
             println!(
                 "radbeeper: {} -- {} counter{}, {} rows",

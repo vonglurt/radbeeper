@@ -370,8 +370,8 @@ The counts behind every line are written beside it, so anyone can recompute it
 and check it was not invented:
 
 ```sh
-radbeeper random --check  logs/random-F48824B8207F7E.tsv   # the emission log
-radbeeper random --frames logs/random-F48824B8207F7E.bin   # the raw seconds
+radbeeper random --check  logs/random-F48824B8207F7E-2026-09.tsv   # the emission log
+radbeeper random --frames logs/random-F48824B8207F7E-2026-09.bin   # the raw seconds
 ```
 
 **Every emission also keeps its raw material.** The `.tsv` clamps each second to
@@ -467,4 +467,5 @@ properly, with the arithmetic, the failures that shaped it, and the prior art.
 | [Prior art](docs/prior-art.md) | what else reads these counters, and what this does differently |
 | [Security](SECURITY.md) | what is in scope, what is not, and how the supply chain is kept small |
 | [A signed chain of custody](docs/the-chain-of-custody.md) | the four links from a commit on a Copal VM to a crate on crates.io, the three defects found building them, and what the arrangement does not establish |
+| [The monthly record](docs/the-monthly-record.md) | how a record that never stops growing is published anyway: dated by construction, chained between months, and identified by a coordinate no finer than you asked for |
 | [Archive](docs/archive/) | the long-form README this replaced, kept as it stood at 0.3.1 |

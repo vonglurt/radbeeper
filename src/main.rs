@@ -261,7 +261,8 @@ struct WatchLog {
 /// the page is rebuilt from all of them.
 fn export_pages(dir: &Path, cpm_per_usvh: f64) -> String {
     match radbeeper::export::export(dir, &dir.join("index.html"), true, cpm_per_usvh,
-                                    radbeeper::export::DEFAULT_TITLE, None) {
+                                    radbeeper::export::DEFAULT_TITLE, None,
+                                    radbeeper::audit::DEFAULT_FRAME_BUDGET) {
         Ok(r) => format!("exported {} rows {}", r.rows,
                          clock::format(clock::now(), "%H:%M")),
         Err(e) => format!("NOT EXPORTED: {}", e),
@@ -2710,6 +2711,22 @@ fn parse_spans(text: &str) -> Option<Vec<f64>> {
     (!out.is_empty()).then_some(out)
 }
 
+/// A size with an optional K/M/G suffix, as `--frame-budget` takes it.
+///
+/// `0` is meaningful and is not an error: it asks for a page that embeds no
+/// frames at all, which is what somebody publishing a very long record and
+/// linking the files instead actually wants.
+fn parse_bytes(text: &str) -> Option<u64> {
+    let t = text.trim();
+    let (digits, scale) = match t.chars().last() {
+        Some('k') | Some('K') => (&t[..t.len() - 1], 1024u64),
+        Some('m') | Some('M') => (&t[..t.len() - 1], 1024 * 1024),
+        Some('g') | Some('G') => (&t[..t.len() - 1], 1024 * 1024 * 1024),
+        _ => (t, 1),
+    };
+    digits.trim().parse::<u64>().ok().map(|n| n.saturating_mul(scale))
+}
+
 fn usage() {
     println!("radbeeper {} -- a GQ GMC counter on the desk (Rust build)", VERSION);
     println!();
@@ -2753,6 +2770,7 @@ fn usage() {
     println!("  -o, --output FILE          export: where the page goes (default index.html)");
     println!("      --title TEXT           export: the page's heading");
     println!("      --random-output FILE   export: the audit page (default random.html beside it)");
+    println!("      --frame-budget SIZE    export: raw frame bytes carried in the page (default 2M, 0 for none)");
     println!("      --no-random-page       export: do not write the audit page");
     println!();
     println!("site and recompute are in the");
@@ -2799,6 +2817,7 @@ fn main() {
     let mut title = radbeeper::export::DEFAULT_TITLE.to_string();
     let mut random_output: Option<PathBuf> = None;
     let mut no_random_page = false;
+    let mut frame_budget = radbeeper::audit::DEFAULT_FRAME_BUDGET;
 
     let mut i = 0;
     while i < args.len() {
@@ -2878,6 +2897,11 @@ fn main() {
             "--title" => title = next(&mut i).unwrap_or(title),
             "--random-output" => random_output = next(&mut i).map(PathBuf::from),
             "--no-random-page" => no_random_page = true,
+            "--frame-budget" => {
+                frame_budget = next(&mut i)
+                    .and_then(|v| parse_bytes(&v))
+                    .unwrap_or(frame_budget)
+            }
             "info" | "pull" if command == "log" => log_action = a.to_string(),
             "site" => {
                 eprintln!(
@@ -2913,6 +2937,7 @@ fn main() {
             &logs.unwrap_or_else(log::state_dir),
             Path::new(output.as_deref().unwrap_or("index.html")),
             !no_random_page, cpm_per_usvh, &title, random_output.as_deref(),
+            frame_budget,
         ));
     }
     if command == "log" {

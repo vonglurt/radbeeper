@@ -1304,13 +1304,19 @@ class TestTheTwoExportsWriteTheSamePages(unittest.TestCase):
                  "watch-spectrum.png", "log-output.png", "log-tabs.png",
                  "watch-20s.gif"]
         results = self.run_both(logs, shots=shots)
-        self.same_files(results, ["index.html", "random.html"])
+        # THE JOINED TABLE IS COMPARED TOO. It is a published artefact -- the
+        # page links it, and it is what a reader who does not want to run
+        # javascript reads instead -- so a column that depends on which binary
+        # built it is the same defect as a page that does.
+        self.same_files(results, ["index.html", "random.html",
+                                  "frames-F48824B8207F7E.tsv"])
         with open(os.path.join(results[0][0], "index.html")) as f:
             self.assertIn("docs/screenshots/watch-20s.gif", f.read())
 
     def test_a_synthetic_log_directory(self):
         results = self.run_both(self.synthetic_logs())
-        self.same_files(results, ["index.html", "random.html"])
+        self.same_files(results, ["index.html", "random.html",
+                                  "frames-A1B2.tsv"])
         with open(os.path.join(results[0][0], "index.html")) as f:
             page = f.read()
         # The comparison is only worth something if the cases are on it.
@@ -1324,7 +1330,8 @@ class TestTheTwoExportsWriteTheSamePages(unittest.TestCase):
             after=["--title", "Bench \"B\" & desk",
                    "--random-output", "audit.html"],
             output="site/page.html", shots=["probe.png"])
-        self.same_files(results, ["site/page.html", "audit.html"])
+        self.same_files(results, ["site/page.html", "audit.html",
+                                  "site/frames-A1B2.tsv"])
 
     def test_no_random_page(self):
         results = self.run_both(self.synthetic_logs(),
