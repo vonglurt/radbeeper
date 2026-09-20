@@ -82,7 +82,7 @@ footer a{color:var(--dim)}
   256 bits, min-entropy 258 measured, from 448 seconds at 0.68 counts/s
   440 bits is what a Poisson model would have claimed for the same 448 seconds
   spectrum flat -- the source looks like decay
-  recorded in /var/lib/radbeeper/random-F48824B8207F7E.tsv</code></pre>
+  recorded in /var/lib/radbeeper/random-F48824B8207F7E-2026-09.tsv</code></pre>
 <p>That second line is the point: on this run the model would have handed over the same sixty-four characters after 260 seconds and called them 256 bits.</p>
 <hr>
 <h2 id="three-ways-this-normally-goes-wrong">Three ways this normally goes wrong</h2>
@@ -119,8 +119,10 @@ footer a{color:var(--dim)}
         v
   a Frame:  started, and (gap, count) for every second
         |  Frame::encode()  -- one byte an ordinary second
+        |  entropy::chain(previous link, key)  -- tamper-evidence, alongside
         v
-  random-&lt;serial&gt;.bin, appended</code></pre>
+  random-&lt;serial&gt;-YYYY-MM.bin, appended</code></pre>
+<p>Since 0.5 every frame also carries a <strong>chain link</strong>, <code>H("radbeeper/chain/1" ‖ previous link ‖ this key)</code>. It is hashed <em>beside</em> the key and never into it: folding it in would change every hex line this program has ever produced and would make each one uncheckable by the reference implementation, which knows nothing about chains. What it buys is the one thing per-emission integrity cannot see — a record removed from the middle, where everything that remains still verifies perfectly well on its own. See <a href="the-monthly-record.html">The monthly record</a> for the construction and its limits.</p>
 <p><strong>The beep is never timed, and that is the interface's fault rather than the tube's.</strong> It is worth being exact about, because the obvious frame format is a list of intervals between pulses — that is where the entropy physically is, and quantised to a millisecond it would carry about ten bits per arrival against the 0.62 bits a second this counter yields. <code>&lt;HEARTBEAT1&gt;&gt;</code> answers with a <strong>count</strong>; <code>&lt;GETCPS&gt;&gt;</code> answers with a <strong>count</strong>. There is no message in GQ's vocabulary that reports <em>when</em> a pulse landed. One second holding one integer is the entire raw material, and a file that implied otherwise would be inventing precision the wire never carried.</p>
 <h3 id="what-a-frame-holds">What a frame holds</h3>
 <table><tbody><tr><td><code>started</code></td><td>whole seconds since the epoch, of the <strong>first</strong> sample — the same number that went into the digest, so a frame can recompute its own key</td></tr><tr><td><code>suspect</code></td><td>the spectrum was not flat when this was drawn</td></tr><tr><td><code>seq</code></td><td>which emission this is, for the same counter</td></tr><tr><td>samples</td><td><code>(gap, count)</code> per second: how long since the previous sample, and exactly how many pulses were in this one</td></tr><tr><td><code>key</code></td><td>the 256 bits this frame produced</td></tr></tbody></table>
@@ -132,7 +134,7 @@ footer a{color:var(--dim)}
 <h3 id="the-magic-is-per-frame-not-per-file">The magic is per frame, not per file</h3>
 <p><code>RBF1</code> heads every frame rather than the file. The file is appended to forever, may be concatenated with another, and will one day be truncated by a full disk or a crash — so a reader that loses its place scans forward to the next magic and carries on, and a damaged frame costs one frame instead of the rest of the record. A frame is only accepted when the byte after it is another magic or the end of the file: corrupting a length field does not make a frame fail to parse, it makes it parse as a <em>different</em> frame that swallows the next one, and that is the failure the boundary check catches.</p>
 <h3 id="looking-at-one">Looking at one</h3>
-<pre><code class="language-sh">radbeeper random --frames logs/random-F48824B8207F7E.bin</code></pre>
+<pre><code class="language-sh">radbeeper random --frames logs/random-F48824B8207F7E-2026-09.bin</code></pre>
 <pre><code>  seq 0    2026-09-19T12:21:28     20s     21 samples  peak    63  1.920 bits/s  recomputes
   seq 1    2026-09-19T12:21:49     23s     24 samples  peak    60  1.724 bits/s  recomputes
 radbeeper: 2 of 2 frames recompute from their own seconds</code></pre>
@@ -140,11 +142,11 @@ radbeeper: 2 of 2 frames recompute from their own seconds</code></pre>
 <p><code>--no-frames</code> turns the file off; <code>--entropy-bits N</code> changes what a line is worth. Both the service and the monitor write frames whenever they are the process holding the port.</p>
 <hr>
 <h2 id="reproducible-is-not-the-same-as-predictable">Reproducible is not the same as predictable</h2>
-<p>The counts behind each line are written beside it in <code>random-&lt;serial&gt;.tsv</code>, so anyone can recompute it and check it was not invented:</p>
-<pre><code class="language-sh">radbeeper random --check logs/random-F48824B8207F7E.tsv</code></pre>
+<p>The counts behind each line are written beside it in <code>random-&lt;serial&gt;-YYYY-MM.tsv</code>, so anyone can recompute it and check it was not invented:</p>
+<pre><code class="language-sh">radbeeper random --check logs/random-F48824B8207F7E-2026-09.tsv</code></pre>
 <p>That is an audit trail. It says nothing about the <em>next</em> line, which comes from decays that have not happened yet.</p>
-<p><strong>For the numbers alone</strong>, every line is also appended to <code>random-&lt;serial&gt;.hex</code> — the time it was drawn, two spaces, sixty-four hex digits — by <code>random</code> and by <code>watch</code> alike:</p>
-<pre><code class="language-sh">tail -f /var/lib/radbeeper/random-F48824B8207F7E.hex | cut -c22-</code></pre>
+<p><strong>For the numbers alone</strong>, every line is also appended to <code>random-&lt;serial&gt;-YYYY-MM.hex</code> — the time it was drawn, two spaces, sixty-four hex digits — by <code>random</code> and by <code>watch</code> alike:</p>
+<pre><code class="language-sh">tail -f /var/lib/radbeeper/random-F48824B8207F7E-2026-09.hex | cut -c22-</code></pre>
 <hr>
 <h2 id="further-reading">Further reading</h2>
 <ul><li><a href="the-spectrum.html">The spectrum</a> — the flatness check this uses as a health test, and why flat is necessary and nowhere near sufficient.</li><li><a href="the-log.html">The log</a> — where the emission record and its counts are kept.</li><li><a href="reference.html">Reference</a> — the counter's protocol, and what it will and will not tell you.</li></ul>
