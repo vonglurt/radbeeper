@@ -3652,6 +3652,17 @@ impl Watcher {
         false
     }
 
+    /// The attempt found the port held and nothing serving yet. That is not a
+    /// failed try -- the holder is starting up, and a backfill can take many
+    /// minutes -- so the try is given back and the port is asked again after
+    /// `hold`, for as long as it stays that way. A busy open is refused at the
+    /// flock, before the line is configured or written, so asking costs the
+    /// holder nothing.
+    fn not_yet(&mut self, now: f64, hold: f64) {
+        self.tries = (self.tries + 1).min(self.max_tries);
+        self.due = now + hold;
+    }
+
     /// Nodes that were not there before are there now.
     fn plugged(&mut self, now: f64) {
         self.tries = self.max_tries;
@@ -3681,24 +3692,46 @@ impl Watcher {
 /// to pay fifteen times a minute for a yes/no. A STALE node gives a false yes,
 /// and that is harmless -- the monitor it opens tries the socket, finds
 /// nothing behind it and takes the port itself, which is what should happen.
-fn worth_a_window(dir: &Path, device: Option<&str>, baud: Option<u32>) -> bool {
+///
+/// A BUSY PORT WITH NO SOCKET IS `NotYet`, not no. Whoever holds the port has
+/// not started serving: the service backfills from both flashes before it
+/// binds the socket, and that took sixteen minutes on the morning this was
+/// written. Three tries a few seconds apart all landed inside it, the plug
+/// event was written off, and the login that should have opened the monitor
+/// opened nothing.
+#[derive(Debug, PartialEq)]
+enum Worth {
+    Yes,
+    No,
+    NotYet,
+}
+
+fn worth_a_window(dir: &Path, device: Option<&str>, baud: Option<u32>) -> Worth {
     if broker::socket_path(dir).exists() {
-        return true;
+        return Worth::Yes;
     }
     match counter::find(device, baud) {
-        Ok(_) => true,
+        Ok(_) => Worth::Yes,
+        Err(e) if e.busy => Worth::NotYet,
         Err(e) => {
-            if !e.busy {
-                log::write_status(dir, &format!("dormant: {}", e.reason));
-            }
-            false
+            log::write_status(dir, &format!("dormant: {}", e.reason));
+            Worth::No
         }
     }
 }
 
-fn open_window(dir: &Path, device: Option<&str>, baud: Option<u32>, tui: bool) -> Option<Child> {
-    if !worth_a_window(dir, device, baud) {
-        return None;
+/// What one attempt to open the monitor came to.
+enum Opened {
+    Window(Child),
+    Nothing,
+    NotYet,
+}
+
+fn open_window(dir: &Path, device: Option<&str>, baud: Option<u32>, tui: bool) -> Opened {
+    match worth_a_window(dir, device, baud) {
+        Worth::Yes => {}
+        Worth::No => return Opened::Nothing,
+        Worth::NotYet => return Opened::NotYet,
     }
     // THE WINDOW A PERSON WOULD HAVE OPENED THEMSELVES. If radbeeper-gui is
     // installed, that is a window on its own and needs no terminal wrapped
@@ -3708,14 +3741,14 @@ fn open_window(dir: &Path, device: Option<&str>, baud: Option<u32>, tui: bool) -
     // takes it back.
     if !tui {
         if let Some(g) = find_gui() {
-            return spawn_window(Command::new(g));
+            return spawn_window(Command::new(g)).map_or(Opened::Nothing, Opened::Window);
         }
     }
     let (term, flag) = match find_terminal() {
         Some(t) => t,
         None => {
             eprintln!("no terminal emulator found; run: radbeeper watch");
-            return None;
+            return Opened::Nothing;
         }
     };
     // AN ABSOLUTE PATH TO OURSELVES. The terminal inherits whatever directory
@@ -3726,7 +3759,7 @@ fn open_window(dir: &Path, device: Option<&str>, baud: Option<u32>, tui: bool) -
         Ok(p) => p,
         Err(e) => {
             eprintln!("radbeeper: cannot find my own path: {}", e);
-            return None;
+            return Opened::Nothing;
         }
     };
     let mut cmd = Command::new(&term);
@@ -3738,7 +3771,7 @@ fn open_window(dir: &Path, device: Option<&str>, baud: Option<u32>, tui: bool) -
         cmd.arg("--baud").arg(b.to_string());
     }
     cmd.arg("watch");
-    spawn_window(cmd)
+    spawn_window(cmd).map_or(Opened::Nothing, Opened::Window)
 }
 
 /// Start a window and let go of it.
@@ -3810,7 +3843,14 @@ fn hotplug(
             }
         }
         if w.should_open(now(), child.is_some()) {
-            child = open_window(dir, device, baud, tui);
+            child = match open_window(dir, device, baud, tui) {
+                Opened::Window(c) => Some(c),
+                Opened::Nothing => None,
+                Opened::NotYet => {
+                    w.not_yet(now(), SERVICE_WAIT);
+                    None
+                }
+            };
         }
         if duration.map_or(false, |d| now() >= d) {
             return 0;
@@ -3927,6 +3967,32 @@ mod tests {
         assert_eq!(opens, 3, "three tries for one plug event, and no more");
     }
 
+    /// THE LOGIN THAT OPENED NOTHING, pinned: the service held both ports for
+    /// a sixteen-minute backfill, every try came back busy, and the event was
+    /// written off before the socket appeared. Busy-and-not-serving spends no
+    /// tries, however long it lasts, and the window opens once it is over.
+    #[test]
+    fn a_port_held_while_the_service_starts_up_spends_no_tries() {
+        let mut w = Watcher::new(3, 2.0, true, 0.0);
+        let mut t = 0.0;
+        while t < 1000.0 {
+            if w.should_open(t, false) {
+                w.not_yet(t, 10.0);
+            }
+            t += 1.0;
+        }
+        // The backfill is over: the next look is still a try, and so are the
+        // two after it if the window fails to open.
+        let mut opens = 0;
+        while t < 1100.0 {
+            if w.should_open(t, false) {
+                opens += 1;
+            }
+            t += 1.0;
+        }
+        assert_eq!(opens, 3, "all three tries were still there");
+    }
+
     #[test]
     fn a_window_that_took_stops_the_retries() {
         let mut w = Watcher::new(3, 2.0, true, 0.0);
@@ -3963,10 +4029,10 @@ mod tests {
         let sock = broker::socket_path(&dir);
         let _ = std::fs::remove_file(&sock);
         // No socket and a device that cannot exist: nothing to open.
-        assert!(!worth_a_window(&dir, Some("/dev/null-no-counter-here"), None));
+        assert_eq!(worth_a_window(&dir, Some("/dev/null-no-counter-here"), None), Worth::No);
         // A server on the socket, and the same impossible device: still yes.
         std::os::unix::net::UnixListener::bind(&sock).unwrap();
-        assert!(worth_a_window(&dir, Some("/dev/null-no-counter-here"), None));
+        assert_eq!(worth_a_window(&dir, Some("/dev/null-no-counter-here"), None), Worth::Yes);
         let _ = std::fs::remove_file(&sock);
     }
 
