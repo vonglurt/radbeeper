@@ -2151,6 +2151,15 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                                     *p = false;
                                 }
                             }
+                            // The service is reading a flash and nothing will
+                            // be counted until it is done. Until the first
+                            // sample there is no panel to spoil, so the note
+                            // is the window; after it, the panel carries on.
+                            Event::Note { text } => {
+                                if !text.is_empty() && recent.newest().is_none() {
+                                    let _ = out.try_send(Message::Adrift(text));
+                                }
+                            }
                             Event::Random { who, hex, at, suspect } => {
                                 random = Some((who.min(tubes - 1), hex, at, suspect));
                                 pool.reset();

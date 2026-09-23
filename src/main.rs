@@ -561,6 +561,9 @@ enum Tick {
     Random { who: usize, hex: String, at: String, suspect: bool },
     /// The replayed history is over. Only an attached feed sends it.
     Live,
+    /// The server is downloading a flash, or has finished (empty). Only an
+    /// attached feed sends it. See broker::Event::Note.
+    Note { text: String },
 }
 
 impl Feed {
@@ -699,6 +702,7 @@ impl Feed {
                     Some(Tick::Random { who, hex, at, suspect })
                 }
                 broker::Event::Live => Some(Tick::Live),
+                broker::Event::Note { text } => Some(Tick::Note { text }),
                 // An attached monitor draws one counter's worth of screen and
                 // does not redraw itself for a tube joining mid-session; the
                 // samples still arrive and still count. The window is what
@@ -837,12 +841,17 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
     // the windows and the spectrum but are NOT drawn one frame each -- eight
     // hours of history, drawn a second at a time, takes eight hours.
     let mut replaying = !feed.owns_the_port();
+    let mut attached_note = String::new();
     if replaying {
-        table_note = match id.primary() {
+        attached_note = match id.primary() {
             Some(c) if tubes == 1 => format!("attached to the counter on {}", c.path),
             _ => format!("attached to {} counters", tubes),
         };
+        table_note = attached_note.clone();
     }
+    // Whether a live sample has been drawn yet: a note from the server gets a
+    // screen of its own until one has.
+    let mut drawn = false;
     // AFTER THE BACKFILL, NEVER BEFORE IT. See Bank::start.
     feed.start();
     let watching = Instant::now();
@@ -876,6 +885,24 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
             }
             Some(Tick::Live) => {
                 replaying = false;
+                continue;
+            }
+            // THE SERVICE IS READING A FLASH, and no sample will come until it
+            // is done -- sixteen minutes, once. Before the first sample there
+            // is no screen to put it on, so it gets one of its own, the same
+            // one a monitor doing its own backfill shows; after it, it is the
+            // note beside the clock.
+            Some(Tick::Note { text }) => {
+                if text.is_empty() {
+                    table_note = attached_note.clone();
+                } else {
+                    if !drawn {
+                        print!("\x1b[2J{}{}{}{}{}{}", at(0, 0), DIM, attached_note, OFF,
+                               at(2, 0), text);
+                        let _ = std::io::stdout().flush();
+                    }
+                    table_note = text;
+                }
                 continue;
             }
             None => break,
@@ -919,6 +946,7 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
         if replaying {
             continue;
         }
+        drawn = true;
         let spec = ladder.best();
         // EACH TUBE'S OWN ROW IN ITS OWN FILE, from its own windows. A row
         // that averaged two counters would be a reading no instrument took.
@@ -1379,26 +1407,50 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
         }
     };
 
+    // The bank is made here but not started -- no reader runs until every
+    // flash has been read. See Bank::start.
+    let mut bank = Bank::open(found);
+    let id = bank.identity(spans);
+    let tubes = bank.len();
+    // THE FAN-OUT, BOUND BEFORE THE BACKFILL. This process holds the flocks,
+    // so it owes the stream to everybody who wants a counter and cannot have
+    // the port: a monitor, a second monitor, a GUI. It used to be bound after
+    // the backfill, and a backfill once took sixteen minutes: every window
+    // opened in that time found the port busy and nothing on the socket, and
+    // printed `port busy` with no idea why. Bound first, a window attaches at
+    // once and is told what is happening instead. A socket that will not
+    // bind is not fatal -- the logging is the job, and it carries on.
+    let mut srv = match broker::Server::start(&dir, &id) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            eprintln!("radbeeper: not serving the stream -- {}", e);
+            eprintln!("    the log is unaffected; a monitor will need the port itself");
+            None
+        }
+    };
+
     // EVERY COUNTER BACKFILLED FROM ITS OWN FLASH, into its own file. Two
     // tubes were both in the room while nobody was listening and both wrote
     // down what they saw; the records stay apart, because the only way to ask
     // whether two instruments agree is to have kept both their answers.
     if let Some((bytes, max_gap)) = backfill {
-        log::write_status(&dir, "backfilling from the counters' history");
-        for c in &found {
-            println!("radbeeper: {}",
-                     backfill_at_start(c, &dir, spans, every, bytes, max_gap, false));
+        let counters = bank.live();
+        for (k, c) in counters.iter().enumerate() {
+            let what = downloading_note(&c.serial_no, k + 1, counters.len());
+            log::write_status(&dir, &what);
+            println!("radbeeper: {}", what);
+            let done = while_serving(srv.as_mut(), &what, || {
+                backfill_at_start(c, &dir, spans, every, bytes, max_gap, false)
+            });
+            println!("radbeeper: {}", done);
         }
     }
 
-    let tubes = found.len();
     log::write_status(&dir, &format!(
         "monitoring {} ({})",
-        found.iter().map(|c| c.path.as_str()).collect::<Vec<_>>().join(", "),
-        found.iter().map(|c| c.version.as_str()).collect::<Vec<_>>().join(", ")
+        id.counters.iter().map(|c| c.path.as_str()).collect::<Vec<_>>().join(", "),
+        id.counters.iter().map(|c| c.version.as_str()).collect::<Vec<_>>().join(", ")
     ));
-    let mut bank = Bank::open(found);
-    let id = bank.identity(spans);
     // ONE SET OF WINDOWS AND ONE LOG PER TUBE. The service records; it does
     // not average. Averaging is a question about a display, and every display
     // that asks it can do so from the stream -- but a row that blended two
@@ -1419,20 +1471,6 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     merged_log.counters(
         &id.counters.iter().map(|c| c.serial_no.clone()).collect::<Vec<_>>(),
     );
-    // THE FAN-OUT. This process holds the flocks, so it owes the stream to
-    // everybody who wants a counter and cannot have the port: a monitor, a
-    // second monitor, a GUI. A socket that will not bind is not fatal -- the
-    // logging is the job, and it carries on -- but it is worth saying,
-    // because the symptom otherwise is a window printing `port busy` with no
-    // explanation of why the stream it expected was not there.
-    let mut srv = match broker::Server::start(&dir, &id) {
-        Ok(s) => Some(s),
-        Err(e) => {
-            eprintln!("radbeeper: not serving the stream -- {}", e);
-            eprintln!("    the log is unaffected; a monitor will need the port itself");
-            None
-        }
-    };
     // THE POOLS BELONG TO WHOEVER HOLDS THE PORTS, and until now nothing held
     // them for long: the pool lived in the monitor, so closing the window
     // threw away however many minutes of measured entropy it had gathered.
@@ -1492,6 +1530,11 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     // bank existed -- so the counters can start streaming.
     bank.start();
     let mut swept = clock::now();
+    // Counters plugged in while this runs, handed back by the thread that
+    // read their flash; and the serials still being read, for the note.
+    let (joined_tx, joined) = std::sync::mpsc::channel::<counter::Counter>();
+    let mut downloading: Vec<String> = Vec::new();
+    let mut noted = clock::now();
     loop {
         // Whoever turned up while we were waiting for this second. Before the
         // read, so a window that has just opened is greeted within a second
@@ -1527,38 +1570,79 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
             };
             for port in ports.into_iter().filter(|p| !held.contains(p)) {
                 let Some(c) = counter::open_at(&port, baud) else { continue };
-                let (path, version, serial) =
-                    (c.path.clone(), c.version.clone(), c.serial_no.clone());
-                let who = bank.adopt(c);
-                // Its own flash first, exactly as at start: this tube was
-                // recording while nobody was listening to it.
-                if let Some((bytes, max_gap)) = backfill {
-                    if let Some(k) = bank.counters.get(who).and_then(|c| c.clone()) {
-                        println!("radbeeper: {}",
-                                 backfill_at_start(&k, &dir, spans, every, bytes, max_gap, false));
-                    }
+                // ITS OWN FLASH FIRST, exactly as at start: this tube was
+                // recording while nobody was listening to it. And exactly as
+                // at start, BEFORE IT IS ADOPTED -- adopting a counter into a
+                // running bank starts its reader, and a reader running during
+                // the download eats the flash as counts. That is what this
+                // used to do, and it is what put 16383 counts a second (the
+                // count mask, every bit set) and a second of 4.5 million into
+                // the log on 2026-09-23. See Bank::start.
+                //
+                // ON A THREAD OF ITS OWN, so the tubes already here go on
+                // being logged and served while it reads. The thread holds
+                // the flock, so the next sweep finds this port busy and
+                // leaves it alone, and it hands the counter back when done.
+                let Some((bytes, max_gap)) = backfill else {
+                    let _ = joined_tx.send(c);
+                    continue;
+                };
+                let what = downloading_note(&c.serial_no, 1, 1);
+                println!("radbeeper: {} on {}", what, c.path);
+                log::write_status(&dir, &what);
+                downloading.push(c.serial_no.clone());
+                if let Some(s) = srv.as_mut() {
+                    s.note(&what);
                 }
-                if who == each.len() {
-                    each.push(Windows::new(spans));
-                    pools.push(new_pool());
-                    loggers.push(Logger::new(spans, dir.clone(), &serial, every));
-                } else {
-                    // A tube that has come back: its windows start again, its
-                    // log does not.
-                    each[who] = Windows::new(spans);
-                }
-                let id = bank.identity(spans);
-                merged_log.counters(
-                    &id.counters.iter().map(|c| c.serial_no.clone()).collect::<Vec<_>>(),
-                );
-                if let (Some(s), Some(c)) = (srv.as_mut(), id.counters.get(who)) {
-                    s.announce(who, c);
-                }
-                log::write_status(&dir, &format!("monitoring {} ({})", path, version));
-                println!("radbeeper: {} joined -- {} ({})", path, version, serial);
+                let (tx, dir, spans) = (joined_tx.clone(), dir.clone(), spans.to_vec());
+                std::thread::spawn(move || {
+                    println!("radbeeper: {}",
+                             backfill_at_start(&c, &dir, &spans, every, bytes, max_gap, false));
+                    let _ = tx.send(c);
+                });
             }
         }
-        let (who, when, counts) = match bank.next(Duration::from_millis(2500)) {
+        while let Ok(c) = joined.try_recv() {
+            downloading.retain(|s| *s != c.serial_no);
+            let (path, version, serial) =
+                (c.path.clone(), c.version.clone(), c.serial_no.clone());
+            let who = bank.adopt(c);
+            if who == each.len() {
+                each.push(Windows::new(spans));
+                pools.push(new_pool());
+                loggers.push(Logger::new(spans, dir.clone(), &serial, every));
+            } else {
+                // A tube that has come back: its windows start again, its
+                // log does not.
+                each[who] = Windows::new(spans);
+            }
+            let id = bank.identity(spans);
+            merged_log.counters(
+                &id.counters.iter().map(|c| c.serial_no.clone()).collect::<Vec<_>>(),
+            );
+            if let (Some(s), Some(c)) = (srv.as_mut(), id.counters.get(who)) {
+                s.announce(who, c);
+            }
+            log::write_status(&dir, &format!("monitoring {} ({})", path, version));
+            println!("radbeeper: {} joined -- {} ({})", path, version, serial);
+            if downloading.is_empty() {
+                if let Some(s) = srv.as_mut() {
+                    s.note("");
+                }
+            }
+        }
+        // Still reading a flash: say so again, so a monitor attached to a
+        // service whose only tube is the one being read does not take the
+        // silence for the service having gone.
+        if !downloading.is_empty() && clock::now() - noted >= 1.0 {
+            noted = clock::now();
+            if let Some(s) = srv.as_mut() {
+                s.accept_pending();
+                s.note(&downloading_note(&downloading.join(", "), 1, 1));
+            }
+        }
+        let wait = if downloading.is_empty() { 2500 } else { 500 };
+        let (who, when, counts) = match bank.next(Duration::from_millis(wait)) {
             Some(Tube::Sample { who, when, counts }) => (who, when, counts),
             // A TUBE GOING QUIET IS NOT THE END OF THE SERVICE any more. Its
             // port is released so it can be taken again, everybody watching
@@ -1652,6 +1736,46 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     bank.stop();
     log::write_status(&dir, "stopped");
     0
+}
+
+/// What the service says while it reads a flash: in its status file, on the
+/// socket, and on its own stdout.
+fn downloading_note(serial: &str, k: usize, n: usize) -> String {
+    let of = if n > 1 { format!(" ({} of {})", k, n) } else { String::new() };
+    format!("downloading history from {}{} -- live logging starts when it is done", serial, of)
+}
+
+/// Do `work` -- a flash download, which has taken sixteen minutes -- while a
+/// second thread keeps the socket answering: letting in whoever attaches and
+/// telling everyone, once a second, what is going on and for how long.
+///
+/// THE SECOND THREAD TOUCHES THE SOCKET AND NOTHING ELSE. The port belongs to
+/// `work` for as long as it runs; nothing here reads a sample or writes a log.
+fn while_serving<T>(srv: Option<&mut broker::Server>, what: &str,
+                    work: impl FnOnce() -> T) -> T {
+    let Some(s) = srv else { return work() };
+    let done = std::sync::atomic::AtomicBool::new(false);
+    let done = &done;
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let started = clock::now();
+            let mut said = 0.0f64;
+            while !done.load(std::sync::atomic::Ordering::Relaxed) {
+                s.accept_pending();
+                let t = clock::now() - started;
+                if t - said >= 1.0 || said == 0.0 {
+                    said = t.max(f64::MIN_POSITIVE);
+                    let t = t as u64;
+                    s.note(&format!("{} ({}m {:02}s)", what, t / 60, t % 60));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+            }
+            s.note("");
+        });
+        let r = work();
+        done.store(true, std::sync::atomic::Ordering::Relaxed);
+        r
+    })
 }
 
 /// Read the tail of the counter's flash into the log, before anything live is

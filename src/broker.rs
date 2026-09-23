@@ -129,6 +129,11 @@ pub enum Event {
     Gone { who: usize },
     /// Everything before this was history; everything after it is live.
     Live,
+    /// What the server is busy with while no samples can come -- reading a
+    /// counter's flash, which takes minutes. Empty when that is over. Sent
+    /// about once a second for as long as it lasts, so a client whose read
+    /// times out on silence stays attached through it.
+    Note { text: String },
 }
 
 fn tab(fields: &[&str]) -> String {
@@ -176,6 +181,7 @@ pub struct Server {
     rows: VecDeque<(usize, String)>,
     id: Identity,
     greeting: String,
+    note: String,
 }
 
 impl Server {
@@ -210,6 +216,7 @@ impl Server {
             rows: VecDeque::with_capacity(ROWS),
             id: id.clone(),
             greeting,
+            note: String::new(),
         })
     }
 
@@ -268,6 +275,9 @@ impl Server {
         let mut w = &stream;
         let mut out = String::with_capacity(self.ring.len() * 24 + 4096);
         out.push_str(&self.greeting);
+        if !self.note.is_empty() {
+            out.push_str(&tab(&["note", &self.note]));
+        }
         for (who, when, counts) in &self.ring {
             out.push_str(&tab(&["s", &who.to_string(), &t(*when), &counts.to_string()]));
         }
@@ -338,6 +348,21 @@ impl Server {
     /// to the emission log, which is what keeps one hex line in one file.
     pub fn publish_random(&mut self, who: usize, hex: &str, at: &str, suspect: bool) {
         self.publish(&tab(&["r", &who.to_string(), hex, at, if suspect { "1" } else { "0" }]));
+    }
+
+    /// Say what the server is doing instead of counting, or `""` when it is
+    /// counting again. Everyone attached is told now, and everyone who
+    /// attaches before it is over is told in the greeting.
+    ///
+    /// SENT AGAIN ON EVERY CALL, NOT ONLY WHEN IT CHANGES. The caller repeats
+    /// it once a second through a flash download, and that repetition is
+    /// what keeps an attached monitor -- which reads a silence of a few
+    /// seconds as the server having gone -- from closing on a service that is
+    /// simply busy.
+    pub fn note(&mut self, text: &str) {
+        self.note = text.replace(['\t', '\n'], " ");
+        let line = tab(&["note", &self.note]);
+        self.publish(&line);
     }
 
     fn publish(&mut self, line: &str) {
@@ -564,6 +589,7 @@ fn parse(line: &str) -> Option<Event> {
         }),
         "gone" if f.len() >= 2 => Some(Event::Gone { who: f[1].parse().ok()? }),
         "live" => Some(Event::Live),
+        "note" => Some(Event::Note { text: f.get(1).copied().unwrap_or("").to_string() }),
         _ => None,
     }
 }
@@ -718,6 +744,27 @@ mod tests {
         let c = attached(&dir, &mut s);
         assert_eq!(c.identity(), &id());
         assert_eq!(c.identity.primary().unwrap().version, "GMC-320Re 4.26");
+    }
+
+    /// A MONITOR OPENED DURING A FLASH DOWNLOAD IS TOLD SO, first thing,
+    /// rather than attaching to a stream that says nothing for minutes. And
+    /// one already attached hears it cleared when the samples are coming.
+    #[test]
+    fn a_client_attaching_mid_download_is_told_what_the_server_is_doing() {
+        let dir = tmp("note");
+        let mut s = Server::start(&dir, &id()).unwrap();
+        s.note("downloading history\tfrom\nthe flash");
+        let mut c = attached(&dir, &mut s);
+        assert_eq!(
+            c.next(Duration::from_secs(2)),
+            Some(Event::Note { text: "downloading history from the flash".into() }),
+            "the note comes before the live line, with no stray tabs or newlines"
+        );
+        assert_eq!(c.next(Duration::from_secs(2)), Some(Event::Live));
+        s.note("");
+        assert_eq!(c.next(Duration::from_secs(2)), Some(Event::Note { text: String::new() }));
+        s.publish_sample(0, 1.0, 3);
+        assert_eq!(c.next(Duration::from_secs(2)), Some(Event::Sample { who: 0, when: 1.0, counts: 3 }));
     }
 
     /// THE POINT OF THE DESIGN, as a test: a monitor that turns up late is
