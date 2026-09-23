@@ -402,9 +402,17 @@ site-py:
 	  || echo "  (no logs/ -- monitor.html left alone)"
 
 ## site-serve: look at it before pushing it
+# THE RUST ONE, and not python's http.server, which is what this was. The
+# viewer in frames.html fetches any month that fell past the embedding budget,
+# and a fetch wants an origin, a Content-Length and a Content-Type that is not
+# text -- a .bin served as text comes back through a decoder and arrives as
+# replacement characters. src/serve.rs is a hundred lines of std and refuses
+# to hand out anything above the directory it was pointed at.
+#
+#   make site-serve                    loopback, which is the default
+#   ./target/release/radbeeper preview -o somewhere --bind 0.0.0.0
 site-serve: site
-	@echo "  http://127.0.0.1:8765/"
-	$(PYTHON) -m http.server 8765 --bind 127.0.0.1
+	./$(BIN) preview --port 8765
 
 ## promo: re-record every screenshot in docs/ from the real program
 promo:

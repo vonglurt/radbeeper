@@ -3116,6 +3116,7 @@ fn usage() {
     println!("  radbeeper export           index.html and random.html, from the logs");
     println!("  radbeeper pages            the landing page and lab reports, from the documents");
     println!("  radbeeper hotplug          sit in the session, open the monitor on plug-in");
+    println!("  radbeeper preview          serve a generated site on loopback, so the viewer can fetch");
     println!();
     println!("  -d, --device PATH          serial port; repeat it for a second counter");
     println!("  -b, --baud RATE            baud (default: try 115200 then 57600)");
@@ -3137,6 +3138,8 @@ fn usage() {
     println!("      --entropy-bits N       bits a random line is worth (default 256)");
     println!("      --poll SECONDS         hotplug: how often /dev is read (default 4)");
     println!("      --settle SECONDS       hotplug: grace before a new node is opened (default 2)");
+    println!("      --port N               preview: the port it listens on (default 8765)");
+    println!("      --bind ADDR            preview: the address (default 127.0.0.1)");
     println!("      --tries N              hotplug: attempts per plug event (default 3)");
     println!("      --tui                  hotplug: a terminal, even where radbeeper-gui is installed");
     println!("  -o, --output STEM          where log pull writes .bin and .csv");
@@ -3190,6 +3193,10 @@ fn main() {
     let mut settle: f64 = 2.0;
     let mut tries: u32 = 3;
     let mut tui = false;
+    // `preview`'s two. Loopback by default: a log directory is not something
+    // to put on the network by accident, so a wider bind has to be typed.
+    let mut port: u16 = 8765;
+    let mut bind = "127.0.0.1".to_string();
     let mut log_action = "info".to_string();
     // `frames` and its verb, which is a noun-then-verb command like `log`.
     let mut frames_action = "list".to_string();
@@ -3252,6 +3259,8 @@ fn main() {
                 });
             }
             "--logs" => logs = next(&mut i).map(std::path::PathBuf::from),
+            "--port" => port = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(port),
+            "--bind" => bind = next(&mut i).unwrap_or(bind),
             "--log-every" => {
                 log_every = next(&mut i).and_then(|v| v.parse().ok()).unwrap_or(log_every)
             }
@@ -3413,6 +3422,14 @@ fn main() {
         // checkout rather than a log directory: `-o DIR` moves it.
         let root = output.as_deref().map(std::path::Path::new);
         std::process::exit(radbeeper::site::run(root));
+    }
+    if command == "preview" {
+        // `-o DIR` names what to serve, the same way `pages` uses it to name
+        // where to write. The default is here, because that is where `make
+        // site` has just put a page.
+        let root = output.as_deref().map(std::path::Path::new)
+            .unwrap_or_else(|| std::path::Path::new("."));
+        std::process::exit(radbeeper::serve::run(root, &bind, port));
     }
     if command == "hotplug" {
         let dir = logs.clone().unwrap_or_else(log::state_dir);

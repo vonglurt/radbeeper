@@ -20,5 +20,6 @@ pub mod export;
 pub mod frames;
 pub mod history;
 pub mod log;
+pub mod serve;
 pub mod sha256;
 pub mod site;
