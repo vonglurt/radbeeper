@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The waterfall — RadBeeper</title>
+<meta name="description" content="A short-time Fourier transform of a Geiger counter, kept a row at a time: what the accumulated spectrum throws away, which is when.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/the-waterfall.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="The waterfall — RadBeeper">
+<meta property="og:description" content="A short-time Fourier transform of a Geiger counter, kept a row at a time: what the accumulated spectrum throws away, which is when.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/the-waterfall.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-waterfall">The waterfall</h1>
+<p><strong>A short-time Fourier transform of a Geiger counter, kept a row at a time: what the accumulated spectrum throws away, which is when.</strong></p>
+<p><em>A lab report in the IEEE style, on the FFT graph <code>radbeeper-gui</code> draws under its spectrum. Written against radbeeper 0.5.0, 29 September 2026. Every figure in it was measured on the day, either on the bench's two counters or on simulated counts, and says which.</em></p>
+<p><img src="screenshots/gui-waterfall.png" alt="the waterfall, on the bench&#x27;s two counters" loading="lazy"></p>
+<hr>
+<h2 id="abstract">Abstract</h2>
+<p>RadBeeper already looks for anything arriving on a schedule, with a power spectrum averaged over every window it has ever taken. Averaging is how a faint period is found and how its <em>time</em> is lost: a line that was present for ten minutes an hour ago and one that has been present all along come out as the same bar. This report describes the second view that was added beside it. Each 256-second window's periodogram is kept as a row of its own; a row is taken every 8 seconds; the newest 48 are drawn one behind another in a box seen in perspective from a camera that does not move. The picture spans <strong>6 minutes 16 seconds of rows, made from 10 minutes 32 seconds of counts</strong>, and resolves periods from 2 seconds to 4 minutes 16 seconds. A row on its own is noise by construction. The report gives the arithmetic of a row, the flow from the counter's serial port to the pixel, the measured length of the ridges that chance draws -- 16 rows at most -- and what the view can and cannot find.</p>
+<p><strong>Index terms</strong> -- short-time Fourier transform, spectrogram, waterfall display, periodogram, Poisson process, radiation monitoring, perspective projection.</p>
+<hr>
+<h2 id="i-introduction">I. Introduction</h2>
+<h3 id="a-the-problem">A. The problem</h3>
+<p>Radioactive decay is a Poisson process and the power spectrum of a Poisson process is flat. <a href="the-spectrum.html">The spectrum</a> uses that: it averages periodograms, the scatter falls as 1/√<em>N</em>, and anything periodic -- mains hum on a tube's supply, a fan carrying a source past, firmware that batches its reports -- climbs out of a floor that is settling under it.</p>
+<p>The average has one number for each period. It cannot say whether the period is there <em>now</em>, whether it came and went, or whether it began when somebody switched something on. Those are the questions asked of a line once it has been seen.</p>
+<h3 id="b-what-was-asked-for">B. What was asked for</h3>
+<p>The form is the one SETI@home's screensaver made familiar: a glass box on a dark ground, frequency across the front in the colours of the rainbow, power as thin spikes standing on the floor, and time running back into the box [3]. The one instruction beyond that was that the camera must not move.</p>
+<hr>
+<h2 id="ii-one-row">II. One row</h2>
+<p>A row is a periodogram of the last <code>W</code> = 256 seconds of counts per second, summed across the tubes. In order:</p>
+<table><thead><tr><th>Step</th><th>What is done</th><th>Why</th></tr></thead><tbody><tr><td>1</td><td>Take the newest 256 seconds, *x*₀ … *x*₂₅₅</td><td>a power of two, for a radix-2 transform</td></tr><tr><td>2</td><td>Subtract their mean</td><td>the DC term is the count rate, which every other number on the panel gives</td></tr><tr><td>3</td><td>Multiply by a Hann taper, ½ − ½ cos(2π*i*/255)</td><td>a period that does not divide the window would otherwise leak into every bin [2]</td></tr><tr><td>4</td><td>Transform: <em>X</em> = FFT(<em>x</em>)</td><td><code>analysis::fft</code>, the same one the spectrum uses</td></tr><tr><td>5</td><td>Take \</td><td>*X*ₖ\</td><td>² for <em>k</em> = 1 … 127</td><td>bin <em>k</em> is the period 256/<em>k</em> seconds; <em>k</em> = 0 is DC and <em>k</em> = 128 is left out</td></tr><tr><td>6</td><td>Divide by the mean of those 127</td><td>so that flat reads <strong>1.0</strong> at any count rate</td></tr></tbody></table>
+<p>Steps 1 to 5 are <code>Spectrum::add</code>. The difference is what happens next: <code>Spectrum</code> adds the result into a running total, and <code>Waterfall</code> keeps it.</p>
+<h3 id="the-parameters">The parameters</h3>
+<table><thead><tr><th></th><th>Value</th><th>In seconds</th></tr></thead><tbody><tr><td>Window, <code>W</code></td><td>256 samples</td><td>4 m 16 s</td></tr><tr><td>Hop, <code>H</code></td><td>8 samples</td><td>8 s</td></tr><tr><td>Depth, <code>D</code></td><td>48 rows</td><td>—</td></tr><tr><td>Bins in a row</td><td>127</td><td>periods of 256 s down to 2.016 s</td></tr><tr><td>Spacing of the bins</td><td>1/256 Hz</td><td>—</td></tr><tr><td>Overlap of a row with the one before</td><td>248 of 256 seconds</td><td>96.9%</td></tr></tbody></table>
+<hr>
+<h2 id="iii-the-flow">III. The flow</h2>
+<p>This is what happens to a count between the tube and the screen. Each box is one place in the code.</p>
+<pre><code class="language-text"> two GMC-320s                     each reports the counts of its last second
+      │  serial, once a second
+      ▼
+ radbeeper service                holds the ports, logs, and serves the stream
+      │  unix socket, a line a sample: who, when, counts
+      ▼
+ feed thread (gui)                one per window; replays up to 8 h on attach
+      │
+      │  samples are summed by WHOLE WALL-CLOCK SECOND across the tubes
+      │  when the second closes: sec_sum
+      ▼
+ ┌─────────────────────────────┐
+ │ Waterfall::add(sec_sum)     │  analysis.rs
+ │                             │
+ │  ring of the last 256 s     │  push the second, drop the oldest
+ │  since += 1                 │
+ │  if since &lt; 8: nothing      │──────────────► no row this second
+ │  else:                      │
+ │    mean off · Hann · FFT    │  §II, steps 2 to 4
+ │    |X|² of bins 1..127      │  step 5
+ │    ÷ their mean             │  step 6
+ │    push to the FRONT of     │  the oldest falls off the back;
+ │    a deque of 48 rows       │  nothing is copied or moved
+ └─────────────────────────────┘
+      │  rows (shared, remade only when a row arrives),
+      │  made: how many rows ever · age: seconds since the newest
+      ▼
+ Snapshot, once a second          the same message that carries the rest
+      │
+      ▼
+ Chart::draw                      one canvas: dials, counts, spectrum, this
+      │  is (made, age) what was drawn last time?
+      ├── yes ──► the kept drawing, as it is
+      └── no  ──► Chart::waterfall
+                    ground, stars, floor grid, far edges
+                    rows OLDEST FIRST:  w = (index + age/8) / 48
+                       each bin: foot (u, 0, w) to tip (u, power/12, w)
+                       through Camera::project
+                    luck line, near edges</code></pre>
+<p>Three things about it are worth saying.</p>
+<p><strong>The rows are shared, not sent.</strong> A snapshot goes to the interface every second and the rows change every eighth, so they sit behind a reference count and are rebuilt only when <code>add</code> returns true.</p>
+<p><strong>The drawing is kept.</strong> The canvas is redrawn twelve times a second, because the needles on the dials move that often. The waterfall is some six thousand lines and changes once a second, so it is drawn into a <code>canvas::Cache</code> that is cleared only when <code>(made, age)</code> changes. The software renderer the window uses in a virtual machine notices the difference.</p>
+<p><strong>A window that attaches late is not behind.</strong> The service replays what it holds, the feed runs every second of it through <code>add</code>, and the box is full by the time the first live sample arrives.</p>
+<hr>
+<h2 id="iv-how-much-time-it-captures">IV. How much time it captures</h2>
+<p>The question has three answers, and they are different numbers.</p>
+<table><thead><tr><th>What is meant</th><th>Arithmetic</th><th>Time</th></tr></thead><tbody><tr><td><strong>One row</strong></td><td><code>W</code></td><td><strong>256 s = 4 m 16 s</strong></td></tr><tr><td><strong>The rows on show</strong>, front to back</td><td>(<code>D</code> − 1) × <code>H</code> = 47 × 8</td><td><strong>376 s = 6 m 16 s</strong></td></tr><tr><td>… as the oldest leaves the box</td><td><code>D</code> × <code>H</code> = 48 × 8</td><td>384 s = 6 m 24 s</td></tr><tr><td><strong>The counts in the picture</strong></td><td><code>W</code> + (<code>D</code> − 1) × <code>H</code> = 256 + 376</td><td><strong>632 s = 10 m 32 s</strong></td></tr></tbody></table>
+<p>The label on the graph says "6m back", which is the second of these: how long ago the row at the back was taken. But that row was itself made from the 256 seconds before it, so the oldest count with any say in the picture arrived ten and a half minutes ago.</p>
+<h3 id="what-that-is-worth">What that is worth</h3>
+<table><thead><tr><th></th><th>Arithmetic</th><th></th></tr></thead><tbody><tr><td>Windows that share no seconds</td><td>632 / 256</td><td>2.5</td></tr><tr><td>Looks that are nearly independent, at half overlap</td><td>376 / 128 + 1</td><td>3.9</td></tr><tr><td>Counts in one row, at the bench's 0.9 a second</td><td>0.9 × 256</td><td>about 230</td></tr><tr><td>Counts in the whole picture</td><td>0.9 × 632</td><td>about 570</td></tr><tr><td>Until the first row, from a cold start</td><td><code>W</code></td><td>4 m 16 s</td></tr><tr><td>Until the box is full</td><td><code>W</code> + (<code>D</code> − 1) × <code>H</code></td><td>10 m 32 s</td></tr><tr><td>Transforms</td><td>one of 256 points every 8 s</td><td>—</td></tr></tbody></table>
+<p>Forty-eight rows are therefore <strong>four measurements, not forty-eight</strong>. The other forty-four are those four seen again as they slide past, which is what makes a ridge a line rather than four dots, and is also what §V is about.</p>
+<p>The taper matters to the first figure. A Hann window weighs the middle of its 256 seconds fully and the two ends hardly at all, so a row answers mostly for the two minutes at its centre.</p>
+<h3 id="against-the-spectrum-it-sits-under">Against the spectrum it sits under</h3>
+<table><thead><tr><th></th><th>Window</th><th>Reach</th><th>Keeps the time?</th></tr></thead><tbody><tr><td>Waterfall</td><td>256 s</td><td>10 m 32 s</td><td>yes, to 8 s</td></tr><tr><td>Spectrum, short</td><td>512 s</td><td>everything since it started</td><td>no</td></tr><tr><td>Spectrum, middle</td><td>4096 s</td><td>the same</td><td>no</td></tr><tr><td>Spectrum, long</td><td>32768 s</td><td>the same</td><td>no</td></tr></tbody></table>
+<hr>
+<h2 id="v-reading-it">V. Reading it</h2>
+<h3 id="a-one-spike-means-nothing">A. One spike means nothing</h3>
+<p>A single bin of a single periodogram of noise is an exponential variable, and the tallest of 127 stands about ln 127 above the mean. <code>chance_max</code> puts the line at <strong>7.34</strong> for one row, and the graph draws it in red across the front of the box. A spike that clears it is drawn thicker and nearly white.</p>
+<h3 id="b-nor-does-a-short-ridge">B. Nor does a short ridge</h3>
+<p>A row shares 248 of its 256 seconds with the row before. A spike that luck put in one is in its neighbours too, so chance draws ridges of its own. How long was measured, on simulated Poisson counts with nothing periodic in them, 400,000 seconds at each of two rates:</p>
+<table><thead><tr><th>Rate</th><th>Runs over the line</th><th>Median</th><th>90% within</th><th>99% within</th><th>Longest</th></tr></thead><tbody><tr><td>0.45 counts/s</td><td>460</td><td>5 rows</td><td>9 rows</td><td>13 rows</td><td>16 rows</td></tr><tr><td>0.90 counts/s</td><td>521</td><td>5 rows</td><td>9 rows</td><td>13 rows</td><td>15 rows</td></tr></tbody></table>
+<p>And of boxes of 48 rows, how many held a run that long in any bin:</p>
+<table><thead><tr><th>A run of at least</th><th>8 rows</th><th>16 rows</th><th>24 rows</th></tr></thead><tbody><tr><td>Share of boxes, 0.45/s</td><td>8.1%</td><td>0.1%</td><td>none</td></tr><tr><td>Share of boxes, 0.90/s</td><td>8.6%</td><td>none</td><td>none</td></tr></tbody></table>
+<p>So the rule is <strong>sixteen rows</strong>, half a window, a third of the way back into the box: a bright line shorter than that is what noise looks like here, and one longer is not. It is <code>Waterfall::chance_rows</code>, it is on the graph's label, and <code>luck_draws_short_ridges_and_no_long_ones</code> holds the code to it over eleven hours of scrambled counts.</p>
+<h3 id="c-what-it-finds">C. What it finds</h3>
+<p>A source with a period of 8 seconds was added to a background of 0.9 counts a second, 200,000 seconds at each strength:</p>
+<table><thead><tr><th>Source, as a share of background</th><th>Its bin reads</th><th>Rows over the line</th><th>Whole box over</th></tr></thead><tbody><tr><td>50%</td><td>6.8</td><td>39%</td><td>1%</td></tr><tr><td>20%</td><td>2.3</td><td>2%</td><td>none</td></tr><tr><td>10%</td><td>1.3</td><td>none</td><td>none</td></tr></tbody></table>
+<p>This is the honest limit. The waterfall sees a period that is <strong>strong</strong>, and says when it was there. A faint one it does not see at all: at a fifth of background the bin reads 2.3 and the line is at 7.3. Finding the faint one is what averaging is for, and the spectrum above it does that; the two are not rivals.</p>
+<p>The unit test uses a source far stronger than any of these -- a swell that rises and falls by four counts every eight seconds, on a background of one and a half -- so that every row of 48 is loudest in bin 31 and over the line there.</p>
+<hr>
+<h2 id="vi-the-drawing">VI. The drawing</h2>
+<p>There is no 3D engine. There is a rotation, a division and an order.</p>
+<p><strong>A point</strong> is <code>u</code> across, <code>v</code> up and <code>w</code> back, each from 0 to 1. It is scaled into a box, turned about the vertical by the yaw ψ, tilted about the horizontal by the pitch θ, and divided by its distance:</p>
+<pre><code class="language-text"> x, y, z  =  (u − ½)·A,  (v − ½)·B,  (w − ½)·C        the box: A × B × C
+ x, z     =  x cos ψ − z sin ψ,   x sin ψ + z cos ψ    turn
+ y, z     =  y cos θ + z sin θ,   z cos θ − y sin θ    tilt
+ screen   =  origin + scale · (x, −y) / (R + z)        perspective</code></pre>
+<p>The division is the whole of perspective: what is further away is smaller and closer together.</p>
+<p><strong>The camera does not move.</strong> ψ = 0.10 rad (6°), θ = 0.55 rad (32°) and <em>R</em> = 6 are constants in the source, and nothing writes to them. The box is as wide as the panel allows, 0.9 high and 2.0 deep, and is scaled once to fit the room it is given. A turn of 17° was tried first and rejected: the box is three times as wide as it is deep, and at that angle its far end rose a whole box-height up the screen.</p>
+<p><strong>Across</strong> is the period on a logarithmic axis, long on the left, as the spectrum above it has it: <code>u</code> = ln <em>k</em> / ln 127. The colour runs from violet at 256 s to red at 2 s and says <em>where</em>, not how loud. A spike seen over forty others has lost its foot; its colour still says which period it stands on.</p>
+<p><strong>Up</strong> is power, with 12 at the lid, so the luck line sits at six tenths of the height.</p>
+<p><strong>Back</strong> is age. A row's place is <code>w</code> = (index + age/8) / 48, where <code>age</code> is the seconds since the newest row. So the stack moves back an eighth of a row each second and the new row arrives into the gap it has made. Nothing is copied to make it move: a row's depth is its index.</p>
+<p><strong>The order</strong> is the painter's: the oldest row first and every newer one over it. The floor and the far edges of the box go down before the rows and the near edges after them, which is what puts the spikes inside the glass. Rows fade with distance, alpha = 1 − 0.7 <code>w</code>.</p>
+<p><strong>The labels are not in the canvas.</strong> A canvas here cannot hold text, so they are widgets in a column laid over it. The column and the canvas are cut by the same arithmetic (<code>regions</code>), which a test holds them to.</p>
+<h3 id="where-it-differs-from-what-was-described">Where it differs from what was described</h3>
+<table><thead><tr><th>Described</th><th>Built</th><th>Why</th></tr></thead><tbody><tr><td>A slide between rows, every frame</td><td>A step each second</td><td>the window has no timer of its own; a snapshot a second is its only beat</td></tr><tr><td>HUD panels joined by pipes</td><td>Not built</td><td>the panel already has its readouts; the graph was what was asked for</td></tr><tr><td>A starfield</td><td>48 fixed points</td><td>they are where they were last time</td></tr><tr><td>Near-white tips</td><td>The same, on a dark ground in both skins</td><td>a rainbow on paper is mostly yellow that cannot be seen</td></tr><tr><td>Drawn at any size</td><td>Only in a window 640 high or more</td><td>under that the counts and the spectrum keep the panel</td></tr></tbody></table>
+<hr>
+<h2 id="vii-what-the-bench-showed">VII. What the bench showed</h2>
+<p>The first picture taken of it, on the bench's two counters, had a bright patch near the 2-second end. It was measured rather than believed: a program attached to the service, took the 6168 seconds it replayed, and ran the last 1024 through <code>Waterfall</code> three ways.</p>
+<table><thead><tr><th>Input</th><th>Bins over the line in 3 rows or more</th></tr></thead><tbody><tr><td>The two tubes summed</td><td>one: period 2.72 s, 8 rows running, tallest 8.0</td></tr><tr><td>Tube A alone</td><td>none</td></tr><tr><td>Tube B alone</td><td>none</td></tr></tbody></table>
+<p>Eight rows is inside what chance draws (§V.B: eight or nine boxes in a hundred hold a run that long), and a period that belonged to the room would be in each tube as well as in their sum. <strong>It is noise</strong>, and it is the example of why the rule is on the label.</p>
+<p>The same run found something that is not noise and is not a period. In those 6168 seconds, one tube delivered two samples inside a single wall-clock second 41 times and the other 13 times -- a counter's second and the machine's are not the same second, and now and then two of the first land in one of the second. Each of those is a second that reads double with a second beside it that reads nothing. They are rare and not regular, so they raise the floor a little and draw no line.</p>
+<hr>
+<h2 id="viii-limitations">VIII. Limitations</h2>
+<ol><li><strong>One window length.</strong> 256 seconds cannot see a period longer than four minutes, and resolves a long one coarsely: the first four bins are 256, 128, 85 and 64 seconds.</li><li><strong>It is the sum of the tubes.</strong> When a tube stops answering, the rate halves. The mean is removed from each row, but a step inside a window is not a mean, and it puts power into the long-period end until the step has left the window, four minutes later.</li><li><strong>Faint periods are invisible to it</strong>, by §V.C.</li><li><strong>The window only.</strong> <code>radbeeper watch</code> in a terminal has no waterfall; a character cell is too coarse for it.</li><li><strong>The slide is a step a second</strong>, not a glide.</li></ol>
+<hr>
+<h2 id="ix-where-it-is">IX. Where it is</h2>
+<table><tbody><tr><td><code>src/analysis.rs</code></td><td><code>Waterfall</code>, <code>chance_max_of</code>, and four tests: a ridge in every row, no ridge in noise, how long luck's ridges run, nothing before a window</td></tr><tr><td><code>gui/src/main.rs</code></td><td><code>FALL_*</code> constants, <code>regions</code>, <code>Camera</code>, <code>fall_u</code>, <code>fall_colour</code>, <code>Chart::waterfall</code>, and three tests</td></tr><tr><td>Root crate's dependencies</td><td>unchanged: <code>libc</code></td></tr></tbody></table>
+<hr>
+<h2 id="references">References</h2>
+<p>[1] P. D. Welch, "The use of fast Fourier transform for the estimation of power spectra: a method based on time averaging over short, modified periodograms," <em>IEEE Trans. Audio Electroacoust.</em>, vol. AU-15, no. 2, pp. 70–73, 1967.</p>
+<p>[2] F. J. Harris, "On the use of windows for harmonic analysis with the discrete Fourier transform," <em>Proc. IEEE</em>, vol. 66, no. 1, pp. 51–83, 1978.</p>
+<p>[3] D. P. Anderson, J. Cobb, E. Korpela, M. Lebofsky and D. Werthimer, "SETI@home: an experiment in public-resource computing," <em>Commun. ACM</em>, vol. 45, no. 11, pp. 56–61, 2002.</p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>
