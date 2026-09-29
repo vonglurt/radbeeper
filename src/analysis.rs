@@ -310,6 +310,147 @@ fn fft(values: &[f64]) -> Vec<C> {
     a
 }
 
+/// The tallest of `bins` bins in an average of `n` independent periodograms
+/// of noise, by luck alone. The account of it is on `Spectrum::chance_max`.
+pub fn chance_max_of(bins: usize, n: f64) -> f64 {
+    if n < 1.0 || bins < 2 {
+        return f64::INFINITY;
+    }
+    let x = ((bins - 1) as f64).ln() / n;
+    1.0 + (2.0 * x).sqrt() + 2.0 * x / 3.0
+}
+
+/// The Hann taper for a window of `n` samples.
+fn hann(n: usize) -> Vec<f64> {
+    (0..n)
+        .map(|i| 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / (n - 1) as f64).cos())
+        .collect()
+}
+
+/// The periodograms one at a time, kept in the order they were taken.
+///
+/// WHAT `Spectrum` THROWS AWAY. It adds every periodogram into one running
+/// total, which is how a faint period is found and how WHEN is lost: a line
+/// that was there for ten minutes an hour ago and one that has been there
+/// all along come out as the same bar. Here each window's spectrum is a row
+/// of its own, the newest in front, and the last `depth` of them are kept.
+///
+/// ONE ROW IS NOISE, AND IS MEANT TO BE. A single bin of a single
+/// periodogram is an exponential draw, and the tallest of 127 of them
+/// stands seven times the mean by luck alone -- `chance_max`, which is
+/// `Spectrum`'s figure at one run. So a spike in a row says nothing. A
+/// spike IN THE SAME PLACE in row after row is a ridge, and a long enough
+/// ridge is a period: that is the whole of what this is for, and the
+/// average of every row is the spectrum the panel already had.
+///
+/// LONG ENOUGH, because A ROW IS NOT A NEW MEASUREMENT. One taken eight
+/// seconds after another shares 248 of its 256 seconds with it, so a spike
+/// that luck put in one is in its neighbours too, and chance draws short
+/// ridges of its own. How short was measured, on 400,000 seconds of
+/// Poisson counts at each of two rates: a run of rows over the line in one
+/// bin had a median of 5 rows, 99 in 100 were 13 or fewer, and the longest
+/// of 981 was 16. Half a window, which is `chance_rows`; a ridge longer
+/// than that is not luck's.
+///
+/// A row is `window` seconds, mean removed, Hann tapered, transformed, and
+/// divided by its own mean so that flat reads 1.0 wherever the rate is.
+/// One is taken every `hop` seconds, so neighbouring rows share most of
+/// their seconds and a ridge is continuous rather than a row of dots.
+pub struct Waterfall {
+    pub window: usize,
+    pub hop: usize,
+    pub depth: usize,
+    /// How many rows have been taken, ever: a row's name, for whoever
+    /// wants to know whether the stack has moved.
+    pub made: u64,
+    buf: std::collections::VecDeque<f64>,
+    since: usize,
+    taper: Vec<f64>,
+    rows: std::collections::VecDeque<Vec<f32>>,
+}
+
+impl Waterfall {
+    pub fn new(window: usize, hop: usize, depth: usize) -> Waterfall {
+        Waterfall {
+            window,
+            hop: hop.max(1),
+            depth: depth.max(1),
+            made: 0,
+            buf: std::collections::VecDeque::with_capacity(window + 1),
+            since: 0,
+            taper: hann(window),
+            rows: std::collections::VecDeque::with_capacity(depth + 1),
+        }
+    }
+
+    /// One more second. True when it made a row.
+    pub fn add(&mut self, counts: u32) -> bool {
+        self.buf.push_back(counts as f64);
+        if self.buf.len() > self.window {
+            self.buf.pop_front();
+        }
+        self.since += 1;
+        if self.buf.len() < self.window || self.since < self.hop {
+            return false;
+        }
+        self.since = 0;
+        let mean = self.buf.iter().sum::<f64>() / self.window as f64;
+        let shaped: Vec<f64> = self
+            .buf
+            .iter()
+            .zip(&self.taper)
+            .map(|(v, t)| (v - mean) * t)
+            .collect();
+        let spec = fft(&shaped);
+        // The DC term is the rate, which every other number on the panel
+        // already gives; the rest, against their own mean.
+        let power: Vec<f64> = spec[1..self.window / 2].iter().map(|c| c.norm()).collect();
+        let level = power.iter().sum::<f64>() / power.len().max(1) as f64;
+        let row = power
+            .iter()
+            .map(|p| if level > 0.0 { (p / level) as f32 } else { 0.0 })
+            .collect();
+        // NOTHING IS MOVED. The new row goes on the front and the oldest
+        // comes off the back; how far back a row is, is where it is.
+        self.rows.push_front(row);
+        self.rows.truncate(self.depth);
+        self.made += 1;
+        true
+    }
+
+    /// The rows, newest first.
+    pub fn rows(&self) -> Vec<Vec<f32>> {
+        self.rows.iter().cloned().collect()
+    }
+
+    /// Seconds since the newest row was taken, which is how far the stack
+    /// has slid towards the next.
+    pub fn age(&self) -> usize {
+        self.since
+    }
+
+    /// Seconds until there is a first row.
+    pub fn wait(&self) -> usize {
+        if self.made > 0 { 0 } else { self.window - self.buf.len() }
+    }
+
+    /// The period a bin of a row stands for, in seconds.
+    pub fn period(&self, index: usize) -> f64 {
+        self.window as f64 / (index + 1) as f64
+    }
+
+    /// How tall the tallest bin of ONE row gets by luck.
+    pub fn chance_max(&self) -> f64 {
+        chance_max_of(self.window / 2, 1.0)
+    }
+
+    /// How many rows running a bin stays over that line by luck: the rows
+    /// in half a window. See the account at the head of `Waterfall`.
+    pub fn chance_rows(&self) -> usize {
+        (self.window / (2 * self.hop)).max(1)
+    }
+}
+
 /// A running average of periodograms over a fixed window.
 ///
 /// Radioactive decay is Poisson and the power spectrum of a Poisson process is
@@ -328,12 +469,7 @@ pub struct Spectrum {
 
 impl Spectrum {
     pub fn new(window: usize) -> Spectrum {
-        let taper = (0..window)
-            .map(|i| {
-                0.5 - 0.5
-                    * (2.0 * std::f64::consts::PI * i as f64 / (window - 1) as f64).cos()
-            })
-            .collect();
+        let taper = hann(window);
         Spectrum {
             window,
             bins: window / 2,
@@ -427,12 +563,7 @@ impl Spectrum {
     /// every length -- half an hour at this counter's 44 CPM is thirteen
     /// hundred arrivals, and that line is not in them at any threshold.
     pub fn chance_max(&self) -> f64 {
-        let n = self.independent();
-        if n < 1.0 || self.bins < 2 {
-            return f64::INFINITY;
-        }
-        let x = ((self.bins - 1) as f64).ln() / n;
-        1.0 + (2.0 * x).sqrt() + 2.0 * x / 3.0
+        chance_max_of(self.bins, self.independent())
     }
 
     pub fn period(&self, index: usize) -> f64 {
@@ -544,9 +675,16 @@ pub struct Tier {
     pub values: Vec<Option<f64>>,
 }
 
-/// How many stretches the strip is cut into. Four: a second a bar at the
-/// right, then `k`, `k*k` and `k*k*k` as it ages leftwards.
-pub const TIERS: usize = 4;
+/// How many stretches the strip is cut into. Six: a second a bar at the
+/// right, then 2, 4, 8, 16 and 32 as it ages leftwards.
+///
+/// IT WAS FOUR, and stopped at eight seconds a bar. A bar of eight seconds
+/// at a background of a count every three holds two or three counts, which
+/// is still mostly chance; one of thirty-two holds ten, and is the first
+/// bar on the strip whose height is more the room than the dice. The two
+/// tiers cost every other a third of its width and take the strip from ten
+/// minutes to forty.
+pub const TIERS: usize = 6;
 
 /// How much wall clock the interleave tier shows, in seconds.
 ///
@@ -561,7 +699,7 @@ pub const INTERLEAVE_SECONDS: usize = 4;
 
 /// The counts, as a strip that compresses as it ages.
 ///
-/// Four tiers of equal width, newest at the right edge. The rightmost is a
+/// `TIERS` tiers of equal width, newest at the right edge. The rightmost is a
 /// second a bar; each one to its left holds `k` times as long in a bar, with
 /// `k` the smallest whole factor that makes the strip reach back `span`
 /// seconds -- the spectrum's window, so the strip and the spectrum are views
@@ -578,6 +716,7 @@ pub const INTERLEAVE_SECONDS: usize = 4;
 /// It was three tiers, with the fine one taking half the width. The fourth
 /// came out of that half: a second a bar for forty seconds is as much of the
 /// present as anyone reads, and the room buys another doubling of the past.
+/// The fifth and sixth came out of all of them: see `TIERS`.
 ///
 /// BAR EDGES ARE FIXED TO THE SAMPLE COUNT, not to the screen: a k-second bar
 /// always covers the same k samples, so a bar does not change as the strip
@@ -684,9 +823,8 @@ pub fn tiers_with(
 /// tubes they cost half the width of the strip to show fifty seconds in units
 /// nobody thinks in.
 ///
-/// So: `TIERS` aggregating tiers at 1, 2, 4, 8 seconds, and one interleave
-/// tier under them at 1/n. Five in all, whether n is two or nine, which is
-/// what the two-counter strip already did. The ratio is 2 between every
+/// So: `TIERS` aggregating tiers at 1, 2, 4, 8, 16 and 32 seconds, and one
+/// interleave tier under them at 1/n. Seven in all, whether n is two or nine. The ratio is 2 between every
 /// aggregating tier and n at the single boundary below them -- and that
 /// boundary is worth marking, because it is exactly where the strip stops
 /// measuring time and starts measuring arrival.
@@ -889,6 +1027,70 @@ pub fn tiers_arrivals(arrivals: &[Arrival], live: &[bool], width: usize) -> Stri
     }
     tiers.reverse();
     Strip { tiers, sources, live: n }
+}
+
+/// How many bars either side of a bar its trend is taken over.
+pub const TREND_SIDE: usize = 1;
+
+/// The trend line: for every bar, the mean of it and its neighbours.
+///
+/// A MOVING AVERAGE, and what it is for is the thing a bar cannot show. A
+/// bar at background is two or three counts, and the next is as likely to
+/// be twice it as half; the eye follows the tallest and sees a rise that is
+/// not there. Three bars taken together are steadier than any of them, and
+/// a line through those is where the rate is going.
+///
+/// THE STRIP IS ONE RUN OF BARS TO IT, not six. The newest bar of the
+/// eight-second tier and the oldest of the four-second are neighbours in
+/// time, so they are neighbours here, and the line crosses from tier to
+/// tier without a step.
+///
+/// WEIGHTED BY THE SECONDS A BAR COVERS, which is what makes that crossing
+/// honest. Every bar is a rate, so they can be averaged -- but a bar of two
+/// seconds beside one of one is twice the evidence, and a plain mean of the
+/// pair would count the single second as though it were two.
+///
+/// A BAR WITH NOTHING MEASURED IN IT has no trend and lends nothing to its
+/// neighbours': empty, not nought. And THE INTERLEAVE HAS NONE AT ALL. Its
+/// bars are single readings of different tubes placed where they arrived,
+/// each already a whole second long, and a mean of three of them is a
+/// second counted three times.
+///
+/// One value for each bar of each tier, in the tiers' own order.
+pub fn trend(tiers: &[Tier]) -> Vec<Vec<Option<f64>>> {
+    // Every bar of every aggregating tier, left to right: what it says and
+    // how many seconds it says it of.
+    let run: Vec<(Option<f64>, f64)> = tiers
+        .iter()
+        .filter(|t| t.seconds >= 1.0)
+        .flat_map(|t| t.values.iter().map(move |v| (*v, t.seconds)))
+        .collect();
+    let mut at = 0usize;
+    tiers
+        .iter()
+        .map(|t| {
+            if t.seconds < 1.0 {
+                return vec![None; t.values.len()];
+            }
+            let line = (at..at + t.values.len())
+                .map(|i| {
+                    run[i].0?;
+                    let lo = i.saturating_sub(TREND_SIDE);
+                    let hi = (i + TREND_SIDE + 1).min(run.len());
+                    let (mut counts, mut seconds) = (0.0f64, 0.0f64);
+                    for (v, s) in &run[lo..hi] {
+                        if let Some(v) = v {
+                            counts += v * s;
+                            seconds += s;
+                        }
+                    }
+                    (seconds > 0.0).then(|| counts / seconds)
+                })
+                .collect();
+            at += t.values.len();
+            line
+        })
+        .collect()
 }
 
 /// Which tubes are answering at `now`, from when each was last heard.
@@ -1363,12 +1565,15 @@ mod tests {
     fn the_strip_reaches_back_the_spectrum_window() {
         let t = tiers(&[], 0, 159, 512);
         assert_eq!(t.len(), TIERS);
-        // Four quarters, the odd three columns to the fine tier, and k = 2:
-        // 39*8 + 39*4 + 39*2 + 42 = 588 seconds in 159 columns.
-        assert_eq!(t.iter().map(|x| x.columns).collect::<Vec<_>>(), vec![39, 39, 39, 42]);
-        assert_eq!(t.iter().map(|x| x.seconds).collect::<Vec<_>>(), vec![8.0, 4.0, 2.0, 1.0]);
+        // Six sixths, the odd three columns to the fine tier, and k = 2:
+        // 26 * (32 + 16 + 8 + 4 + 2) + 29 = 1641 seconds in 159 columns.
+        assert_eq!(t.iter().map(|x| x.columns).collect::<Vec<_>>(), vec![26, 26, 26, 26, 26, 29]);
+        assert_eq!(
+            t.iter().map(|x| x.seconds).collect::<Vec<_>>(),
+            vec![32.0, 16.0, 8.0, 4.0, 2.0, 1.0]
+        );
         let reach: f64 = t.iter().map(|x| x.columns as f64 * x.seconds).sum();
-        assert!(reach >= 512.0, "{}", reach);
+        assert_eq!(reach, 1641.0);
     }
 
     /// A bar shorter than a second is a fraction, because that is what it is.
@@ -1407,9 +1612,9 @@ mod tests {
         let n = 9usize;
         let samples: Vec<f64> = (0..8000).map(|i| (i % 5) as f64).collect();
         let t = tiers_interleaved(&samples, 0, 240, n);
-        assert_eq!(t.len(), TIERS + 1, "five tiers, not eight");
+        assert_eq!(t.len(), TIERS + 1, "one tier for the interleave, not four");
         let seconds: Vec<String> = t.iter().map(|x| bar_seconds(x.seconds)).collect();
-        assert_eq!(seconds, vec!["8", "4", "2", "1", "1/9"]);
+        assert_eq!(seconds, vec!["32", "16", "8", "4", "2", "1", "1/9"]);
         // Every aggregating tier is twice the one on its right...
         for pair in t[..TIERS].windows(2) {
             assert!((pair[0].seconds / pair[1].seconds - 2.0).abs() < 1e-9);
@@ -1427,7 +1632,7 @@ mod tests {
         let samples: Vec<f64> = (0..4000).map(|i| (i % 3) as f64).collect();
         let t = tiers_interleaved(&samples, 0, 240, 2);
         let seconds: Vec<String> = t.iter().map(|x| bar_seconds(x.seconds)).collect();
-        assert_eq!(seconds, vec!["8", "4", "2", "1", "1/2"]);
+        assert_eq!(seconds, vec!["32", "16", "8", "4", "2", "1", "1/2"]);
     }
 
     /// THE IDEAL INTERLEAVE IS 1/n, NOT HALF A SECOND. A perfect nine-way
@@ -1508,7 +1713,9 @@ mod tests {
         // tier takes twice as long to fill, each step to the left. Written
         // down as a test because it is the property, not the layout, that
         // must survive a change to either.
-        let t = tiers(&[], 0, 160, 512);
+        // 162 columns, which six tiers share with none left over.
+        let t = tiers(&[], 0, 162, 512);
+        assert_eq!(t.len(), TIERS);
         for w in t.windows(2) {
             let (left, right) = (&w[0], &w[1]);
             assert_eq!(left.seconds, right.seconds * 2.0,
@@ -1523,12 +1730,9 @@ mod tests {
         // 200 samples: the value of each is its own index, so a bar's mean
         // says which samples it holds.
         let s: Vec<u32> = (0..200).collect();
-        let t = tiers(&s, 0, 20, 30);
-        let (oldest, far, near, fine) = (&t[0], &t[1], &t[2], &t[3]);
-        assert_eq!(
-            (oldest.columns, far.columns, near.columns, fine.columns),
-            (5, 5, 5, 5)
-        );
+        let t = tiers(&s, 0, 30, 30);
+        assert!(t.iter().all(|x| x.columns == 5));
+        let (oldest, far, near, fine) = (&t[2], &t[3], &t[4], &t[5]);
         // The fine tier is the newest five, one each.
         assert_eq!(fine.values[4], Some(199.0));
         assert_eq!(fine.values[0], Some(195.0));
@@ -1548,6 +1752,20 @@ mod tests {
         assert_eq!(oldest.seconds, 8.0);
         assert_eq!(oldest.values[4], Some(163.5));
         assert_eq!(oldest.values[3], Some(155.5));
+        // The sixteens begin where the eights did (128): 112..128, and the
+        // sixteen before them.
+        assert_eq!(t[1].seconds, 16.0);
+        assert_eq!(t[1].values[4], Some(119.5));
+        assert_eq!(t[1].values[3], Some(103.5));
+        // And the thirty-twos from where the sixteens began (48). The bar
+        // that ends there holds 32..48 and no more: its edges are whole
+        // multiples of thirty-two, and it is not stretched to reach. The
+        // one before it is the first thirty-two samples there were, and the
+        // one before that is before anything was counted.
+        assert_eq!(t[0].seconds, 32.0);
+        assert_eq!(t[0].values[4], Some(39.5));
+        assert_eq!(t[0].values[3], Some(15.5));
+        assert_eq!(t[0].values[2], None);
     }
 
     #[test]
@@ -1557,10 +1775,11 @@ mod tests {
         let after = tiers(&s[..302], 0, 40, 80);
         // Two seconds later, with k = 2, every complete near bar has moved one
         // column left and is otherwise the same bar.
-        let k = before[2].seconds as usize;
+        let near = TIERS - 2;
+        let k = before[near].seconds as usize;
         assert_eq!(k, 2);
-        let b = &before[2].values;
-        let a = &after[2].values;
+        let b = &before[near].values;
+        let a = &after[near].values;
         assert_eq!(&a[..a.len() - 2], &b[1..b.len() - 1]);
     }
 
@@ -1662,7 +1881,7 @@ mod tests {
     fn a_tube_that_stops_leaves_the_interleave_and_the_seconds_stay_seconds() {
         let mut a = room(1000..1060, &[0, 1]);
         a.extend(room(1060..1100, &[0]));
-        let s = tiers_arrivals(&a, &[true, false], 100);
+        let s = tiers_arrivals(&a, &[true, false], 150);
         // One tube answering: nothing to interleave.
         assert_eq!((s.live, s.tiers.len()), (1, TIERS));
         assert!(s.sources.is_empty());
@@ -1694,11 +1913,156 @@ mod tests {
     fn a_second_nothing_measured_is_empty_and_not_nought() {
         let mut a = room(1000..1010, &[0]);
         a.extend(room(1020..1030, &[0]));
-        let s = tiers_arrivals(&a, &[true], 120);
+        let s = tiers_arrivals(&a, &[true], 180);
         let second = s.tiers.last().unwrap();
         let shown: Vec<Option<f64>> = second.values.iter().rev().take(30).rev().cloned().collect();
         assert_eq!(shown.iter().filter(|v| v.is_none()).count(), 10);
         assert_eq!(shown.iter().filter(|v| **v == Some(2.0)).count(), 20);
+    }
+
+    /// Counts a second with nothing periodic in them: a fixed scramble, so
+    /// the test is the same test every time it runs.
+    fn scramble(n: usize, seed: u64) -> Vec<u32> {
+        let mut x = seed;
+        (0..n)
+            .map(|_| {
+                x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                ((x >> 33) % 4) as u32
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_period_is_a_ridge_in_the_same_bin_of_every_row() {
+        // Eight seconds: up for four, down for four, on top of the scramble.
+        let swell = [3u32, 4, 3, 2, 1, 0, 1, 2];
+        let mut w = Waterfall::new(256, 8, 48);
+        for (t, c) in scramble(1024, 7).into_iter().enumerate() {
+            w.add(c + swell[t % 8]);
+        }
+        // 256 seconds to the first row and one every eight after it.
+        assert_eq!(w.made, 1 + (1024 - 256) / 8);
+        let rows = w.rows();
+        assert_eq!(rows.len(), 48);
+        // 256 / 8 is the thirty-second line, which is index 31.
+        assert_eq!(w.period(31), 8.0);
+        let luck = w.chance_max() as f32;
+        assert!((7.2..7.5).contains(&luck), "{}", luck);
+        for (k, row) in rows.iter().enumerate() {
+            assert_eq!(row.len(), 127);
+            let loudest = (0..row.len()).max_by(|a, b| row[*a].total_cmp(&row[*b])).unwrap();
+            assert_eq!(loudest, 31, "row {} is loudest somewhere else", k);
+            assert!(row[31] > luck, "row {} reads {} there", k, row[31]);
+        }
+    }
+
+    #[test]
+    fn noise_makes_spikes_and_no_ridge() {
+        let mut w = Waterfall::new(256, 8, 48);
+        for c in scramble(1024, 11) {
+            w.add(c);
+        }
+        let rows = w.rows();
+        let luck = w.chance_max() as f32;
+        // Flat reads 1.0: every row is divided by its own mean.
+        for row in &rows {
+            let mean = row.iter().sum::<f32>() / row.len() as f32;
+            assert!((mean - 1.0).abs() < 1e-4, "{}", mean);
+        }
+        // No bin is over the line in even a quarter of the rows.
+        for bin in 0..127 {
+            let over = rows.iter().filter(|r| r[bin] > luck).count();
+            assert!(over < 12, "bin {} is over the line in {} rows of 48", bin, over);
+        }
+    }
+
+    #[test]
+    fn luck_draws_short_ridges_and_no_long_ones() {
+        // Eleven hours of nothing periodic, and every row of it.
+        let mut w = Waterfall::new(256, 8, 48);
+        let luck = w.chance_max() as f32;
+        let mut run = [0usize; 127];
+        let (mut longest, mut ridges) = (0usize, 0usize);
+        for c in scramble(40_000, 3) {
+            if !w.add(c) {
+                continue;
+            }
+            let rows = w.rows();
+            for (bin, v) in rows[0].iter().enumerate() {
+                if *v > luck {
+                    run[bin] += 1;
+                    longest = longest.max(run[bin]);
+                } else {
+                    ridges += (run[bin] > 0) as usize;
+                    run[bin] = 0;
+                }
+            }
+        }
+        // It does draw them: a spike is in its neighbours' seconds too.
+        assert!(ridges > 20, "only {} in eleven hours", ridges);
+        assert!(longest > 1, "no spike outlived its row");
+        // And none as long as half a window.
+        assert_eq!(w.chance_rows(), 16);
+        assert!(longest <= w.chance_rows(), "luck ran {} rows", longest);
+    }
+
+    #[test]
+    fn the_waterfall_has_nothing_until_it_has_a_window() {
+        let mut w = Waterfall::new(256, 8, 48);
+        assert_eq!(w.wait(), 256);
+        for _ in 0..255 {
+            assert!(!w.add(1));
+        }
+        assert_eq!((w.wait(), w.rows().len()), (1, 0));
+        // The first row is the second the window fills; a room that counts
+        // the same every second has no spectrum, and the row is noughts.
+        assert!(w.add(1));
+        assert_eq!((w.wait(), w.age(), w.made), (0, 0, 1));
+        assert!(w.rows()[0].iter().all(|v| *v == 0.0));
+        for k in 1..8 {
+            assert!(!w.add(1));
+            assert_eq!(w.age(), k);
+        }
+        assert!(w.add(1));
+        assert_eq!(w.rows().len(), 2);
+    }
+
+    #[test]
+    fn the_trend_is_a_bar_and_its_neighbours() {
+        let some = |v: &[f64]| v.iter().map(|x| Some(*x)).collect::<Vec<_>>();
+        let t = vec![
+            Tier { columns: 3, seconds: 2.0, values: some(&[1.0, 4.0, 1.0]) },
+            Tier { columns: 3, seconds: 1.0, values: some(&[4.0, 0.0, 6.0]) },
+            Tier { columns: 2, seconds: 0.5, values: some(&[9.0, 9.0]) },
+        ];
+        let line = trend(&t);
+        assert_eq!(line.iter().map(|l| l.len()).collect::<Vec<_>>(), [3, 3, 2]);
+        // The first bar has one neighbour, the second two.
+        assert_eq!(line[0][0], Some(2.5));
+        assert_eq!(line[0][1], Some(2.0));
+        // ACROSS THE BOUNDARY, by the seconds each bar covers: two bars of
+        // two seconds and one of one are 2*4 + 2*1 + 1*4 counts in five.
+        assert_eq!(line[0][2], Some(14.0 / 5.0));
+        // And from the other side of it: 2*1 + 4 + 0 counts in four.
+        assert_eq!(line[1][0], Some(1.5));
+        assert_eq!(line[1][1], Some(10.0 / 3.0));
+        // The newest bar does not reach into the interleave for a
+        // neighbour, and the interleave has no line.
+        assert_eq!(line[1][2], Some(3.0));
+        assert_eq!(line[2], [None, None]);
+    }
+
+    #[test]
+    fn the_trend_is_empty_where_nothing_was_measured() {
+        let t = vec![Tier {
+            columns: 5,
+            seconds: 1.0,
+            values: vec![None, Some(3.0), None, Some(1.0), Some(5.0)],
+        }];
+        // An empty bar has no trend, and is not a nought in its
+        // neighbour's: the bar beside two empty ones is itself.
+        assert_eq!(trend(&t)[0], [None, Some(3.0), None, Some(3.0), Some(3.0)]);
+        assert!(trend(&[]).is_empty());
     }
 
     #[test]

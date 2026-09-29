@@ -180,9 +180,9 @@ delivered its first line.
 |---|---|
 | **The number, big** | The 30-second CPM in block digits. 3 s is too jumpy to read as a headline and 300 s too slow to react to anything you are doing with your hands. |
 | **Five averages** | 3 s to see a source come and go under your hand, 30 s to read the room, 300 s for a number worth writing down, 3000 s for what the background here actually is, and 30000 s — a working day. The counter's own reading is one rolling 60-second count: one number, one time constant, one question answered. |
-| **The counts, compressing as they age** | A second a bar at the right, and each panel to its left holds twice as long in a bar. Ten minutes of history in one row of a terminal, at one-second resolution where it matters. |
-| **The spectrum** | Three windows at once, looking for anything arriving on a schedule. **Flat is the good answer** — decay is Poisson, and a Poisson process has a flat power spectrum. A peak means something periodic is contaminating the arrivals. |
-| **The random line** | 256 bits of hex out of decay timing, the moment the pool has measured enough min-entropy to justify them. |
+| **The counts, compressing as they age** | A second a bar at the right, and each panel to its left holds twice as long in a bar: 1, 2, 4, 8, 16 and 32 seconds. Most of an hour of history in one row of a terminal, at one-second resolution where it matters. In the window a **trend line** runs over the bars — each bar taken with its neighbours, weighted by the seconds they cover — because a bar at background is two or three counts and the eye follows the tallest. |
+| **The spectrum** | Three windows at once, looking for anything arriving on a schedule. In the window it hangs from the floor of the counts, and its axis reaches as far as the longest window that has answered: 8m, then 1h 8m, then 9h 6m. Under it the window draws **the waterfall**: each 256-second spectrum as a row of its own, the newest in front, so a period can be seen to start and stop. One spike there is noise, and so is a bright line under sixteen rows long. **Flat is the good answer** — decay is Poisson, and a Poisson process has a flat power spectrum. A peak means something periodic is contaminating the arrivals. |
+| **The random line** | 256 bits of hex out of decay timing, the moment the pool has measured enough min-entropy to justify them. With several tubes each earns its own, from its own counts, and the newest is shown with the letter of the tube that earned it. |
 | **The log, scrolling** | The rows as they go to disk, so what is on screen is what is in the file. |
 
 `--line` prints one line a second for a pipe instead of drawing a screen.
@@ -309,7 +309,7 @@ double the dose — what doubles is the evidence:
 | **And a merged record is kept** | `cpm-merged-YYYY-MM.tsv`, beside the per-counter files: the raw arrivals, the rate of the room, and the interleave. See [the log](docs/the-log.md). |
 | **A tube that stops is left out** | The mean is the counts over the *tube-seconds that took them*, not over the tubes plugged in. A counter whose USB port resets is out of the mean and out of the interleave from the second it goes quiet, and the room reads what it read. |
 | **And comes back by itself** | Once a log cycle the port is asked again, on a thread of its own so nothing waits for a counter that is not answering. It returns to its own slot, its own colour and its own log. |
-| **Each says what it last counted** | The top row names every tube by its serial, and beside it that tube's newest second as a rate — the reading the interleave was given. A tube that is not answering shows **nothing, not nought**: a nought is a second it listened to. |
+| **Each says what it last counted** | The top row names every tube by its serial, and beside it that tube's newest second in counts, **CPS** — the reading the interleave was given, and with one tube as with several. A number that changes is the data arriving. A tube that is not answering shows **nothing, not nought**: a nought is a second it listened to. |
 
 **The interleave is measured, not assumed.** Two counters only sharpen *time* if
 they disagree about when a second starts, and neither clock can be steered, so
@@ -493,6 +493,7 @@ properly, with the arithmetic, the failures that shaped it, and the prior art.
 | [The stream](docs/the-stream.md) | why an exclusive lock on a port is not an exclusive claim on the counter; the protocol, what a second tube buys, and the window's layout |
 | [The cascade strip](docs/cascade.md) | chained dyadic time compression: its invariants, its arithmetic, the prior art from RRDtool to exponential histograms, and what to call it |
 | [The spectrum](docs/the-spectrum.md) | why flat is the good answer, how windows are accumulated, and why a peak is not called on sigma alone |
+| [The waterfall](docs/the-waterfall.md) | the FFT graph in the window: a row every 8 seconds, 6 minutes of rows from 10½ minutes of counts, the flow from the port to the pixel, and how long a ridge luck draws |
 | [Random numbers out of decay](docs/the-random.md) | where the bits come from, three ways this is normally done wrong, and why the model was replaced by a measurement |
 | [Running it](docs/running-it.md) | the boot service, one log directory two programs can both write, and publishing without a build step |
 | [The native build](docs/native-build.md) | the Rust crate, what is ported and what is not, and how it is held to the reference implementation |

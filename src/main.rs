@@ -26,10 +26,11 @@ use std::time::{Duration, Instant};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BIG_ROWS: usize = 12;
 const SERVICE_WAIT: f64 = 10.0;
-/// Samples kept for the cascade strip. Four tiers of doubling reach back
-/// about a quarter of an hour at any width a terminal has; the rest is the
-/// windows' business, not the strip's.
-const STRIP_KEEP: usize = 4096;
+/// Samples kept for the cascade strip. Six tiers of doubling reach back
+/// most of an hour across a wide terminal, and every tube sends a sample a
+/// second: this is that hour for nine of them. The rest is the windows'
+/// business, not the strip's.
+const STRIP_KEEP: usize = 32768;
 /// How often a running service looks for a counter that was not there before.
 ///
 /// ONE LOG CYCLE. Often enough that plugging a tube in and looking at the
@@ -864,21 +865,53 @@ fn rejoin(bank: &mut Bank, devices: &[String], baud: Option<u32>, swept: &mut f6
 /// last counted.
 ///
 /// THE READING IS THE ONE THE INTERLEAVE WAS GIVEN: that tube's newest
-/// second, as a rate. Not an average -- the averages are the rows below, and
-/// they are of the room. This is what each instrument said most recently, so
-/// that two of them can be seen to agree or not, second by second.
+/// second. Not an average -- the averages are the rows below, and they are
+/// of the room. This is what each instrument said most recently, so that two
+/// of them can be seen to agree or not, second by second.
+///
+/// IN COUNTS A SECOND, because that is what it is. It was shown as a rate a
+/// minute, the second times sixty, and a figure that can only be 0, 60 or
+/// 120 reads as a broken average rather than as one click. As CPS it is the
+/// number of clicks, and a number that changes is the data arriving.
 ///
 /// EMPTY, NOT NOUGHT, when a tube is not answering. A nought is a reading:
 /// a second in which the tube was listening and nothing arrived. A tube that
 /// has stopped has no reading, and printing one would be the instrument
 /// claiming to still be measuring. The space is kept, so nothing to its
 /// right moves when it comes back.
+/// What is written over a tier: `F 16s/bar · 6m`, or as much as fits.
+///
+/// SHORTENED, NOT CUT. Six tiers and an interleave across eighty columns
+/// are twelve columns each, and the whole label is fourteen: cut to fit it
+/// read `F 16s/bar ·`, which is a label with its end missing. So the reach
+/// goes first, then the hand-over mark and the unit, and what is left is
+/// still something: `16s`.
+fn tier_label(ti: usize, seconds: f64, columns: usize) -> String {
+    let bar = analysis::bar_seconds(seconds);
+    let mark = if ti == 0 { "" } else { "F " };
+    let room = columns.saturating_sub(1);
+    [
+        format!("{}{}s/bar \u{b7} {}", mark, bar,
+                analysis::span_words(columns as f64 * seconds)),
+        format!("{}{}s/bar", mark, bar),
+        format!("{}s", bar),
+    ]
+    .into_iter()
+    .find(|l| l.chars().count() <= room)
+    .unwrap_or_default()
+}
+
+/// A second's counts, as the top row prints them.
+fn cps(counts: u32) -> String {
+    format!("{:>5} CPS", counts)
+}
+
 fn tubes_row(serials: &[String], newest: &[Option<u32>], live: &[bool]) -> String {
     const SHOWN: usize = 4;
     let mut out: Vec<String> = Vec::new();
     for (k, serial) in serials.iter().enumerate().take(SHOWN) {
         let reading = match (live.get(k).copied().unwrap_or(false), newest.get(k).copied().flatten()) {
-            (true, Some(c)) => format!("{:>5} CPM", c as u64 * 60),
+            (true, Some(c)) => cps(c),
             _ => " ".repeat(9),
         };
         out.push(format!("{} {}", serial, reading));
@@ -1210,9 +1243,12 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
         // of the readout, because a header that grows pushes the big number
         // right and the number is what people are looking at.
         let head = match (id.primary(), tubes) {
+            // One tube has its reading beside its serial as two do. There
+            // is no second tube to be away, so it is never empty: this line
+            // is drawn by a sample.
             (Some(c), 1) => format!(
-                "{} @ {} baud   {}   serial {}",
-                c.path, c.baud, c.version, c.serial_no
+                "{} @ {} baud   {}   serial {} {}",
+                c.path, c.baud, c.version, c.serial_no, cps(counts)
             ),
             (Some(_), _) => tubes_row(
                 &id.counters.iter().map(|c| c.serial_no.clone()).collect::<Vec<_>>(),
@@ -1301,10 +1337,10 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
         let counts_rows = if hv > row + 12 { 5 } else if hv > row + 8 { 3 } else { 1 };
         // THE COUNTS, COMPRESSING AS THEY AGE. A second a bar on the right,
         // then k seconds, then k*k and k*k*k, reaching back as far as the
-        // spectrum's window -- see analysis::tiers. Four tiers of equal
-        // width, so each one leftwards is another doubling and the strip
-        // holds ten minutes where three tiers held five. One scale for all
-        // four, so the same height is the same rate wherever it is drawn.
+        // spectrum's window -- see analysis::tiers. Six tiers of equal
+        // width, so each one leftwards is another doubling, out to thirty-
+        // two seconds a bar. One scale for all of them, so the same height
+        // is the same rate wherever it is drawn.
         let series: Vec<f64> = merged.iter().copied().collect();
         // WHOLE SECONDS, AND ONE TIER BELOW THEM FOR THE INTERLEAVE. One tube
         // keeps the strip it always had; see analysis::tiers_interleaved.
@@ -1360,13 +1396,7 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
             // Above each tier, where it starts: F for each hand-over from a
             // finer tier, how long a bar is, and how far back the tier reaches.
             if row >= 1 && tier.columns > 2 {
-                let label = format!(
-                    "{}{}s/bar \u{b7} {}",
-                    if ti == 0 { "" } else { "F " },
-                    analysis::bar_seconds(tier.seconds),
-                    analysis::span_words(tier.columns as f64 * tier.seconds)
-                );
-                let label: String = label.chars().take(tier.columns - 1).collect();
+                let label = tier_label(ti, tier.seconds, tier.columns);
                 let used = label.chars().count();
                 out.push_str(&format!("{}{}{}{}", at(row - 1, x0), DIM, label, OFF));
                 // Over the fine tier, a tick where each log row closes: the
@@ -4214,7 +4244,7 @@ mod tests {
         let serials = vec!["F7F4CA7F05C2EA".to_string(), "F48824B8207F7E".to_string()];
         assert_eq!(
             tubes_row(&serials, &[Some(2), Some(0)], &[true, true]),
-            "F7F4CA7F05C2EA   120 CPM   F48824B8207F7E     0 CPM   2 tubes averaged"
+            "F7F4CA7F05C2EA     2 CPS   F48824B8207F7E     0 CPS   2 tubes averaged"
         );
     }
 
@@ -4224,7 +4254,7 @@ mod tests {
         let row = tubes_row(&serials, &[Some(2), Some(3)], &[true, false]);
         assert_eq!(
             row,
-            "F7F4CA7F05C2EA   120 CPM   F48824B8207F7E             1 of 2 tubes averaged"
+            "F7F4CA7F05C2EA     2 CPS   F48824B8207F7E             1 of 2 tubes averaged"
         );
         // Nothing to its right moves when it stops, or when it comes back.
         let both = tubes_row(&serials, &[Some(2), Some(3)], &[true, true]);
@@ -4232,6 +4262,16 @@ mod tests {
         // And one that has never spoken has nothing to show either.
         assert!(tubes_row(&serials, &[Some(2), None], &[true, true])
             .contains("F48824B8207F7E             "));
+    }
+
+    #[test]
+    fn a_tier_is_labelled_with_what_fits_over_it() {
+        assert_eq!(tier_label(0, 32.0, 26), "32s/bar \u{b7} 13m");
+        assert_eq!(tier_label(1, 16.0, 26), "F 16s/bar \u{b7} 6m");
+        // Eighty columns, six tiers and an interleave: twelve each.
+        assert_eq!(tier_label(1, 16.0, 12), "F 16s/bar");
+        assert_eq!(tier_label(6, 0.5, 8), "1/2s");
+        assert_eq!(tier_label(1, 16.0, 3), "");
     }
 
     #[test]

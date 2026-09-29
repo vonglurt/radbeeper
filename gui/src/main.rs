@@ -23,13 +23,14 @@
 // many arrivals -- and the uncertainty printed beside it is what actually
 // improves. See `mean_of` and `sigma_of`.
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use iced::widget::{canvas, column, container, row, stack, text, Space};
 use iced::{Color, Element, Fill, Font, Length, Rectangle, Renderer, Subscription, Theme};
 use radbeeper::analysis::{
     self, answering, band, bar_seconds, interleave_quality, span_words, tiers_arrivals,
-    tiers_with, Arrival, Band, Spectrum, Tier, Windows, TIERS,
+    tiers_with, Arrival, Band, Spectrum, Tier, Waterfall, Windows, TIERS,
 };
 use radbeeper::broker::{self, Client, CounterId, Event, Poll};
 use radbeeper::{clock, entropy, log};
@@ -54,7 +55,7 @@ const MONO: Font = Font::with_name("DejaVu Sans Mono");
 const NAMEPLATE: &str = concat!("radbeeper ", env!("CARGO_PKG_VERSION"));
 
 /// Samples kept for the cascade strip.
-const STRIP_KEEP: usize = 8192;
+const STRIP_KEEP: usize = 32768;
 
 /// Rows of log kept under everything else.
 const ROWS: usize = 6;
@@ -104,6 +105,176 @@ fn cluster_h(tubes: usize, scale: f32) -> f32 {
 }
 /// The cascade's share of the space under the dials.
 const CASCADE_SHARE: f32 = 0.62;
+
+/// The waterfall: seconds in a row, seconds between rows, rows kept.
+///
+/// 256 seconds resolves periods from two seconds to four minutes in 127
+/// bins; a row every eight is thirty-one in thirty-two of its seconds
+/// shared with the row before, so a ridge is a line and not a row of dots;
+/// and forty-eight rows are what a box this size can hold apart.
+const FALL_WINDOW: usize = 256;
+const FALL_HOP: usize = 8;
+const FALL_DEPTH: usize = 48;
+/// The power at the top of the box. The luck line is at 7.3, so a spike
+/// that means nothing still stops short of the lid.
+const FALL_TOP: f32 = 12.0;
+/// The shortest window the waterfall is drawn in. Under it the counts and
+/// the spectrum have the panel to themselves, as they had.
+const FALL_ROOM: f32 = 640.0;
+
+/// THE CAMERA, WHICH DOES NOT MOVE. In front of the box, above it and a
+/// little to one side: a turn of six degrees and a tilt of thirty-two,
+/// from three box-depths away. These are constants and nothing writes to
+/// them -- the only thing that moves in the waterfall is time.
+///
+/// SIX DEGREES AND NOT SEVENTEEN, which was tried. The box is three times
+/// as wide as it is deep, because the panel is, and a turn that reads as
+/// "a little to one side" on a cube swings the far end of a box that wide
+/// a whole box-height up the screen: it stopped being a floor seen from
+/// above and became a plank seen from its end.
+const FALL_YAW: f32 = 0.10;
+const FALL_PITCH: f32 = 0.55;
+const FALL_DISTANCE: f32 = 6.0;
+
+/// The waterfall's own colours, which are the same in both skins because
+/// its ground is: the glass, a spike that has cleared the line, and the
+/// line.
+const FALL_EDGE: Color = Color { r: 0.55, g: 0.95, b: 0.90, a: 1.0 };
+const FALL_TIP: Color = Color { r: 0.96, g: 0.97, b: 1.0, a: 1.0 };
+const FALL_LUCK: Color = Color { r: 1.0, g: 0.35, b: 0.31, a: 1.0 };
+
+/// A line of text laid over the chart: ten points of DejaVu Sans Mono.
+const ROW_H: f32 = 13.0;
+/// Of the room the charts share, the counts' and the spectrum's part when
+/// the waterfall has the rest, in hundredths; and the counts' part of that.
+const UPPER_PARTS: u16 = 56;
+const CASCADE_OF_UPPER: f32 = 0.70;
+
+/// Where each chart is on the canvas: its top and its height.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Regions {
+    cascade: (f32, f32),
+    spectrum: (f32, f32),
+    /// The line of the spectrum's axis and the waterfall under it, when
+    /// there is a waterfall.
+    fall: Option<(f32, f32)>,
+}
+
+/// The canvas, cut into its charts.
+///
+/// THE WIDGETS OVER THE CANVAS ARE LAID OUT BY THE SAME ARITHMETIC, and
+/// have to be: a canvas cannot hold text, so every label is a widget in a
+/// column stacked over it, and the column cannot be told where the canvas
+/// drew. With a waterfall that column is the dials, a line of captions,
+/// a space, the spectrum's axis, the waterfall's title, a space and the
+/// waterfall's axis -- four lines of `ROW_H` and two spaces that share
+/// what is left as `UPPER_PARTS` to the rest. So the spectrum's axis is at
+/// exactly the height worked out here, and the waterfall begins under it.
+fn regions(height: f32, cluster: f32, fall: bool) -> Regions {
+    if !fall {
+        let rest = (height - cluster - 4.0).max(40.0);
+        let top = cluster + rest * CASCADE_SHARE + 1.0;
+        return Regions {
+            cascade: (cluster, rest * CASCADE_SHARE),
+            // A margin at the foot: the readouts sit under the canvas.
+            spectrum: (top, (height - top - 6.0).max(1.0)),
+            fall: None,
+        };
+    }
+    let shared = (height - cluster - 4.0 * ROW_H).max(40.0);
+    let upper = ROW_H + shared * UPPER_PARTS as f32 / 100.0;
+    let counts = upper * CASCADE_OF_UPPER;
+    let axis = cluster + upper;
+    Regions {
+        cascade: (cluster, counts),
+        spectrum: (cluster + counts + 1.0, (upper - counts - 3.0).max(1.0)),
+        fall: Some((axis + ROW_H, (height - axis - ROW_H).max(1.0))),
+    }
+}
+
+/// A point of the waterfall's box, on the screen.
+///
+/// NOT A 3D ENGINE: a rotation and a division. A point is `u` across, `v`
+/// up and `w` back, each from nought to one. It is scaled into a box,
+/// turned by the yaw, tilted by the pitch, and divided by how far away it
+/// then is -- which is the whole of perspective: what is further is
+/// smaller and closer together.
+#[derive(Debug, Clone, Copy)]
+struct Camera {
+    /// The box: across, up and back.
+    size: (f32, f32, f32),
+    /// Fitted to the room it is drawn in: a scale and where nought is.
+    scale: f32,
+    origin: (f32, f32),
+}
+
+impl Camera {
+    /// The camera over a box that fills `room`: left, top, width, height.
+    fn over(room: (f32, f32, f32, f32)) -> Camera {
+        let (left, top, width, height) = room;
+        // A wide room gets a wide box, so the front edge runs the width of
+        // the panel as every other chart's does.
+        let across = (width / height.max(1.0) * 1.2).clamp(2.0, 5.0);
+        let mut c = Camera { size: (across, 0.9, 2.0), scale: 1.0, origin: (0.0, 0.0) };
+        let mut lo = (f32::MAX, f32::MAX);
+        let mut hi = (f32::MIN, f32::MIN);
+        for k in 0..8 {
+            let p = c.project((k & 1) as f32, ((k >> 1) & 1) as f32, ((k >> 2) & 1) as f32);
+            lo = (lo.0.min(p.x), lo.1.min(p.y));
+            hi = (hi.0.max(p.x), hi.1.max(p.y));
+        }
+        c.scale = (width / (hi.0 - lo.0)).min(height / (hi.1 - lo.1));
+        c.origin = (
+            left + (width - (hi.0 - lo.0) * c.scale) / 2.0 - lo.0 * c.scale,
+            top + (height - (hi.1 - lo.1) * c.scale) / 2.0 - lo.1 * c.scale,
+        );
+        c
+    }
+
+    fn project(&self, u: f32, v: f32, w: f32) -> iced::Point {
+        let (x, y, z) = (
+            (u - 0.5) * self.size.0,
+            (v - 0.5) * self.size.1,
+            (w - 0.5) * self.size.2,
+        );
+        let (sy, cy) = FALL_YAW.sin_cos();
+        let (sp, cp) = FALL_PITCH.sin_cos();
+        let (x, z) = (x * cy - z * sy, x * sy + z * cy);
+        // From above: what is further back is higher up the screen.
+        let (y, z) = (y * cp + z * sp, z * cp - y * sp);
+        let d = FALL_DISTANCE + z;
+        iced::Point::new(
+            self.origin.0 + self.scale * x / d,
+            self.origin.1 - self.scale * y / d,
+        )
+    }
+}
+
+/// Where a bin of a row is across the box: long periods on the left, on a
+/// logarithmic axis, as the spectrum above it has them.
+fn fall_u(bin: usize, bins: usize) -> f32 {
+    ((bin + 1) as f32).ln() / (bins.max(2) as f32).ln()
+}
+
+/// The colour of a place across the box: violet at the long periods,
+/// through the rainbow, to red at the short.
+///
+/// THE COLOUR SAYS WHERE, NOT HOW LOUD. How loud is the height. A spike
+/// seen from above and behind forty others has lost its foot, and its
+/// colour is what still says which period it is standing on.
+fn fall_colour(u: f32, alpha: f32) -> Color {
+    let hue = 270.0 * (1.0 - u.clamp(0.0, 1.0));
+    let (c, m) = (0.9f32, 0.1f32);
+    let x = c * (1.0 - ((hue / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (hue / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        _ => (x, 0.0, c),
+    };
+    Color { r: r + m, g: g + m, b: b + m, a: alpha }
+}
 
 /// One dial at its smallest: the face, the space it is given.
 ///
@@ -335,10 +506,23 @@ fn layer_floor(window: usize, shortest: usize, longest: usize) -> f64 {
 }
 
 /// The ladder's two ends, which everything above is worked out from.
+///
+/// OF THE WINDOWS THAT HAVE ANSWERED. The longest is nine hours, and until
+/// nine hours have been counted it has nothing to draw: an axis that ran out
+/// to it anyway gave the left third of the panel to a window that was not
+/// there, and squeezed the two that were into what was left. So the axis
+/// ends at the longest window with a spectrum in it, and grows a step when
+/// the next one has its first -- to 8m 32s, then 1h 8m, then 9h 6m.
+///
+/// Before any has answered there is nothing drawn, and the ends are the
+/// shortest window's, which is the one that will.
 fn ladder_ends(layers: &[Layer]) -> (usize, usize) {
+    let answered = || layers.iter().filter(|l| !l.rel.is_empty()).map(|l| l.window);
     let shortest = layers.iter().map(|l| l.window).min().unwrap_or(2);
-    let longest = layers.iter().map(|l| l.window).max().unwrap_or(2);
-    (shortest, longest)
+    (
+        answered().min().unwrap_or(shortest),
+        answered().max().unwrap_or(shortest),
+    )
 }
 
 /// Where the socket is, when it is not where it usually is.
@@ -730,6 +914,12 @@ struct Snapshot {
     samples: i64,
     every: i64,
     layers: Vec<Layer>,
+    /// The waterfall's rows, newest first; how many have ever been taken;
+    /// the seconds since the newest, and until the first.
+    fall: Arc<Vec<Vec<f32>>>,
+    fall_made: u64,
+    fall_age: usize,
+    fall_wait: usize,
     /// Which tube drew it, the line, when, and whether its spectrum was
     /// flat at the time. An emission is an audit record of ONE source.
     random: Option<(usize, String, String, bool)>,
@@ -839,6 +1029,8 @@ impl App {
         };
 
         let tubes = s.tubes();
+        // Whether there is room for the waterfall under the spectrum.
+        let falls = self.size.height >= FALL_ROOM;
         // How big the instruments are in this window. Everything about the
         // cluster is measured from it, on the canvas and in the widgets
         // alike, so the two cannot drift apart.
@@ -870,15 +1062,21 @@ impl App {
             }
             col.into()
         } else {
-            mono(format!(
-                "{} tubes \u{b7} {} \u{b7} {} \u{2026} {}",
-                tubes,
-                firmwares.into_iter().collect::<Vec<_>>().join(", "),
-                s.counters.first().map(|c| c.path.as_str()).unwrap_or(""),
-                s.counters.last().map(|c| c.path.as_str()).unwrap_or("")
-            ))
-            .size(10)
-            .color(self.skin.dim)
+            // The summary, and under it EVERY TUBE'S READING: a rig of nine
+            // is where one going quiet is least likely to be noticed.
+            column![
+                mono(format!(
+                    "{} tubes \u{b7} {} \u{b7} {} \u{2026} {}",
+                    tubes,
+                    firmwares.into_iter().collect::<Vec<_>>().join(", "),
+                    s.counters.first().map(|c| c.path.as_str()).unwrap_or(""),
+                    s.counters.last().map(|c| c.path.as_str()).unwrap_or("")
+                ))
+                .size(10)
+                .color(self.skin.dim),
+                mono(readings_line(&s.latest, tubes)).size(10).color(self.skin.dim),
+            ]
+            .spacing(0)
             .into()
         };
         // THE NAMEPLATE GOES IN THE CORNER, out of the way of everything that
@@ -960,6 +1158,10 @@ impl App {
             every: s.every,
             n: s.samples,
             layers: s.layers.clone(),
+            falls,
+            fall: s.fall.clone(),
+            fall_made: s.fall_made,
+            fall_age: s.fall_age,
         })
         .width(Fill)
         .height(Fill);
@@ -1159,42 +1361,11 @@ impl App {
         ]
         .spacing(1);
 
-        // ---- the scale, in the words the colours stand for --------------
-        //
-        // THE FACE IS FIXED NOW, SO THE LEGEND CAN BE. A moving range made a
-        // key useless -- the colour at a given angle meant something
-        // different a minute later -- and three decades that never move mean
-        // every band sits at the same place on every dial, for good. So the
-        // names are printed once, in their own colours, at the foot of the
-        // cluster: the dial says where the reading is and this says what the
-        // colour under it is called.
-        //
-        // A reading is not "above 240", it is a WARNING, and that is the
-        // whole reason the bands are named at all.
-        //
-        // The floors are the same constants the arcs, the ticks and every
-        // number on the panel are drawn from, so they cannot disagree.
-        let mut legend = row![
-            mono(format!("{:.0}\u{2013}{:.0} CPM \u{b7} log", DIAL_FLOOR, DIAL_CEIL))
-                .size(9)
-                .color(self.skin.faint),
-        ]
-        .spacing(8);
-        for b in Band::all() {
-            // THE LOWEST BAND HAS NO FLOOR WORTH PRINTING. `Attenuated` runs
-            // from zero counts, which is true and reads as a mistake beside a
-            // dial whose bottom stop is three: the name and the colour are
-            // the whole of what it has to say.
-            legend = legend.push(
-                mono(if b.floor() > 0.0 {
-                    format!("{} {:.0}", b.name(), b.floor())
-                } else {
-                    b.name().to_string()
-                })
-                .size(9)
-                .color(self.skin.colour(b)),
-            );
-        }
+        // THE KEY TO THE COLOURS IS NOT PRINTED HERE ANY MORE. It was a line
+        // under the dials -- the range, and each band's name and floor in
+        // its own colour -- and in half a screen it cost the strip a row to
+        // say what the README says once. The bands are where they were, on
+        // every dial and every bar; `Band` has their names.
 
         // ---- the cascade captions, over the tiers they describe ---------
         //
@@ -1263,19 +1434,6 @@ impl App {
         // Declaring the height makes it a filling child of a filling column,
         // which is what it always was, and the space is shared instead of
         // taken.
-        let panel = stack![
-            chart,
-            column![
-                container(row![dial_faces, Space::new().width(6.0), numbers].spacing(0))
-                    .height(Length::Fixed(band_h)),
-                legend,
-                caps,
-                Space::new().height(Fill),
-            ]
-            .spacing(0),
-        ]
-        .height(Fill);
-
         // ---- the spectrum's axis and its verdict ------------------------
         let (shortest, longest) = ladder_ends(&s.layers);
         let axis = row![
@@ -1285,6 +1443,81 @@ impl App {
             Space::new().width(Fill),
             mono(span_words(period_floor(shortest, longest))).size(10).color(self.skin.dim),
         ];
+
+        // ---- the waterfall's two lines, on its own dark ground ----------
+        //
+        // WHAT IT IS AND HOW FAR BACK IT GOES at its head, and the ends of
+        // its axis at its foot, under the corners of the front edge they
+        // are the ends of. The rows on show are `FALL_DEPTH` hops from
+        // front to back; the counts in them go a window further.
+        let lit = Color { a: 0.85, ..FALL_EDGE };
+        let fall_head = row![
+            Space::new().width(6.0),
+            mono(if s.fall_wait > 0 {
+                format!("FFT \u{b7} the first row in {}s", s.fall_wait)
+            } else {
+                format!(
+                    "FFT \u{b7} {}s a row, one every {}s \u{b7} {} back",
+                    FALL_WINDOW,
+                    FALL_HOP,
+                    span_words((FALL_DEPTH * FALL_HOP) as f64)
+                )
+            })
+            .size(10)
+            .wrapping(text::Wrapping::None)
+            .color(lit),
+            Space::new().width(Fill),
+            mono(format!(
+                "1.0 is flat \u{b7} luck reaches {:.1}, for {} rows",
+                analysis::chance_max_of(FALL_WINDOW / 2, 1.0),
+                FALL_WINDOW / (2 * FALL_HOP)
+            ))
+            .size(10)
+            .wrapping(text::Wrapping::None)
+            .color(Color { a: 0.85, ..FALL_LUCK }),
+            Space::new().width(6.0),
+        ];
+        let fall_foot = row![
+            Space::new().width(6.0),
+            mono(format!("{}s", FALL_WINDOW)).size(10).color(fall_colour(0.0, 1.0)),
+            Space::new().width(Fill),
+            mono("period \u{b7} log \u{b7} newest in front").size(10).color(lit),
+            Space::new().width(Fill),
+            mono("2s").size(10).color(fall_colour(1.0, 1.0)),
+            Space::new().width(6.0),
+        ];
+
+        let over = column![
+            container(row![dial_faces, Space::new().width(6.0), numbers].spacing(0))
+                .height(Length::Fixed(band_h)),
+        ]
+        .spacing(0);
+        // THE SAME ARITHMETIC AS THE CANVAS: see `regions`. Four lines and
+        // two spaces, the spaces sharing what is left.
+        let over = if falls {
+            over.push(container(caps).height(Length::Fixed(ROW_H)))
+                .push(Space::new().height(Length::FillPortion(UPPER_PARTS)))
+                .push(container(axis).height(Length::Fixed(ROW_H)))
+                .push(container(fall_head).height(Length::Fixed(ROW_H)))
+                .push(Space::new().height(Length::FillPortion(100 - UPPER_PARTS)))
+                .push(container(fall_foot).height(Length::Fixed(ROW_H)))
+        } else {
+            over.push(caps).push(Space::new().height(Fill))
+        };
+        let panel = stack![chart, over].height(Fill);
+        // Under the panel, where it was, when it is not over it.
+        let axis: Element<Message> = if falls {
+            Space::new().into()
+        } else {
+            row![
+                mono(span_words(longest as f64)).size(10).color(self.skin.dim),
+                Space::new().width(Fill),
+                mono("period \u{b7} log").size(10).color(self.skin.faint),
+                Space::new().width(Fill),
+                mono(span_words(period_floor(shortest, longest))).size(10).color(self.skin.dim),
+            ]
+            .into()
+        };
         // ---- the clock, the emission and its countdown, on ONE line -----
         //
         // FOUR LINES BECAME ONE, and the panel is denser for it. It used to
@@ -1309,38 +1542,60 @@ impl App {
         // least surprising fact it knows. A source that stops looking like
         // decay still marks the emission -- the hex turns warning-coloured --
         // and the audit page and `random --frames` carry the detail.
-        let stamp = mono(clock::format(clock::now(), "%Y-%m-%d %H:%M:%S"))
-            .size(10)
-            .color(self.skin.faint);
-        let countdown = mono(match &s.random {
+        //
+        // THE KEY IS NEVER BROKEN ACROSS TWO LINES. Side by side with another
+        // window this one is half a screen wide, and date, key and countdown
+        // together are wider than that: the key wrapped, and took a row from
+        // the charts to do it. So the others give way, in the order they can
+        // be spared -- see `foot_for` -- and nothing on this line wraps.
+        //
+        // THE LETTER IS WHOSE KEY IT IS. Every tube earns its own, from its
+        // own counts, when its own pool holds 256 bits: a tube that counts
+        // three times as fast earns three times as many. The newest is what
+        // is shown, so B here is not A left out -- it is B having been the
+        // last to finish. They cannot be spaced evenly without holding a
+        // key back or drawing one early, and the log has every one of both.
+        let countdown = match &s.random {
             // After a line has been drawn, the pool status IS the countdown
             // and needs no label in front of it.
             Some(_) => s.pool.clone(),
             None => format!("random \u{b7} {}", s.pool),
-        })
-        .size(10)
-        .color(self.skin.faint);
+        };
+        let foot = foot_for(
+            self.size.width - 22.0,
+            s.random.as_ref().map(|(_, hex, _, _)| hex.len()),
+            countdown.chars().count(),
+        );
+        let stamp = mono(clock::format(clock::now(), foot.stamp))
+            .size(FOOT_SIZE)
+            .wrapping(text::Wrapping::None)
+            .color(self.skin.faint);
+        let countdown = mono(if foot.countdown { countdown } else { String::new() })
+            .size(FOOT_SIZE)
+            .wrapping(text::Wrapping::None)
+            .color(self.skin.faint);
         let emission: Element<Message> = match &s.random {
             Some((who, hex, _at, suspect)) => row![
                 mono(format!("{} ", tube_name(*who)))
-                    .size(11)
+                    .size(KEY_SIZE)
+                    .wrapping(text::Wrapping::None)
                     .color(self.skin.tube(*who)),
-                mono(entropy::group_hex(hex))
-                    .size(11)
+                mono(if foot.grouped { entropy::group_hex(hex) } else { hex.clone() })
+                    .size(KEY_SIZE)
+                    .wrapping(text::Wrapping::None)
                     .color(if *suspect { self.skin.warn } else { self.skin.cyan }),
             ]
             .into(),
             None => Space::new().into(),
         };
-        let footline = row![
-            stamp,
-            Space::new().width(Fill),
-            emission,
-            Space::new().width(Fill),
-            countdown,
-        ]
-        .spacing(10)
-        .align_y(iced::Center);
+        let mut footline = row![].spacing(FOOT_GAP).align_y(iced::Center);
+        if !foot.stamp.is_empty() {
+            footline = footline.push(stamp).push(Space::new().width(Fill));
+        }
+        footline = footline.push(emission);
+        if foot.countdown {
+            footline = footline.push(Space::new().width(Fill)).push(countdown);
+        }
 
         // WHAT GOES FIRST WHEN THERE IS NO ROOM. A tiling compositor will
         // hand this window a quarter of a screen without asking, and
@@ -1377,7 +1632,7 @@ impl App {
             column![
                 who,
                 panel,
-                if want_axis { axis.into() } else { Element::from(Space::new()) },
+                if want_axis { axis } else { Element::from(Space::new()) },
                 footline,
                 table,
             ]
@@ -1386,6 +1641,62 @@ impl App {
         .padding(10)
         .into()
     }
+}
+
+/// The line under the charts: the sizes it is set in, the gap between its
+/// parts, and a character's width as a share of its size in MONO.
+const FOOT_SIZE: f32 = 10.0;
+const KEY_SIZE: f32 = 11.0;
+const FOOT_GAP: f32 = 10.0;
+const ADVANCE: f32 = 0.61;
+
+/// What that line has room for.
+#[derive(Debug, PartialEq, Clone, Copy)]
+struct Foot {
+    /// The clock's format: the date and the time, the time, or nothing.
+    stamp: &'static str,
+    countdown: bool,
+    /// The key in eights, with a space between them.
+    grouped: bool,
+}
+
+/// What fits in `width` beside a key of `key` hex digits, if there is one.
+///
+/// THE KEY IS WHAT THE LINE IS FOR, so it is the last to be touched. The
+/// countdown goes first: it says when this key will be replaced, which
+/// nobody copying it needs. Then the date, which the log table has; then the
+/// clock; and only then the spaces in the key itself. Narrower than that it
+/// runs off the edge, which is still one line.
+fn foot_for(width: f32, key: Option<usize>, countdown: usize) -> Foot {
+    const DATED: &str = "%Y-%m-%d %H:%M:%S";
+    const TIMED: &str = "%H:%M:%S";
+    let chars = |n: usize, size: f32| n as f32 * size * ADVANCE;
+    let Some(digits) = key else {
+        // No key yet: a date and a countdown, which fit in anything.
+        return Foot { stamp: DATED, countdown: true, grouped: true };
+    };
+    let eights = digits + digits.saturating_sub(1) / 8;
+    let ladder = [
+        Foot { stamp: DATED, countdown: true, grouped: true },
+        Foot { stamp: DATED, countdown: false, grouped: true },
+        Foot { stamp: TIMED, countdown: false, grouped: true },
+        Foot { stamp: "", countdown: false, grouped: true },
+        Foot { stamp: "", countdown: false, grouped: false },
+    ];
+    let needs = |f: &Foot| {
+        // The letter and its space, then the key.
+        let mut w = chars(2 + if f.grouped { eights } else { digits }, KEY_SIZE);
+        if !f.stamp.is_empty() {
+            // `%Y-%m-%d %H:%M:%S` prints nineteen characters, `%H:%M:%S` eight.
+            let n = if f.stamp == DATED { 19 } else { 8 };
+            w += chars(n, FOOT_SIZE) + 2.0 * FOOT_GAP;
+        }
+        if f.countdown {
+            w += chars(countdown, FOOT_SIZE) + 2.0 * FOOT_GAP;
+        }
+        w
+    };
+    *ladder.iter().find(|f| needs(f) <= width).unwrap_or(&ladder[4])
 }
 
 fn mono(s: impl text::IntoFragment<'static>) -> text::Text<'static> {
@@ -1397,7 +1708,11 @@ fn tube_name(k: usize) -> String {
     format!("{}", (b'A' + (k as u8 % 26)) as char)
 }
 
-/// A tube's newest second beside its serial, as a rate.
+/// A tube's newest second beside its serial, in counts.
+///
+/// CPS AND NOT CPM: the second times sixty can only be 0, 60 or 120, which
+/// reads as a broken average. The count is the clicks, and it changing is
+/// the data arriving.
 ///
 /// THE READING THE INTERLEAVE WAS GIVEN, not an average: what that tube said
 /// most recently, so two of them can be seen to agree or not. EMPTY, NOT
@@ -1406,9 +1721,17 @@ fn tube_name(k: usize) -> String {
 /// reading at all. The space is kept, so the line does not move.
 fn reading(counts: Option<u32>) -> String {
     match counts {
-        Some(c) => format!(" \u{b7} {:>5} CPM", c as u64 * 60),
+        Some(c) => format!(" \u{b7} {:>5} CPS", c),
         None => " ".repeat(12),
     }
+}
+
+/// Every tube's reading on one line, by its letter: `A     2 CPS   B ...`.
+fn readings_line(latest: &[Option<u32>], tubes: usize) -> String {
+    (0..tubes)
+        .map(|k| format!("{}{}", tube_name(k), reading(latest.get(k).copied().flatten())))
+        .collect::<Vec<_>>()
+        .join("  ")
 }
 
 /// The measured interleave, as the panel says it.
@@ -1498,14 +1821,34 @@ struct Chart {
     /// Absolute index of the newest sample, for the log-row ticks.
     n: i64,
     layers: Vec<Layer>,
+    /// Whether the waterfall is drawn, and what it is drawn from.
+    falls: bool,
+    fall: Arc<Vec<Vec<f32>>>,
+    fall_made: u64,
+    fall_age: usize,
+}
+
+/// What the canvas keeps between one drawing and the next.
+///
+/// THE WATERFALL IS SIX THOUSAND LINES AND CHANGES ONCE A SECOND; the
+/// needles are a dozen and change twelve times. Drawn together the six
+/// thousand were drawn twelve times a second to move a needle, which a
+/// graphics card does not notice and the software renderer in a virtual
+/// machine does. So the waterfall is kept, and drawn again only when a
+/// second has passed over it.
+#[derive(Default)]
+struct Kept {
+    fall: canvas::Cache,
+    /// Which row was newest and how old it was, when that was drawn.
+    of: std::cell::Cell<(u64, usize)>,
 }
 
 impl canvas::Program<Message> for Chart {
-    type State = ();
+    type State = Kept;
 
     fn draw(
         &self,
-        _state: &(),
+        kept: &Kept,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
@@ -1515,10 +1858,21 @@ impl canvas::Program<Message> for Chart {
         if bounds.width < 40.0 {
             return vec![frame.into_geometry()];
         }
+        let at = regions(bounds.height, self.cluster, self.falls);
         self.cluster(&mut frame);
-        self.cascade(&mut frame, bounds);
-        self.spectrum(&mut frame, bounds);
-        vec![frame.into_geometry()]
+        self.cascade(&mut frame, bounds, at.cascade);
+        self.spectrum(&mut frame, bounds, at.spectrum);
+        let Some(room) = at.fall else {
+            return vec![frame.into_geometry()];
+        };
+        if kept.of.get() != (self.fall_made, self.fall_age) {
+            kept.of.set((self.fall_made, self.fall_age));
+            kept.fall.clear();
+        }
+        let fall = kept.fall.draw(renderer, bounds.size(), |frame| {
+            self.waterfall(frame, bounds.width, room);
+        });
+        vec![fall, frame.into_geometry()]
     }
 }
 
@@ -1771,7 +2125,7 @@ impl Chart {
         }
     }
 
-    fn cascade(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
+    fn cascade(&self, frame: &mut canvas::Frame, bounds: Rectangle, room: (f32, f32)) {
         let total: usize = self.strip.iter().map(|t| t.columns).sum();
         if total == 0 {
             return;
@@ -1784,13 +2138,12 @@ impl Chart {
         // sink slowly; see PEAK_TAU.
         let peak = self.peak.max(1.0);
         let tick = 3.0f32;
-        let top = self.cluster;
         // WHATEVER IS LEFT, SPLIT THREE TO TWO. The panel grows with the
         // window rather than leaving a band of empty grey under the table,
         // and the cascade gets the larger share because it is the one people
-        // watch second by second.
-        let rest = (bounds.height - self.cluster - 4.0).max(40.0);
-        let height = (rest * CASCADE_SHARE - tick).max(1.0);
+        // watch second by second. See `regions`, which does the splitting.
+        let top = room.0;
+        let height = (room.1 - tick).max(1.0);
         let mut x0 = 0.0f32;
 
         for (ti, tier) in self.strip.iter().enumerate() {
@@ -1872,6 +2225,206 @@ impl Chart {
             }
             x0 += w;
         }
+
+        // THE TREND, OVER THE BARS IT IS THE MEAN OF. A line from the middle
+        // of each bar's top to the next, at the height of that bar taken
+        // with its neighbours -- see analysis::trend. One line across every
+        // tier, because the strip is one stretch of time; broken where
+        // nothing was measured, and not drawn over the interleave, whose
+        // bars are not a rate over time.
+        //
+        // DRAWN LAST AND IN THE COLOUR OF THE TEXT, which no bar has: the
+        // bars take the level colours and the tubes', and a line in any of
+        // those -- or in the readout's teal, which was tried -- is lost in
+        // the green it spends most of its time crossing. Under it a wider
+        // one in the panel's ground, so it can be followed across a bar.
+        let mut x0 = 0.0f32;
+        let mut runs: Vec<Vec<iced::Point>> = vec![Vec::new()];
+        for (tier, line) in self.strip.iter().zip(analysis::trend(&self.strip)) {
+            for (i, v) in line.iter().enumerate() {
+                match v {
+                    Some(v) => {
+                        let h = ((*v / peak) as f32).min(1.0) * height;
+                        runs.last_mut().unwrap().push(iced::Point::new(
+                            x0 + (i as f32 + 0.5) * bar,
+                            top + tick + height - h,
+                        ));
+                    }
+                    None if !runs.last().unwrap().is_empty() => runs.push(Vec::new()),
+                    None => {}
+                }
+            }
+            x0 += tier.columns as f32 * bar;
+        }
+        for run in runs.iter().filter(|r| r.len() > 1) {
+            let path = canvas::Path::new(|b| {
+                b.move_to(run[0]);
+                for p in &run[1..] {
+                    b.line_to(*p);
+                }
+            });
+            frame.stroke(
+                &path,
+                canvas::Stroke::default()
+                    .with_width(3.0)
+                    .with_color(Color { a: 0.55, ..self.skin.bg }),
+            );
+            frame.stroke(
+                &path,
+                canvas::Stroke::default()
+                    .with_width(1.3)
+                    .with_color(Color { a: 0.9, ..self.skin.fg }),
+            );
+        }
+    }
+
+    /// The waterfall: every spectrum of the last few minutes, one behind
+    /// another, in a glass box seen from in front and above.
+    ///
+    /// PERIOD ACROSS, POWER UP, TIME BACK. The newest row is at the front
+    /// edge and each one behind it is eight seconds older. A row on its own
+    /// is noise and looks it; a period is a spike in the same place in row
+    /// after row, which from here is a line of tips running back into the
+    /// box -- and running further than luck's do, which is sixteen rows, a
+    /// third of the way. See `analysis::Waterfall`.
+    ///
+    /// DRAWN FROM THE BACK. There is no depth to sort by and none is
+    /// needed: the oldest row is drawn first and every newer one over it,
+    /// so what is in front is on top. The floor and the far edges of the
+    /// box go down before any of them and the near edges after all of
+    /// them, which is what puts the spikes inside the glass.
+    ///
+    /// AND IT SLIDES. A row's place is how many rows have come since, plus
+    /// the part of the next eight seconds that has gone; so the stack moves
+    /// back an eighth of a row each second and the new row arrives into
+    /// the gap it has made. Nothing else moves. The camera is `Camera`,
+    /// and it is three constants.
+    ///
+    /// ON A DARK FACE IN BOTH SKINS, as the dials are: the colours are a
+    /// rainbow, and a rainbow on paper is mostly yellow that cannot be
+    /// seen.
+    fn waterfall(&self, frame: &mut canvas::Frame, width: f32, room: (f32, f32)) {
+        use canvas::{Path, Stroke};
+        let (top, height) = room;
+        frame.fill_rectangle(
+            iced::Point::new(0.0, top),
+            iced::Size::new(width, height),
+            self.skin.face,
+        );
+        // The stars, which are where they were last time: a fixed scramble.
+        let mut x = 0x9e3779b97f4a7c15u64;
+        for _ in 0..48 {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            let (a, b) = (((x >> 40) & 0xffff) as f32 / 65535.0, ((x >> 20) & 0xffff) as f32 / 65535.0);
+            frame.fill_rectangle(
+                iced::Point::new(a * (width - 1.0), top + b * (height - 1.0)),
+                iced::Size::new(1.0, 1.0),
+                Color { a: 0.15 + 0.3 * ((x >> 8) & 0xff) as f32 / 255.0, ..FALL_TIP },
+            );
+        }
+        // A line of text at the head and one at the foot are the widgets'.
+        if height < 4.0 * ROW_H || width < 80.0 {
+            return;
+        }
+        let cam = Camera::over((8.0, top + ROW_H + 2.0, width - 16.0, height - 2.0 * ROW_H - 4.0));
+        let line = |frame: &mut canvas::Frame, a: (f32, f32, f32), b: (f32, f32, f32),
+                    w: f32, tint: Color| {
+            frame.stroke(
+                &Path::line(cam.project(a.0, a.1, a.2), cam.project(b.0, b.1, b.2)),
+                Stroke::default().with_width(w).with_color(tint),
+            );
+        };
+        let glass = |a: f32| Color { a, ..FALL_EDGE };
+        let bins = self.fall.first().map(|r| r.len()).unwrap_or(FALL_WINDOW / 2 - 1);
+
+        // The floor: a line back at every doubling of the period, and
+        // across at every quarter of the depth.
+        let mut period = 1usize;
+        while period <= bins {
+            let u = fall_u(period - 1, bins);
+            line(frame, (u, 0.0, 0.0), (u, 0.0, 1.0), 1.0, glass(0.16));
+            period *= 2;
+        }
+        for k in 0..=4 {
+            let w = k as f32 / 4.0;
+            line(frame, (0.0, 0.0, w), (1.0, 0.0, w), 1.0, glass(0.16));
+        }
+        // The far edges: the back of the box, and the floor's two sides.
+        for (a, b) in [
+            ((0.0, 0.0, 1.0), (0.0, 1.0, 1.0)),
+            ((1.0, 0.0, 1.0), (1.0, 1.0, 1.0)),
+            ((0.0, 1.0, 1.0), (1.0, 1.0, 1.0)),
+            ((0.0, 0.0, 0.0), (0.0, 0.0, 1.0)),
+            ((1.0, 0.0, 0.0), (1.0, 0.0, 1.0)),
+        ] {
+            line(frame, a, b, 1.0, glass(0.45));
+        }
+
+        // The rows, oldest first.
+        let slide = (self.fall_age as f32 / FALL_HOP as f32).min(1.0);
+        let luck = radbeeper::analysis::chance_max_of(FALL_WINDOW / 2, 1.0) as f32;
+        const SHADES: usize = 12;
+        for (k, row) in self.fall.iter().enumerate().rev() {
+            let w = (k as f32 + slide) / FALL_DEPTH as f32;
+            if w > 1.0 {
+                // It has slid out of the back of the box.
+                continue;
+            }
+            // Further is fainter, as it is through air.
+            let alpha = 1.0 - 0.7 * w;
+            // A path for each shade of the rainbow, and one for the spikes
+            // that clear the line: fourteen strokes a row and not 127.
+            let mut shades: Vec<canvas::path::Builder> =
+                (0..SHADES).map(|_| canvas::path::Builder::new()).collect();
+            let mut tips = canvas::path::Builder::new();
+            let mut any = false;
+            for (i, v) in row.iter().enumerate() {
+                if *v <= 0.0 {
+                    continue;
+                }
+                let u = fall_u(i, bins);
+                let foot = cam.project(u, 0.0, w);
+                let tip = cam.project(u, (*v / FALL_TOP).min(1.0), w);
+                let b = &mut shades[((u * SHADES as f32) as usize).min(SHADES - 1)];
+                b.move_to(foot);
+                b.line_to(tip);
+                if *v > luck {
+                    tips.move_to(foot);
+                    tips.line_to(tip);
+                    any = true;
+                }
+            }
+            for (j, b) in shades.into_iter().enumerate() {
+                frame.stroke(
+                    &b.build(),
+                    Stroke::default()
+                        .with_width(1.0)
+                        .with_color(fall_colour((j as f32 + 0.5) / SHADES as f32, alpha)),
+                );
+            }
+            // OVER THE LINE, THICKER AND NEARLY WHITE: a period is a bright
+            // line of these going back, and chance is one of them alone.
+            if any {
+                frame.stroke(
+                    &tips.build(),
+                    Stroke::default().with_width(2.0).with_color(Color { a: alpha, ..FALL_TIP }),
+                );
+            }
+        }
+
+        // The line luck reaches, across the front; and the near edges.
+        let at = luck / FALL_TOP;
+        line(frame, (0.0, at, 0.0), (1.0, at, 0.0), 1.0, Color { a: 0.85, ..FALL_LUCK });
+        for (a, b) in [
+            ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0)),
+            ((0.0, 0.0, 0.0), (0.0, 1.0, 0.0)),
+            ((1.0, 0.0, 0.0), (1.0, 1.0, 0.0)),
+            ((0.0, 1.0, 0.0), (1.0, 1.0, 0.0)),
+            ((0.0, 1.0, 0.0), (0.0, 1.0, 1.0)),
+            ((1.0, 1.0, 0.0), (1.0, 1.0, 1.0)),
+        ] {
+            line(frame, a, b, 1.0, glass(0.7));
+        }
     }
 
     /// The overlay: three spectra on one logarithmic period axis.
@@ -1888,13 +2441,17 @@ impl Chart {
     /// third alpha in one primary, so two layers agreeing read as a blend and
     /// a lone spike keeps its own colour and announces which window it came
     /// from.
-    fn spectrum(&self, frame: &mut canvas::Frame, bounds: Rectangle) {
-        let rest = (bounds.height - self.cluster - 4.0).max(40.0);
-        let top = self.cluster + rest * CASCADE_SHARE + 4.0;
-        // A MARGIN AT THE FOOT. The canvas fills its share and the readouts
-        // sit under it, so a spectrum drawn to the last pixel puts its tallest
-        // bars through the emission line on a squeezed window.
-        let h = (bounds.height - top - 6.0).max(1.0);
+    ///
+    /// HUNG FROM THE FLOOR OF THE COUNTS, bars downward. The two charts share
+    /// an edge now: the counts stand on it and the spectrum hangs from it,
+    /// so the loudest period is the longest bar down and the quiet ones stay
+    /// up against the line. Standing on its own floor it left a band of
+    /// nothing between the two, which was the tallest empty thing on the
+    /// panel.
+    fn spectrum(&self, frame: &mut canvas::Frame, bounds: Rectangle, room: (f32, f32)) {
+        // A pixel under the counts' floor, so the two do not touch: see
+        // `regions`.
+        let (top, h) = room;
         let live: Vec<&Layer> = self.layers.iter().filter(|l| !l.rel.is_empty()).collect();
         if live.is_empty() {
             return;
@@ -1932,7 +2489,7 @@ impl Chart {
         // before it means anything at all.
         let luck = live.iter().map(|l| l.luck).fold(f64::INFINITY, f64::min);
         if luck.is_finite() {
-            let y = top + h - (luck / peak) as f32 * h;
+            let y = top + (luck / peak) as f32 * h;
             frame.fill_rectangle(
                 iced::Point::new(0.0, y),
                 iced::Size::new(bounds.width, 1.0),
@@ -1972,7 +2529,7 @@ impl Chart {
                 }
                 let bh = (*v / peak) as f32 * h;
                 frame.fill_rectangle(
-                    iced::Point::new(x as f32, top + h - bh),
+                    iced::Point::new(x as f32, top),
                     iced::Size::new(1.0, bh),
                     Color { a: self.skin.layer_alpha, ..tint },
                 );
@@ -2047,6 +2604,10 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                 let mut all = Windows::new(&id.spans);
                 let mut ladder: Vec<Spectrum> =
                     LADDER.iter().map(|w| Spectrum::new(*w)).collect();
+                // The same seconds, a row at a time. The rows are shared
+                // with the interface and made again only when one arrives.
+                let mut fall = Waterfall::new(FALL_WINDOW, FALL_HOP, FALL_DEPTH);
+                let mut fall_rows: Arc<Vec<Vec<f32>>> = Arc::new(Vec::new());
                 let mut pool = entropy::Entropy::default();
                 // The samples in ARRIVAL order, as rates, which is what the
                 // cascade is cut from. One counter is one bar a second; two
@@ -2159,6 +2720,9 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                                         // meters no longer wait for this.
                                         for r in ladder.iter_mut() {
                                             r.add(sec_sum);
+                                        }
+                                        if fall.add(sec_sum) {
+                                            fall_rows = Arc::new(fall.rows());
                                         }
                                         sec_bin = Some(this);
                                         sec_sum = counts;
@@ -2365,6 +2929,10 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                                 }
                             })
                             .collect(),
+                        fall: fall_rows.clone(),
+                        fall_made: fall.made,
+                        fall_age: fall.age(),
+                        fall_wait: fall.wait(),
                         random: random.clone(),
                         pool: entropy::pool_status(&pool, "next in "),
                         rows: rows.iter().cloned().collect(),
@@ -2675,13 +3243,102 @@ mod tests {
     #[test]
     fn the_panel_prints_the_gap_and_what_it_is_worth() {
         assert_eq!(phase_note(0.5, 2), "\u{b7} interleave 0.50s (100%)");
-        // Beside the serial: the tube's newest second, as a rate; and for a
+        // Beside the serial: the tube's newest second, in counts; and for a
         // tube that is not answering, the same width of nothing.
-        assert_eq!(reading(Some(2)), " \u{b7}   120 CPM");
-        assert_eq!(reading(Some(0)), " \u{b7}     0 CPM");
+        assert_eq!(reading(Some(2)), " \u{b7}     2 CPS");
+        assert_eq!(reading(Some(0)), " \u{b7}     0 CPS");
         assert_eq!(reading(None), " ".repeat(12));
         assert_eq!(reading(None).chars().count(), reading(Some(0)).chars().count());
+        assert_eq!(
+            readings_line(&[Some(2), None, Some(0)], 3),
+            "A \u{b7}     2 CPS  B              C \u{b7}     0 CPS"
+        );
         assert_eq!(phase_note(0.24, 9), "\u{b7} interleave 0.24s (46%)");
+    }
+
+    /// The charts share the canvas without one drawing on another, and the
+    /// waterfall is where the widgets over it are laid out to be.
+    #[test]
+    fn the_canvas_is_cut_into_charts_that_do_not_overlap() {
+        for (height, cluster) in [(604.0f32, 185.0f32), (460.0, 170.0), (1000.0, 240.0)] {
+            let r = regions(height, cluster, true);
+            let (fall_top, fall_h) = r.fall.unwrap();
+            assert_eq!(r.cascade.0, cluster);
+            assert!(r.cascade.0 + r.cascade.1 <= r.spectrum.0);
+            // The spectrum's axis is a line of text between them.
+            assert!(r.spectrum.0 + r.spectrum.1 <= fall_top - ROW_H);
+            assert!((fall_top + fall_h - height).abs() < 1e-3);
+            // The column over the canvas: the dials, a line, a space that
+            // is `UPPER_PARTS` of what four lines leave, and the axis.
+            let shared = height - cluster - 4.0 * ROW_H;
+            let axis = cluster + ROW_H + shared * UPPER_PARTS as f32 / 100.0;
+            assert!((fall_top - ROW_H - axis).abs() < 1e-3);
+        }
+        // Without one, the two charts have the canvas as they had.
+        let r = regions(600.0, 180.0, false);
+        assert_eq!(r.fall, None);
+        assert!((r.cascade.1 - 416.0 * CASCADE_SHARE).abs() < 1e-3);
+    }
+
+    /// The camera is fixed, and what it sees is a box in perspective: the
+    /// back is smaller than the front and higher up the screen, and all of
+    /// it is inside the room it was given.
+    #[test]
+    fn the_box_is_seen_from_in_front_and_above() {
+        let room = (8.0f32, 300.0f32, 600.0f32, 160.0f32);
+        let cam = Camera::over(room);
+        let front = cam.project(1.0, 0.0, 0.0).x - cam.project(0.0, 0.0, 0.0).x;
+        let back = cam.project(1.0, 0.0, 1.0).x - cam.project(0.0, 0.0, 1.0).x;
+        assert!(back > 0.0 && back < front, "front {} back {}", front, back);
+        assert!(cam.project(0.5, 0.0, 1.0).y < cam.project(0.5, 0.0, 0.0).y);
+        assert!(cam.project(0.5, 1.0, 0.0).y < cam.project(0.5, 0.0, 0.0).y);
+        for k in 0..8 {
+            let p = cam.project((k & 1) as f32, ((k >> 1) & 1) as f32, ((k >> 2) & 1) as f32);
+            assert!(p.x >= room.0 - 0.01 && p.x <= room.0 + room.2 + 0.01, "{:?}", p);
+            assert!(p.y >= room.1 - 0.01 && p.y <= room.1 + room.3 + 0.01, "{:?}", p);
+        }
+        // The same point is the same place, every time it is asked.
+        assert_eq!(Camera::over(room).project(0.3, 0.4, 0.5), cam.project(0.3, 0.4, 0.5));
+    }
+
+    /// Long periods on the left and short on the right, violet to red.
+    #[test]
+    fn a_bin_is_placed_and_coloured_by_its_period() {
+        assert_eq!(fall_u(0, 127), 0.0);
+        assert!((fall_u(126, 127) - 1.0).abs() < 1e-6);
+        // Half way across is the square root of the way down the bins.
+        assert!((fall_u(10, 127) - 0.495).abs() < 0.01);
+        let (violet, red) = (fall_colour(0.0, 1.0), fall_colour(1.0, 1.0));
+        assert!(violet.b > 0.9 && violet.g < 0.2 && violet.r > 0.4);
+        assert!(red.r > 0.9 && red.g < 0.2 && red.b < 0.2);
+    }
+
+    /// The period axis ends at the longest window that has a spectrum, and
+    /// not at one that is nine hours from its first.
+    #[test]
+    fn the_axis_reaches_as_far_as_has_been_measured() {
+        let layer = |window, n| Layer { window, rel: vec![1.0; n], luck: 1.0 };
+        assert_eq!(ladder_ends(&[layer(512, 0), layer(4096, 0), layer(32768, 0)]), (512, 512));
+        assert_eq!(ladder_ends(&[layer(512, 9), layer(4096, 0), layer(32768, 0)]), (512, 512));
+        assert_eq!(ladder_ends(&[layer(512, 9), layer(4096, 9), layer(32768, 0)]), (512, 4096));
+        assert_eq!(ladder_ends(&[layer(512, 9), layer(4096, 9), layer(32768, 9)]), (512, 32768));
+    }
+
+    /// Half a screen beside another window is 626 wide, and the key is one
+    /// line in it: the countdown and the date are what give way.
+    #[test]
+    fn the_key_keeps_its_line_and_the_rest_gives_way() {
+        let wide = foot_for(1258.0, Some(64), 12);
+        assert_eq!((wide.stamp, wide.countdown, wide.grouped), ("%Y-%m-%d %H:%M:%S", true, true));
+        let half = foot_for(626.0 - 22.0, Some(64), 12);
+        assert_eq!((half.stamp, half.countdown, half.grouped), ("%H:%M:%S", false, true));
+        let narrow = foot_for(500.0, Some(64), 12);
+        assert_eq!((narrow.stamp, narrow.countdown, narrow.grouped), ("", false, true));
+        let quarter = foot_for(373.0 - 22.0, Some(64), 12);
+        assert_eq!((quarter.stamp, quarter.countdown, quarter.grouped), ("", false, false));
+        // Before the first key there is nothing to make room for.
+        let none = foot_for(373.0 - 22.0, None, 21);
+        assert!(none.countdown && !none.stamp.is_empty());
         assert_eq!(phase_note(0.0, 2), "\u{b7} interleave 0.00s (0%)");
     }
 
