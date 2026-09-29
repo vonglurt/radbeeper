@@ -59,7 +59,7 @@ worth keeping.
 | `seconds`, `tube_seconds` | the wall clock the row covers, and the instrument-time behind it — with *n* tubes the second is *n* times the first, which is the whole arithmetic of a merge in two numbers |
 | `cps` | **merged**: counts over *tube*-seconds, the rate of the room |
 | `cps_raw` | counts over wall seconds, the arrival rate at the machine |
-| `cpm_3` … , `sigma_30`, `peak_*` | the combined windows, and what a second tube actually buys |
+| `cpm_3` … , `sigma_30`, `peak_*` | the combined windows, and what a second tube actually buys. Each is counts over the tube-seconds *that window* holds, so a tube that stopped answering is not divided by: see `tubes` for how many reported in the row, which is no longer what the division was |
 | `per_tube` | `SERIAL=counts` for each, so the merge can be taken apart again |
 
 **Two tubes do not double the dose — what doubles is the evidence.** `cps` is

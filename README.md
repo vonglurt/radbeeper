@@ -307,6 +307,9 @@ double the dose — what doubles is the evidence:
 | **The precision is what improves** | Poisson error is 1/sqrt(N), so twice the counts is a factor of root two better. The window prints it: `452 CPM +-21 (4.7%)`. |
 | **The cascade grows one more tier** | Counters on their own clocks interleave, so the strip ends in a tier of *arrival* rather than of time — `1/2` of a second with two tubes, `1/9` with nine — drawn in each tube's own colour. |
 | **And a merged record is kept** | `cpm-merged-YYYY-MM.tsv`, beside the per-counter files: the raw arrivals, the rate of the room, and the interleave. See [the log](docs/the-log.md). |
+| **A tube that stops is left out** | The mean is the counts over the *tube-seconds that took them*, not over the tubes plugged in. A counter whose USB port resets is out of the mean and out of the interleave from the second it goes quiet, and the room reads what it read. |
+| **And comes back by itself** | Once a log cycle the port is asked again, on a thread of its own so nothing waits for a counter that is not answering. It returns to its own slot, its own colour and its own log. |
+| **Each says what it last counted** | The top row names every tube by its serial, and beside it that tube's newest second as a rate — the reading the interleave was given. A tube that is not answering shows **nothing, not nought**: a nought is a second it listened to. |
 
 **The interleave is measured, not assumed.** Two counters only sharpen *time* if
 they disagree about when a second starts, and neither clock can be steered, so

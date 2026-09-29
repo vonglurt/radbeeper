@@ -15,6 +15,9 @@ pub struct Windows {
     pub total: u64,
     started: Option<f64>,
     sums: Vec<u64>,
+    /// How many samples each window holds. A sample is one second of one
+    /// tube, so this is the TUBE-SECONDS behind the sum beside it.
+    held: Vec<u64>,
     heads: Vec<usize>,
     base: usize,
 }
@@ -27,6 +30,7 @@ impl Windows {
             total: 0,
             started: None,
             sums: vec![0; spans.len()],
+            held: vec![0; spans.len()],
             heads: vec![0; spans.len()],
             base: 0,
         }
@@ -40,6 +44,7 @@ impl Windows {
         self.total += counts as u64;
         for i in 0..self.spans.len() {
             self.sums[i] += counts as u64;
+            self.held[i] += 1;
             let cutoff = when - self.spans[i];
             let mut head = self.heads[i];
             while head - self.base < self.samples.len() {
@@ -48,6 +53,7 @@ impl Windows {
                     break;
                 }
                 self.sums[i] -= c as u64;
+                self.held[i] -= 1;
                 head += 1;
             }
             self.heads[i] = head;
@@ -83,6 +89,49 @@ impl Windows {
         }
         let i = self.spans.iter().position(|&s| s == span)?;
         Some(self.sums[i] as f64 * 60.0 / span)
+    }
+
+    /// The counts in the last `span` seconds and the tube-seconds that took
+    /// them, or None until the window is full.
+    pub fn behind(&self, span: f64) -> Option<(u64, u64)> {
+        if self.samples.is_empty() || self.elapsed() < span {
+            return None;
+        }
+        let i = self.spans.iter().position(|&s| s == span)?;
+        Some((self.sums[i], self.held[i]))
+    }
+
+    /// The rate of the ROOM over the last `span` seconds, in CPM, from
+    /// windows that hold the samples of several tubes.
+    ///
+    /// COUNTS OVER THE TUBE-SECONDS THAT TOOK THEM, not over the seconds on
+    /// the clock times the tubes plugged in. Those are the same number while
+    /// every tube answers every second. They stop being the same the moment
+    /// one does not -- a counter whose USB port reset, a reader that missed
+    /// four seconds -- and then a divisor taken from the tube count goes on
+    /// dividing by an instrument that was not measuring: two tubes, one of
+    /// them silent, reported half the room. The windows know how many
+    /// samples they hold, and a sample is one second of one tube, so the
+    /// divisor is what was measured and nothing else.
+    ///
+    /// A tube that leaves is therefore out of the mean from the second it
+    /// goes quiet, and in it again from the second it answers, with nothing
+    /// to tell either time.
+    pub fn mean(&self, span: f64) -> Option<f64> {
+        let (counts, seconds) = self.behind(span)?;
+        (seconds > 0).then(|| counts as f64 * 60.0 / seconds as f64)
+    }
+
+    /// One sigma on `mean`, in CPM.
+    ///
+    /// Arrivals are Poisson, so the uncertainty is the count behind the
+    /// number and nothing else: N arrivals give a relative error of
+    /// 1/sqrt(N). N is the counts the window holds -- from however many
+    /// tubes were answering, for however long each was.
+    pub fn sigma(&self, span: f64) -> Option<f64> {
+        let (counts, _) = self.behind(span)?;
+        let cpm = self.mean(span)?;
+        (counts > 0).then(|| cpm / (counts as f64).sqrt())
     }
 }
 
@@ -713,6 +762,149 @@ pub fn tiers_interleaved(
     }
     out.reverse();
     out
+}
+
+/// One sample as it arrived: which tube, when, and what it counted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Arrival {
+    pub who: usize,
+    pub when: f64,
+    pub counts: u32,
+}
+
+/// A strip, and which tube drew each bar of its interleave tier.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Strip {
+    /// Coarsest first, as `tiers_interleaved` gives them.
+    pub tiers: Vec<Tier>,
+    /// One per bar of the last tier, when that tier is the interleave:
+    /// the tube the bar is a reading of. Empty when there is no interleave.
+    pub sources: Vec<Option<u8>>,
+    /// How many tubes are in the interleave: the ones answering.
+    pub live: usize,
+}
+
+/// A tube that has not been heard from for this long is not answering.
+///
+/// A sample comes once a second, and a reader gives a counter two and a half
+/// before it calls it gone. The same figure here, so the display and the
+/// reader agree about which tubes there are.
+pub const QUIET_AFTER: f64 = 2.5;
+
+/// The cascade for several tubes, some of which may have stopped answering.
+///
+/// BY THE CLOCK, NOT BY THE COUNT. `tiers_interleaved` takes a second to be
+/// `tubes` samples, which it is for as long as every tube reports every
+/// second. When one stops, the samples arrive at half the pace and the strip
+/// goes on cutting them in pairs: a bar labelled one second holds two, the
+/// whole history stretches, and the interleave tier shows one tube taking
+/// turns with itself. So a bar here is the wall seconds it says it is -- the
+/// mean, per tube-second, of whatever was measured in them -- and a second
+/// in which nothing was measured is empty rather than nought.
+///
+/// THE INTERLEAVE IS THE TUBES THAT ARE ANSWERING. One that has gone quiet
+/// is left out of it, and the tier's unit is 1/n for the n that are left;
+/// with one left there is nothing to interleave and the tier is not drawn.
+/// A tube that comes back is in it again with its first sample.
+pub fn tiers_arrivals(arrivals: &[Arrival], live: &[bool], width: usize) -> Strip {
+    if width == 0 || arrivals.is_empty() {
+        return Strip::default();
+    }
+    let newest = arrivals.iter().map(|a| a.when).fold(f64::MIN, f64::max);
+    let answering = |who: usize| live.get(who).copied().unwrap_or(false);
+    let n = live.iter().filter(|l| **l).count();
+    let last = newest.floor() as i64;
+    let first = arrivals.iter().map(|a| a.when).fold(f64::MAX, f64::min).floor() as i64;
+
+    // Whole seconds: what was counted in each, and by how many samples.
+    let span = (last - first + 1).max(1) as usize;
+    let mut sum = vec![0u64; span];
+    let mut held = vec![0u32; span];
+    for a in arrivals {
+        let k = (a.when.floor() as i64 - first) as usize;
+        sum[k] += a.counts as u64;
+        held[k] += 1;
+    }
+    // The mean over a run of seconds, per tube-second; None where nothing
+    // in the run was measured.
+    let mean = |lo: i64, hi: i64| -> Option<f64> {
+        let (lo, hi) = (lo.max(first), hi.min(last + 1));
+        if hi <= lo {
+            return None;
+        }
+        let (mut c, mut s) = (0u64, 0u64);
+        for t in lo..hi {
+            c += sum[(t - first) as usize];
+            s += held[(t - first) as usize] as u64;
+        }
+        (s > 0).then(|| c as f64 / s as f64)
+    };
+
+    let mut tiers = Vec::new();
+    let mut sources = Vec::new();
+    let mut rest = width;
+    // Where the aggregating tiers end: at the second happening now, or --
+    // when there is an interleave -- where the interleave begins.
+    let mut b = last + 1;
+    if n > 1 {
+        let cols = (INTERLEAVE_SECONDS * n).clamp(1, width.saturating_sub(TIERS).max(1));
+        // The newest arrivals of the tubes that are answering, and no older
+        // than the tier is long: a tube that came back a moment ago must
+        // not bring the second it left in with it.
+        let since = newest - INTERLEAVE_SECONDS as f64;
+        let mut fresh: Vec<&Arrival> = arrivals
+            .iter()
+            .filter(|a| answering(a.who) && a.when > since)
+            .collect();
+        fresh.sort_by(|x, y| x.when.partial_cmp(&y.when).unwrap_or(std::cmp::Ordering::Equal));
+        let fresh: Vec<&Arrival> = fresh.into_iter().rev().take(cols).rev().collect();
+        let pad = cols - fresh.len();
+        let mut values: Vec<Option<f64>> = vec![None; pad];
+        sources = vec![None; pad];
+        for a in fresh {
+            values.push(Some(a.counts as f64));
+            sources.push(Some(a.who.min(255) as u8));
+        }
+        tiers.push(Tier { columns: cols, seconds: 1.0 / n as f64, values });
+        rest = width - cols;
+        b = last + 1 - INTERLEAVE_SECONDS as i64;
+    }
+    let q = rest / TIERS;
+    let extra = rest - q * TIERS;
+    let mut step = 1i64;
+    for t in 0..TIERS {
+        let c = (q + if t == 0 { extra } else { 0 }) as i64;
+        // Bar edges on whole multiples of the step, so a bar does not change
+        // as the strip scrolls under it -- only the newest one does.
+        let top = (b - 1).div_euclid(step);
+        let values: Vec<Option<f64>> = (0..c)
+            .map(|j| {
+                let g = top - c + 1 + j;
+                mean(g * step, (g * step + step).min(b))
+            })
+            .collect();
+        b = (top - c + 1) * step;
+        tiers.push(Tier { columns: c as usize, seconds: step as f64, values });
+        step *= 2;
+    }
+    tiers.reverse();
+    Strip { tiers, sources, live: n }
+}
+
+/// Which tubes are answering at `now`, from when each was last heard.
+///
+/// `gone` is what the reader said: a tube it has given up on is not
+/// answering however recently it spoke. A tube it has not given up on is
+/// still not answering if it has been quiet for `QUIET_AFTER`.
+pub fn answering(heard: &[Option<f64>], gone: &[bool], now: f64) -> Vec<bool> {
+    heard
+        .iter()
+        .enumerate()
+        .map(|(k, h)| {
+            !gone.get(k).copied().unwrap_or(false)
+                && h.map(|t| now - t <= QUIET_AFTER).unwrap_or(false)
+        })
+        .collect()
 }
 
 /// How long a bar covers, as a label: "8", "1", "1/2", "1/9".
@@ -1379,5 +1571,140 @@ mod tests {
             assert!(coarse.values.iter().all(|v| v.is_none()));
         }
         assert_eq!(t[TIERS - 1].values.iter().filter(|v| v.is_some()).count(), 3);
+    }
+
+    /// Two tubes in a room at 120 CPM: two counts a second each.
+    fn room(seconds: std::ops::Range<i64>, tubes: &[usize]) -> Vec<Arrival> {
+        let mut v = Vec::new();
+        for t in seconds {
+            for &k in tubes {
+                v.push(Arrival { who: k, when: t as f64 + 0.5 * k as f64, counts: 2 });
+            }
+        }
+        v
+    }
+
+    #[test]
+    fn a_tube_that_stops_is_out_of_the_mean_and_the_room_is_what_it_was() {
+        let mut w = Windows::new(&[30.0]);
+        for a in room(0..60, &[0, 1]) {
+            w.add(a.when, a.counts);
+        }
+        // Both answering: the mean is the room, and so is the old figure.
+        assert_eq!(w.mean(30.0), Some(120.0));
+        assert_eq!(w.average(30.0).map(|v| v / 2.0), Some(120.0));
+        // Tube 1 stops. Thirty seconds on, the window holds tube 0 alone.
+        for a in room(60..100, &[0]) {
+            w.add(a.when, a.counts);
+        }
+        assert_eq!(w.mean(30.0), Some(120.0));
+        // What the division by the tube count made of the same window.
+        assert_eq!(w.average(30.0).map(|v| v / 2.0), Some(60.0));
+        // Half the arrivals behind it, so root two the error.
+        assert_eq!(w.behind(30.0), Some((60, 30)));
+        let one = w.sigma(30.0).unwrap();
+        // And it comes back: the window fills with both again.
+        for a in room(100..140, &[0, 1]) {
+            w.add(a.when, a.counts);
+        }
+        assert_eq!(w.mean(30.0), Some(120.0));
+        assert_eq!(w.behind(30.0), Some((120, 60)));
+        let two = w.sigma(30.0).unwrap();
+        assert!((one / two - 2f64.sqrt()).abs() < 1e-9, "{one} {two}");
+    }
+
+    #[test]
+    fn a_window_a_tube_was_in_for_half_of_is_divided_by_what_was_measured() {
+        let mut w = Windows::new(&[30.0]);
+        for a in room(0..45, &[0, 1]) {
+            w.add(a.when, a.counts);
+        }
+        for a in room(45..60, &[0]) {
+            w.add(a.when, a.counts);
+        }
+        // The last thirty seconds: thirty samples of tube 0, and the sixteen
+        // of tube 1 that fall in them -- its are stamped on the half second.
+        assert_eq!(w.behind(30.0), Some((92, 46)));
+        assert_eq!(w.mean(30.0), Some(120.0));
+    }
+
+    #[test]
+    fn a_reader_that_missed_seconds_does_not_lower_the_room() {
+        let mut w = Windows::new(&[30.0]);
+        for a in room(0..90, &[0, 1]) {
+            // Tube 1's reader drops every third second.
+            if a.who == 1 && (a.when.floor() as i64) % 3 == 0 {
+                continue;
+            }
+            w.add(a.when, a.counts);
+        }
+        assert_eq!(w.mean(30.0), Some(120.0));
+    }
+
+    #[test]
+    fn the_strip_is_cut_by_the_clock() {
+        let both = room(1000..1100, &[0, 1]);
+        let s = tiers_arrivals(&both, &[true, true], 108);
+        assert_eq!(s.live, 2);
+        assert_eq!(s.tiers.len(), TIERS + 1);
+        let fine = s.tiers.last().unwrap();
+        assert_eq!((fine.columns, fine.seconds), (INTERLEAVE_SECONDS * 2, 0.5));
+        // Taking turns, and every bar a reading.
+        assert!(fine.values.iter().all(|v| *v == Some(2.0)));
+        let turns: Vec<u8> = s.sources.iter().flatten().copied().collect();
+        assert_eq!(turns, [0, 1, 0, 1, 0, 1, 0, 1]);
+        let second = &s.tiers[TIERS - 1];
+        assert_eq!(second.seconds, 1.0);
+        assert!(second.values.iter().all(|v| *v == Some(2.0)));
+    }
+
+    #[test]
+    fn a_tube_that_stops_leaves_the_interleave_and_the_seconds_stay_seconds() {
+        let mut a = room(1000..1060, &[0, 1]);
+        a.extend(room(1060..1100, &[0]));
+        let s = tiers_arrivals(&a, &[true, false], 100);
+        // One tube answering: nothing to interleave.
+        assert_eq!((s.live, s.tiers.len()), (1, TIERS));
+        assert!(s.sources.is_empty());
+        let second = s.tiers.last().unwrap();
+        assert_eq!((second.seconds, second.columns), (1.0, 25));
+        // Twenty-five bars are the last twenty-five SECONDS, all of them
+        // tube 0's alone, and the rate in each is the room's.
+        assert!(second.values.iter().all(|v| *v == Some(2.0)));
+        // The two-second tier reaches back across the moment it stopped:
+        // the same rate either side, because a bar is a mean per tube-second.
+        assert!(s.tiers[TIERS - 2].values.iter().all(|v| *v == Some(2.0)));
+    }
+
+    #[test]
+    fn a_tube_that_comes_back_is_in_the_interleave_with_its_first_sample() {
+        let mut a = room(1000..1060, &[0, 1]);
+        a.extend(room(1060..1098, &[0]));
+        a.extend(room(1098..1100, &[0, 1]));
+        let s = tiers_arrivals(&a, &[true, true], 108);
+        assert_eq!((s.live, s.tiers.len()), (2, TIERS + 1));
+        let turns: Vec<u8> = s.sources.iter().flatten().copied().collect();
+        // Four seconds of arrivals: two of tube 0 alone, two of both.
+        assert_eq!(turns, [0, 0, 0, 1, 0, 1]);
+        // And the bars it has not filled yet are empty, not nought.
+        assert_eq!(s.tiers.last().unwrap().values.iter().filter(|v| v.is_none()).count(), 2);
+    }
+
+    #[test]
+    fn a_second_nothing_measured_is_empty_and_not_nought() {
+        let mut a = room(1000..1010, &[0]);
+        a.extend(room(1020..1030, &[0]));
+        let s = tiers_arrivals(&a, &[true], 120);
+        let second = s.tiers.last().unwrap();
+        let shown: Vec<Option<f64>> = second.values.iter().rev().take(30).rev().cloned().collect();
+        assert_eq!(shown.iter().filter(|v| v.is_none()).count(), 10);
+        assert_eq!(shown.iter().filter(|v| **v == Some(2.0)).count(), 20);
+    }
+
+    #[test]
+    fn a_tube_is_answering_until_it_is_quiet_or_gone() {
+        let heard = [Some(100.0), Some(96.0), None, Some(100.0)];
+        let gone = [false, false, false, true];
+        assert_eq!(answering(&heard, &gone, 100.5), [true, false, false, false]);
     }
 }

@@ -517,6 +517,57 @@ impl Bank {
     }
 }
 
+/// Looking for a counter, without waiting for the answer.
+///
+/// IDENTIFYING A COUNTER IS A CONVERSATION ON ITS PORT, and a port whose
+/// counter has crashed does not hold up its end: every question waits out
+/// its timeout. Asked on the thread that reads the samples, that silence
+/// was everybody's -- the service stopped publishing for as long as it
+/// took, once a log cycle, and a monitor attached to it took the pause for
+/// the counter having gone and closed. The tube that was still working was
+/// being switched off, every thirty seconds, by the search for the one that
+/// was not.
+///
+/// So each port is asked on a thread of its own and the answer is collected
+/// when there is one. A port already being asked is not asked again.
+struct Prober {
+    tx: std::sync::mpsc::Sender<(String, Option<counter::Counter>)>,
+    rx: std::sync::mpsc::Receiver<(String, Option<counter::Counter>)>,
+    asking: Vec<String>,
+}
+
+impl Prober {
+    fn new() -> Prober {
+        let (tx, rx) = std::sync::mpsc::channel();
+        Prober { tx, rx, asking: Vec::new() }
+    }
+
+    /// Ask every port that is neither held nor already being asked.
+    fn sweep(&mut self, ports: Vec<String>, held: &[String], baud: Option<u32>) {
+        for port in ports {
+            if held.contains(&port) || self.asking.contains(&port) {
+                continue;
+            }
+            self.asking.push(port.clone());
+            let tx = self.tx.clone();
+            std::thread::spawn(move || {
+                let found = counter::open_at(&port, baud);
+                let _ = tx.send((port, found));
+            });
+        }
+    }
+
+    /// The counters that have answered since this was last asked.
+    fn found(&mut self) -> Vec<counter::Counter> {
+        let mut out = Vec::new();
+        while let Ok((port, c)) = self.rx.try_recv() {
+            self.asking.retain(|p| *p != port);
+            out.extend(c);
+        }
+        out
+    }
+}
+
 /// The mean rate across every tube, over `span` seconds.
 ///
 /// TWO COUNTERS SEE TWICE THE COUNTS AND NOT TWICE THE DOSE. The combined
@@ -525,8 +576,15 @@ impl Bank {
 /// which is the same number one tube would report and is measured from twice
 /// as many arrivals. That is the entire bargain: identical accuracy, better
 /// precision, in proportion to the square root of the counts behind it.
+///
+/// DIVIDED BY WHAT WAS MEASURED, NOT BY WHAT IS PLUGGED IN. This was the sum
+/// over `tubes`, and `tubes` is how many counters there have ever been: when
+/// one stopped answering, the sum halved and the divisor did not, and two
+/// tubes with one of them silent reported half the room. `Windows::mean`
+/// divides by the tube-seconds the windows hold. One tube alone keeps
+/// `average`, which is the Python's arithmetic to the digit.
 fn mean_cpm(w: &Windows, span: f64, tubes: usize) -> Option<f64> {
-    w.average(span).map(|v| v / tubes.max(1) as f64)
+    if tubes <= 1 { w.average(span) } else { w.mean(span) }
 }
 
 /// Where a monitor's samples come from.
@@ -547,6 +605,12 @@ enum Feed {
         /// directory, or another server already there. The monitor still
         /// draws; it just cannot be attached to, and says so.
         srv: Option<broker::Server>,
+        /// Where to look for a tube that went quiet, and when that was last
+        /// done. See `rejoin`.
+        devices: Vec<String>,
+        baud: Option<u32>,
+        swept: f64,
+        prober: Prober,
     },
     Attached(broker::Client),
 }
@@ -561,6 +625,10 @@ enum Tick {
     Random { who: usize, hex: String, at: String, suspect: bool },
     /// The replayed history is over. Only an attached feed sends it.
     Live,
+    /// A tube joined the stream, or came back to it.
+    Joined { who: usize },
+    /// A tube stopped answering. The others carry on without it.
+    Gone { who: usize },
     /// The server is downloading a flash, or has finished (empty). Only an
     /// attached feed sends it. See broker::Event::Note.
     Note { text: String },
@@ -605,7 +673,14 @@ impl Feed {
         };
         let bank = Bank::open(found);
         let srv = broker::Server::start(dir, &bank.identity(spans)).ok();
-        Ok(Feed::Own { bank, srv })
+        Ok(Feed::Own {
+            bank,
+            srv,
+            devices: devices.to_vec(),
+            baud,
+            swept: clock::now(),
+            prober: Prober::new(),
+        })
     }
 
     fn identity(&self) -> broker::Identity {
@@ -666,13 +741,19 @@ impl Feed {
 
     fn next(&mut self, timeout: Duration) -> Option<Tick> {
         match self {
-            Feed::Own { bank, srv } => {
+            Feed::Own { bank, srv, devices, baud, swept, prober } => {
                 // Let in whoever turned up while we were waiting for this
                 // second. Before the publish, so a client that has just been
                 // greeted with the history gets this sample live rather than
                 // twice.
                 if let Some(s) = srv.as_mut() {
                     s.accept_pending();
+                }
+                if let Some(who) = rejoin(bank, devices, *baud, swept, prober) {
+                    if let (Some(s), Some(c)) = (srv.as_mut(), bank.ids.get(who)) {
+                        s.announce(who, c);
+                    }
+                    return Some(Tick::Joined { who });
                 }
                 // WALL CLOCK, NOT A MONOTONIC STAMP. A sample that is going
                 // to be replayed to a process which was not running when it
@@ -686,11 +767,26 @@ impl Feed {
                         }
                         Some(Tick::Sample { who, when, counts })
                     }
-                    // A tube that has gone quiet in the MONITOR is the end of
+                    // THE LAST TUBE going quiet in the monitor is the end of
                     // it: `watch` is a session somebody is sitting in front
                     // of, not a service, and it says so and stops rather than
-                    // waiting for a counter to come back.
-                    Tube::Gone { .. } => None,
+                    // waiting for a counter to come back. ONE OF SEVERAL is
+                    // not: the others are still measuring the room, and a
+                    // monitor that closed on them because a USB port reset
+                    // would be throwing away the tubes that work. Its port is
+                    // let go, everybody attached is told, and it is looked
+                    // for again; see `rejoin`.
+                    Tube::Gone { who } => {
+                        bank.retire(who);
+                        if let Some(s) = srv.as_mut() {
+                            s.publish_gone(who);
+                        }
+                        if bank.live().is_empty() {
+                            None
+                        } else {
+                            Some(Tick::Gone { who })
+                        }
+                    }
                 }
             }
             Feed::Attached(c) => match c.next(timeout)? {
@@ -703,13 +799,10 @@ impl Feed {
                 }
                 broker::Event::Live => Some(Tick::Live),
                 broker::Event::Note { text } => Some(Tick::Note { text }),
-                // An attached monitor draws one counter's worth of screen and
-                // does not redraw itself for a tube joining mid-session; the
-                // samples still arrive and still count. The window is what
-                // grows a needle for it.
-                broker::Event::Counter { .. } | broker::Event::Gone { .. } => {
-                    Some(Tick::Live)
-                }
+                // A tube joining or leaving changes what the room is the
+                // mean of, so the monitor is told, as the window is.
+                broker::Event::Counter { who, .. } => Some(Tick::Joined { who }),
+                broker::Event::Gone { who } => Some(Tick::Gone { who }),
             },
         }
     }
@@ -727,11 +820,86 @@ impl Feed {
     }
 }
 
+/// Look for a tube that went quiet, and take it back if it is there.
+///
+/// ONLY A TUBE THAT WAS HERE. The monitor's screen, its windows and its logs
+/// were laid out for the counters it started with, and a stranger plugged in
+/// halfway is the service's to adopt, not a session's. So a port is opened
+/// only while a slot is empty, and a counter is kept only if its serial is
+/// that slot's -- when it returns to its own colour and its own log.
+///
+/// Once a log cycle, as the service does, and asked the way the service
+/// asks: see `Prober`.
+fn rejoin(bank: &mut Bank, devices: &[String], baud: Option<u32>, swept: &mut f64,
+          prober: &mut Prober) -> Option<usize>
+{
+    let away: Vec<String> = bank
+        .counters
+        .iter()
+        .zip(bank.ids.iter())
+        .filter(|(c, _)| c.is_none())
+        .map(|(_, id)| id.serial_no.clone())
+        .collect();
+    // One that answered an earlier sweep, if it is one of ours. A stranger
+    // is dropped, which closes its port and leaves it for the service.
+    for c in prober.found() {
+        if away.contains(&c.serial_no) {
+            return Some(bank.adopt(c));
+        }
+    }
+    if away.is_empty() || clock::now() - *swept < RESCAN {
+        return None;
+    }
+    *swept = clock::now();
+    let ports: Vec<String> = if devices.is_empty() {
+        counter::candidate_ports()
+    } else {
+        devices.to_vec()
+    };
+    prober.sweep(ports, &bank.live_paths(), baud);
+    None
+}
+
+/// The top row for several tubes: each by its serial, and beside it what it
+/// last counted.
+///
+/// THE READING IS THE ONE THE INTERLEAVE WAS GIVEN: that tube's newest
+/// second, as a rate. Not an average -- the averages are the rows below, and
+/// they are of the room. This is what each instrument said most recently, so
+/// that two of them can be seen to agree or not, second by second.
+///
+/// EMPTY, NOT NOUGHT, when a tube is not answering. A nought is a reading:
+/// a second in which the tube was listening and nothing arrived. A tube that
+/// has stopped has no reading, and printing one would be the instrument
+/// claiming to still be measuring. The space is kept, so nothing to its
+/// right moves when it comes back.
+fn tubes_row(serials: &[String], newest: &[Option<u32>], live: &[bool]) -> String {
+    const SHOWN: usize = 4;
+    let mut out: Vec<String> = Vec::new();
+    for (k, serial) in serials.iter().enumerate().take(SHOWN) {
+        let reading = match (live.get(k).copied().unwrap_or(false), newest.get(k).copied().flatten()) {
+            (true, Some(c)) => format!("{:>5} CPM", c as u64 * 60),
+            _ => " ".repeat(9),
+        };
+        out.push(format!("{} {}", serial, reading));
+    }
+    if serials.len() > SHOWN {
+        out.push(format!("and {} more", serials.len() - SHOWN));
+    }
+    let answering = live.iter().filter(|l| **l).count();
+    out.push(if answering == serials.len() {
+        format!("{} tubes averaged", serials.len())
+    } else {
+        format!("{} of {} tubes averaged", answering, serials.len())
+    });
+    out.join("   ")
+}
+
 fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
          duration: Option<f64>, logging: Option<WatchLog>) {
     // So a `kill` stops the stream and puts the terminal back, as q does.
     install_stop_handler();
-    let id = feed.identity();
+    let mut id = feed.identity();
     // THE TABLE IS SOMEBODY ELSE'S FILE, SO IT IS DRAWN WITH THEIR COLUMNS.
     // An attached monitor may have been given different --spans on the
     // command line, and its own averages panel honours them -- that is
@@ -812,7 +980,7 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
     // twice the dose -- what doubles is the evidence, not the radiation. The
     // precision that buys is the whole reason for a second tube, and it is
     // reported beside the number rather than left to be inferred.
-    let tubes = feed.width().max(1);
+    let mut tubes = feed.width().max(1);
     // One per counter, and one across all of them. The combined windows hold
     // every sample from every tube, so their sums are `tubes` times the rate:
     // see `mean_cpm`.
@@ -827,6 +995,14 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
     // interleave. See analysis::tiers_with.
     let mut merged: std::collections::VecDeque<f64> = std::collections::VecDeque::new();
     let mut dropped = 0usize;
+    // AND AS THEY ARRIVED, with the tube and the time, for a strip cut by the
+    // clock: see analysis::tiers_arrivals. When each tube was last heard,
+    // what it said, and whether the reader has given it up.
+    let mut arrivals: std::collections::VecDeque<analysis::Arrival> =
+        std::collections::VecDeque::new();
+    let mut heard: Vec<Option<f64>> = vec![None; tubes];
+    let mut newest: Vec<Option<u32>> = vec![None; tubes];
+    let mut gone: Vec<bool> = vec![false; tubes];
     // Whole seconds, summed across the tubes, for the spectrum: a period is a
     // property of the room and both counters are looking at it, so adding
     // them is simply twice the signal on one time base.
@@ -887,6 +1063,37 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
                 replaying = false;
                 continue;
             }
+            // A TUBE STOPPED. It is out of the interleave and out of the
+            // mean from here, and its place in the top row is empty. Nothing
+            // is redrawn for it: the next sample from a tube that is
+            // answering draws the screen, a second from now at most.
+            Some(Tick::Gone { who }) => {
+                if let Some(g) = gone.get_mut(who) {
+                    *g = true;
+                }
+                continue;
+            }
+            // AND CAME BACK, or joined. Its windows start again -- what it
+            // counted before it left is not the last thirty seconds -- and a
+            // tube this monitor has not seen before gets a place made for it.
+            Some(Tick::Joined { who }) => {
+                id = feed.identity();
+                tubes = id.len().max(tubes);
+                while each.len() < tubes {
+                    each.push(Windows::new(spans));
+                    pools.push(new_pool());
+                }
+                heard.resize(tubes, None);
+                newest.resize(tubes, None);
+                gone.resize(tubes, false);
+                if who < tubes {
+                    each[who] = Windows::new(spans);
+                    gone[who] = false;
+                    heard[who] = None;
+                    newest[who] = None;
+                }
+                continue;
+            }
             // THE SERVICE IS READING A FLASH, and no sample will come until it
             // is done -- sixteen minutes, once. Before the first sample there
             // is no screen to put it on, so it gets one of its own, the same
@@ -913,6 +1120,14 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
         let who = who.min(tubes - 1);
         w.add(when, counts);
         each[who].add(when, counts);
+        // A sample is the tube answering, whatever was said of it before.
+        heard[who] = Some(when);
+        newest[who] = Some(counts);
+        gone[who] = false;
+        if arrivals.len() >= STRIP_KEEP {
+            arrivals.pop_front();
+        }
+        arrivals.push_back(analysis::Arrival { who, when, counts });
         if merged.len() >= STRIP_KEEP {
             merged.pop_front();
             dropped += 1;
@@ -999,9 +1214,10 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
                 "{} @ {} baud   {}   serial {}",
                 c.path, c.baud, c.version, c.serial_no
             ),
-            (Some(c), n) => format!(
-                "{} and {} more   {}   {} tubes averaged",
-                c.path, n - 1, c.version, n
+            (Some(_), _) => tubes_row(
+                &id.counters.iter().map(|c| c.serial_no.clone()).collect::<Vec<_>>(),
+                &newest,
+                &analysis::answering(&heard, &gone, when),
             ),
             (None, _) => "no counter".to_string(),
         };
@@ -1092,8 +1308,13 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
         let series: Vec<f64> = merged.iter().copied().collect();
         // WHOLE SECONDS, AND ONE TIER BELOW THEM FOR THE INTERLEAVE. One tube
         // keeps the strip it always had; see analysis::tiers_interleaved.
+        //
+        // SEVERAL TUBES ARE CUT BY THE CLOCK, and only the ones answering
+        // are interleaved: see analysis::tiers_arrivals.
+        let live = analysis::answering(&heard, &gone, when);
         let strip = if tubes > 1 {
-            analysis::tiers_interleaved(&series, dropped, width - 1, tubes)
+            arrivals.make_contiguous();
+            analysis::tiers_arrivals(arrivals.as_slices().0, &live, width - 1).tiers
         } else {
             analysis::tiers_with(&series, dropped, width - 1, spec.window, analysis::TIERS, 1.0)
         };
@@ -1103,7 +1324,19 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
             .cloned()
             .fold(0.0f64, f64::max);
         let every = logging.as_ref().map(|wl| wl.every.round().max(1.0) as i64);
-        let n = (dropped + series.len()) as i64;
+        // Where the one-second tier ends, as a count of seconds: of samples
+        // with one tube, and of the clock with several -- less the seconds
+        // the interleave tier has taken from the end of it.
+        let n = if tubes > 1 {
+            let taken = if live.iter().filter(|l| **l).count() > 1 {
+                analysis::INTERLEAVE_SECONDS as i64
+            } else {
+                0
+            };
+            when.floor() as i64 + 1 - taken
+        } else {
+            (dropped + series.len()) as i64
+        };
         let mut x0 = 0;
         for (ti, tier) in strip.iter().enumerate() {
             for (i, line) in bar_rows_to(&tier.values, counts_rows, peak).iter().enumerate() {
@@ -1533,6 +1766,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     // Counters plugged in while this runs, handed back by the thread that
     // read their flash; and the serials still being read, for the note.
     let (joined_tx, joined) = std::sync::mpsc::channel::<counter::Counter>();
+    let mut prober = Prober::new();
     let mut downloading: Vec<String> = Vec::new();
     let mut noted = clock::now();
     loop {
@@ -1562,14 +1796,18 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
         // own, with no list to keep and no list to go stale.
         if clock::now() - swept >= RESCAN {
             swept = clock::now();
-            let held = bank.live_paths();
             let ports: Vec<String> = if devices.is_empty() {
                 counter::candidate_ports()
             } else {
                 devices.to_vec()
             };
-            for port in ports.into_iter().filter(|p| !held.contains(p)) {
-                let Some(c) = counter::open_at(&port, baud) else { continue };
+            // ASKED ON THREADS OF THEIR OWN, and collected below when they
+            // have answered: see `Prober`. A port that has crashed takes
+            // its timeouts there, and nobody here waits for them.
+            prober.sweep(ports, &bank.live_paths(), baud);
+        }
+        {
+            for c in prober.found() {
                 // ITS OWN FLASH FIRST, exactly as at start: this tube was
                 // recording while nobody was listening to it. And exactly as
                 // at start, BEFORE IT IS ADOPTED -- adopting a counter into a
@@ -1994,7 +2232,6 @@ impl MergedLogger {
         self.per_tube[who] += counts as u64;
         self.tube_seconds += 1.0;
         self.wall.insert(when.floor() as i64);
-        let tubes = self.tubes();
         if let Some((prev, t)) = self.prev {
             if prev != who && when > t {
                 self.gap.0 += when - t;
@@ -2003,7 +2240,7 @@ impl MergedLogger {
         }
         self.prev = Some((who, when));
         for (i, span) in self.spans.iter().enumerate() {
-            if let Some(v) = mean_of(all, *span, tubes) {
+            if let Some(v) = all.mean(*span) {
                 let slot = &mut self.peaks[i];
                 if slot.is_none() || v > slot.unwrap() {
                     *slot = Some(v);
@@ -2050,14 +2287,16 @@ impl MergedLogger {
         self.gap = (0.0, 0);
     }
 
-    /// How many tubes this interval is the mean of.
+    /// How many tubes reported in this interval.
     ///
-    /// The combined windows hold every tube's samples, so their sums are
-    /// `tubes` times the room and the room is that over `tubes`. Over a
-    /// thirty-thousand-second window the count may have changed, and nothing
-    /// here records when -- so this is the tubes reporting NOW, which is the
-    /// best available answer and the one the panels already use. The `tubes`
-    /// column carries it, so a reader can see what the division was.
+    /// WHAT THE `tubes` COLUMN SAYS, AND NO LONGER WHAT ANYTHING IS DIVIDED
+    /// BY. The averages were the windows' sums over this number, and this
+    /// number is the tubes reporting NOW while the windows hold the last
+    /// thirty seconds: when a tube stopped, thirty seconds of two tubes were
+    /// divided by one and the room read 1108 where it was 600, and when it
+    /// came back thirty seconds of one were divided by two and it read 364.
+    /// The averages are `Windows::mean`, counts over the tube-seconds that
+    /// took them, which needs to be told nothing.
     fn tubes(&self) -> usize {
         if self.seen.is_empty() {
             // Nothing has reported yet, so the plugged-in count is all there
@@ -2085,9 +2324,8 @@ impl MergedLogger {
             .and_then(|s| log::site_at(s, now, &self.sites))
             .unwrap_or_default();
         let averages: Vec<Option<f64>> =
-            self.spans.iter().map(|s| mean_of(all, *s, tubes)).collect();
-        let sigma = mean_of(all, HEADLINE_SPAN, tubes)
-            .and_then(|v| sigma_of(v, HEADLINE_SPAN, tubes));
+            self.spans.iter().map(|s| all.mean(*s)).collect();
+        let sigma = all.sigma(HEADLINE_SPAN);
         let per_tube: Vec<(String, u64)> = self
             .per_tube
             .iter()
@@ -2123,28 +2361,6 @@ impl MergedLogger {
 /// The same thirty seconds the panels put in their big number, so the figure
 /// on disk and the figure on the screen are the same figure.
 const HEADLINE_SPAN: f64 = 30.0;
-
-/// The mean rate across the tubes, from windows holding every tube's samples.
-///
-/// TWO TUBES ARE TWO MEASUREMENTS OF ONE NUMBER. They do not double the dose;
-/// they double the evidence. The combined windows hold every tube's samples,
-/// so their sum is n times the room and the room is that over n.
-fn mean_of(w: &Windows, span: f64, tubes: usize) -> Option<f64> {
-    w.average(span).map(|v| v / tubes.max(1) as f64)
-}
-
-/// One sigma on that mean, in CPM.
-///
-/// Arrivals are Poisson, so the whole of the uncertainty is the count behind
-/// the number: N arrivals give a relative error of 1/sqrt(N), and the counts
-/// behind a mean of `tubes` tubes over `span` seconds is `cpm * span * tubes
-/// / 60`. THIS is what a second counter buys -- the same figure, known to
-/// within a factor of root two better -- and recording it is the only way the
-/// benefit survives into the record.
-fn sigma_of(cpm: f64, span: f64, tubes: usize) -> Option<f64> {
-    let n = cpm * span * tubes.max(1) as f64 / 60.0;
-    (n > 0.0).then(|| cpm / n.sqrt())
-}
 
 fn mtime_of(path: &std::path::Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
@@ -3992,6 +4208,64 @@ fn hotplug(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_top_row_says_what_each_tube_last_counted() {
+        let serials = vec!["F7F4CA7F05C2EA".to_string(), "F48824B8207F7E".to_string()];
+        assert_eq!(
+            tubes_row(&serials, &[Some(2), Some(0)], &[true, true]),
+            "F7F4CA7F05C2EA   120 CPM   F48824B8207F7E     0 CPM   2 tubes averaged"
+        );
+    }
+
+    #[test]
+    fn a_tube_that_is_not_answering_is_empty_and_not_nought() {
+        let serials = vec!["F7F4CA7F05C2EA".to_string(), "F48824B8207F7E".to_string()];
+        let row = tubes_row(&serials, &[Some(2), Some(3)], &[true, false]);
+        assert_eq!(
+            row,
+            "F7F4CA7F05C2EA   120 CPM   F48824B8207F7E             1 of 2 tubes averaged"
+        );
+        // Nothing to its right moves when it stops, or when it comes back.
+        let both = tubes_row(&serials, &[Some(2), Some(3)], &[true, true]);
+        assert_eq!(row.find("1 of 2"), both.find("2 tubes"));
+        // And one that has never spoken has nothing to show either.
+        assert!(tubes_row(&serials, &[Some(2), None], &[true, true])
+            .contains("F48824B8207F7E             "));
+    }
+
+    #[test]
+    fn a_long_rig_is_named_by_its_first_four() {
+        let serials: Vec<String> = (0..9).map(|k| format!("SERIAL{:08}", k)).collect();
+        let row = tubes_row(&serials, &[Some(1); 9], &[true; 9]);
+        assert!(row.contains("SERIAL00000003") && !row.contains("SERIAL00000004"));
+        assert!(row.ends_with("and 5 more   9 tubes averaged"), "{row}");
+    }
+
+    #[test]
+    fn a_port_that_does_not_answer_holds_nobody_up() {
+        // Nothing is listening at either path, so both are asked and both
+        // come back empty -- on their own threads, while this one goes on.
+        let mut p = Prober::new();
+        let asked = Instant::now();
+        p.sweep(vec!["/nonexistent/a".into(), "/nonexistent/b".into()], &[], None);
+        assert!(asked.elapsed() < Duration::from_millis(200));
+        assert_eq!(p.asking.len(), 2);
+        // Asked again before they have answered: not asked twice.
+        p.sweep(vec!["/nonexistent/a".into()], &[], None);
+        assert_eq!(p.asking.len(), 2);
+        // A port that is held is not asked at all.
+        p.sweep(vec!["/nonexistent/c".into()], &["/nonexistent/c".to_string()], None);
+        assert_eq!(p.asking.len(), 2);
+        let until = Instant::now() + Duration::from_secs(10);
+        let mut found = Vec::new();
+        while !p.asking.is_empty() && Instant::now() < until {
+            found.extend(p.found());
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(p.asking.is_empty() && found.is_empty());
+    }
+
 
     /// ONE TUBE WRITES NO MERGED FILE, and two do.
     ///

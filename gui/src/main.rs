@@ -28,8 +28,8 @@ use std::time::{Duration, Instant};
 use iced::widget::{canvas, column, container, row, stack, text, Space};
 use iced::{Color, Element, Fill, Font, Length, Rectangle, Renderer, Subscription, Theme};
 use radbeeper::analysis::{
-    self, band, bar_seconds, interleave_quality, span_words, tiers_interleaved,
-    tiers_with, Band, Spectrum, Tier, Windows, TIERS,
+    self, answering, band, bar_seconds, interleave_quality, span_words, tiers_arrivals,
+    tiers_with, Arrival, Band, Spectrum, Tier, Windows, TIERS,
 };
 use radbeeper::broker::{self, Client, CounterId, Event, Poll};
 use radbeeper::{clock, entropy, log};
@@ -706,6 +706,12 @@ struct Snapshot {
     averages: Vec<(f64, Option<f64>, Option<f64>)>,
     /// Each tube on its own, over the headline window.
     per: Vec<Option<f64>>,
+    /// What each tube counted in its newest second, as the interleave was
+    /// given it: None for a tube that is not answering, which is drawn as
+    /// nothing and never as nought.
+    latest: Vec<Option<u32>>,
+    /// How many tubes are answering, and so how many the room is the mean of.
+    live: usize,
     elapsed: f64,
     headline: Option<f64>,
     headline_sigma: Option<f64>,
@@ -854,8 +860,9 @@ impl App {
             for (k, c) in s.counters.iter().enumerate() {
                 col = col.push(
                     mono(format!(
-                        "{} {} \u{b7} {} \u{b7} {}",
-                        tube_name(k), c.path, c.version, c.serial_no
+                        "{} {} \u{b7} {} \u{b7} {}{}",
+                        tube_name(k), c.path, c.version, c.serial_no,
+                        reading(s.latest.get(k).copied().flatten())
                     ))
                     .size(10)
                     .color(if tubes > 1 { self.skin.tube(k) } else { self.skin.dim }),
@@ -947,7 +954,9 @@ impl App {
             dials: faces.clone(),
             strip: s.strip.clone(),
             sources: s.sources.clone(),
-            tubes,
+            // The interleave is of the tubes that are answering: with one
+            // left there is no such tier, and the last is a tier of seconds.
+            tubes: s.live,
             every: s.every,
             n: s.samples,
             layers: s.layers.clone(),
@@ -1138,10 +1147,11 @@ impl App {
                 s.now,
                 s.total,
                 s.elapsed.round() as i64,
-                match (tubes, s.phase) {
-                    (1, _) => String::new(),
-                    (n, Some(p)) => format!("  {} tubes {}", n, phase_note(p, n)),
-                    (n, None) => format!("  {} tubes averaged", n),
+                match (tubes, s.live, s.phase) {
+                    (1, _, _) => String::new(),
+                    (n, live, _) if live < n => format!("  {} of {} tubes averaged", live, n),
+                    (n, _, Some(p)) => format!("  {} tubes {}", n, phase_note(p, n)),
+                    (n, _, None) => format!("  {} tubes averaged", n),
                 }
             ))
             .size(10)
@@ -1385,6 +1395,20 @@ fn mono(s: impl text::IntoFragment<'static>) -> text::Text<'static> {
 /// A, B, C: short enough to sit beside a number without crowding it.
 fn tube_name(k: usize) -> String {
     format!("{}", (b'A' + (k as u8 % 26)) as char)
+}
+
+/// A tube's newest second beside its serial, as a rate.
+///
+/// THE READING THE INTERLEAVE WAS GIVEN, not an average: what that tube said
+/// most recently, so two of them can be seen to agree or not. EMPTY, NOT
+/// NOUGHT, for a tube that is not answering -- a nought is a second in which
+/// the tube listened and nothing came, and a tube that has stopped has no
+/// reading at all. The space is kept, so the line does not move.
+fn reading(counts: Option<u32>) -> String {
+    match counts {
+        Some(c) => format!(" \u{b7} {:>5} CPM", c as u64 * 60),
+        None => " ".repeat(12),
+    }
 }
 
 /// The measured interleave, as the panel says it.
@@ -1960,8 +1984,12 @@ impl Chart {
 // -------------------------------------------------------------------- feed ---
 
 /// The mean rate across the tubes, from windows holding every tube's samples.
+///
+/// OVER THE TUBE-SECONDS THAT WERE MEASURED, not over the tubes plugged in:
+/// a tube that has stopped answering is not in the division. See
+/// `Windows::mean`, and `mean_cpm` in the monitor, which is the same rule.
 fn mean_of(w: &Windows, span: f64, tubes: usize) -> Option<f64> {
-    w.average(span).map(|v| v / tubes.max(1) as f64)
+    if tubes <= 1 { w.average(span) } else { w.mean(span) }
 }
 
 /// One sigma on that mean, in CPM.
@@ -1972,8 +2000,15 @@ fn mean_of(w: &Windows, span: f64, tubes: usize) -> Option<f64> {
 /// 60`. THIS is what a second counter buys -- the same figure, known to within
 /// a factor of root two better -- and printing it is the only way the benefit
 /// is visible at all.
-fn sigma_of(cpm: f64, span: f64, tubes: usize) -> Option<f64> {
-    let n = cpm * span * tubes.max(1) as f64 / 60.0;
+///
+/// THE COUNTS THE WINDOW HOLDS, which is that product only while every tube
+/// answers every second. See `Windows::sigma`.
+fn sigma_of(w: &Windows, span: f64, tubes: usize) -> Option<f64> {
+    if tubes > 1 {
+        return w.sigma(span);
+    }
+    let cpm = w.average(span)?;
+    let n = cpm * span / 60.0;
     (n > 0.0).then(|| cpm / n.sqrt())
 }
 
@@ -2018,7 +2053,12 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                 // is a bar every half second on average, because two tubes on
                 // their own clocks interleave.
                 let mut merged: VecDeque<f64> = VecDeque::with_capacity(STRIP_KEEP);
-                let mut sources: VecDeque<u8> = VecDeque::with_capacity(STRIP_KEEP);
+                // AND AS THEY ARRIVED, with the tube and the time, for a
+                // strip cut by the clock; when each tube last spoke and
+                // what it said. See analysis::tiers_arrivals.
+                let mut arrivals: VecDeque<Arrival> = VecDeque::with_capacity(STRIP_KEEP);
+                let mut spoke: Vec<Option<f64>> = vec![None; tubes];
+                let mut newest: Vec<Option<u32>> = vec![None; tubes];
                 let mut dropped = 0usize;
                 let mut rows: VecDeque<Vec<String>> = VecDeque::with_capacity(ROWS);
                 let mut random: Option<(usize, String, String, bool)> = None;
@@ -2093,13 +2133,20 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                                     }
                                 }
                                 last = Some((who, when));
+                                // A sample is the tube answering, whatever
+                                // was said of it before.
+                                spoke[who] = Some(when);
+                                newest[who] = Some(counts);
+                                present[who] = true;
+                                if arrivals.len() == STRIP_KEEP {
+                                    arrivals.pop_front();
+                                }
+                                arrivals.push_back(Arrival { who, when, counts });
                                 if merged.len() == STRIP_KEEP {
                                     merged.pop_front();
-                                    sources.pop_front();
                                     dropped += 1;
                                 }
                                 merged.push_back(counts as f64);
-                                sources.push_back(who as u8);
                                 recent.push(when, counts);
                                 now = counts;
                                 let this = when.floor() as i64;
@@ -2141,15 +2188,25 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                                     each.push(Windows::new(&id.spans));
                                 }
                                 present.resize(tubes, false);
+                                spoke.resize(tubes, None);
+                                newest.resize(tubes, None);
                                 if let Some(p) = present.get_mut(who) {
                                     *p = true;
                                 }
                                 each[who] = Windows::new(&id.spans);
+                                spoke[who] = None;
+                                newest[who] = None;
+                                // The gap is measured afresh: what it was
+                                // before the tube left is not what it is now.
+                                gaps = (0.0, 0);
+                                last = None;
                             }
                             Event::Gone { who } => {
                                 if let Some(p) = present.get_mut(who) {
                                     *p = false;
                                 }
+                                gaps = (0.0, 0);
+                                last = None;
                             }
                             // The service is reading a flash and nothing will
                             // be counted until it is done. Until the first
@@ -2219,12 +2276,27 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                     }
                     sent = Instant::now();
                     let series: Vec<f64> = merged.iter().copied().collect();
-                    // Whole seconds, and one tier below them for the
-                    // interleave; see analysis::tiers_interleaved.
-                    let strip = if tubes > 1 {
-                        tiers_interleaved(&series, dropped, STRIP_COLS, tubes)
+                    // WHICH TUBES ARE ANSWERING, at the moment being drawn: not
+                    // given up by the service, and heard from within
+                    // QUIET_AFTER. Never ahead of the newest sample, for the
+                    // reason the meters are not.
+                    let at = recent
+                        .newest()
+                        .map(|t| clock::now().max(t))
+                        .unwrap_or_else(clock::now);
+                    let gone: Vec<bool> = present.iter().map(|p| !p).collect();
+                    let live = answering(&spoke, &gone, at);
+                    let answering_now = live.iter().filter(|l| **l).count();
+                    // Whole seconds BY THE CLOCK, and one tier below them for
+                    // the tubes that are answering; see
+                    // analysis::tiers_arrivals.
+                    let (strip, sources) = if tubes > 1 {
+                        arrivals.make_contiguous();
+                        let s = tiers_arrivals(arrivals.as_slices().0, &live, STRIP_COLS);
+                        (s.tiers, s.sources.iter().map(|k| k.unwrap_or(u8::MAX)).collect())
                     } else {
-                        tiers_with(&series, dropped, STRIP_COLS, LADDER[0], TIERS, 1.0)
+                        (tiers_with(&series, dropped, STRIP_COLS, LADDER[0], TIERS, 1.0),
+                         Vec::new())
                     };
                     // The scale rises at once and sinks slowly: see PEAK_TAU.
                     let tallest = strip
@@ -2245,8 +2317,7 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                             .spans
                             .iter()
                             .map(|s| {
-                                let m = mean_of(&all, *s, tubes);
-                                (*s, m, m.and_then(|v| sigma_of(v, *s, tubes)))
+                                (*s, mean_of(&all, *s, tubes), sigma_of(&all, *s, tubes))
                             })
                             .collect(),
                         // A TUBE THAT HAS STOPPED ANSWERING READS `--`, not
@@ -2255,7 +2326,7 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                         // still be measuring.
                         per: (0..tubes)
                             .map(|k| {
-                                if !present.get(k).copied().unwrap_or(false) {
+                                if !live.get(k).copied().unwrap_or(false) {
                                     return None;
                                 }
                                 each[k].average(HEADLINE).or_else(|| {
@@ -2263,16 +2334,24 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                                 })
                             })
                             .collect(),
+                        latest: (0..tubes)
+                            .map(|k| {
+                                newest.get(k).copied().flatten()
+                                    .filter(|_| live.get(k).copied().unwrap_or(false))
+                            })
+                            .collect(),
+                        live: answering_now,
                         elapsed: all.elapsed(),
                         headline,
-                        headline_sigma: headline
-                            .and_then(|v| sigma_of(v, HEADLINE, tubes)),
+                        headline_sigma: headline.and_then(|_| sigma_of(&all, HEADLINE, tubes)),
                         now,
                         total: all.total,
-                        phase: (gaps.1 > 0).then(|| gaps.0 / gaps.1 as f64),
+                        // An interleave is between tubes that are answering.
+                        phase: (gaps.1 > 0 && answering_now > 1)
+                            .then(|| gaps.0 / gaps.1 as f64),
                         strip,
                         peak: peak_hold,
-                        sources: sources.iter().rev().take(STRIP_COLS).rev().copied().collect(),
+                        sources,
                         samples: (dropped + merged.len()) as i64,
                         every: log::DEFAULT_LOG_EVERY.round() as i64,
                         layers: ladder
@@ -2596,6 +2675,12 @@ mod tests {
     #[test]
     fn the_panel_prints_the_gap_and_what_it_is_worth() {
         assert_eq!(phase_note(0.5, 2), "\u{b7} interleave 0.50s (100%)");
+        // Beside the serial: the tube's newest second, as a rate; and for a
+        // tube that is not answering, the same width of nothing.
+        assert_eq!(reading(Some(2)), " \u{b7}   120 CPM");
+        assert_eq!(reading(Some(0)), " \u{b7}     0 CPM");
+        assert_eq!(reading(None), " ".repeat(12));
+        assert_eq!(reading(None).chars().count(), reading(Some(0)).chars().count());
         assert_eq!(phase_note(0.24, 9), "\u{b7} interleave 0.24s (46%)");
         assert_eq!(phase_note(0.0, 2), "\u{b7} interleave 0.00s (0%)");
     }
