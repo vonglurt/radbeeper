@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The drum spectrogram — RadBeeper</title>
+<meta name="description" content="A short-time Fourier transform of a Geiger counter, kept a row at a time and laid down the paper like a seismograph&#x27;s, by a pen that is hotter and wider for what is louder: what the accumulated spectrum throws away, which is when.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/the-drum-spectrogram.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="The drum spectrogram — RadBeeper">
+<meta property="og:description" content="A short-time Fourier transform of a Geiger counter, kept a row at a time and laid down the paper like a seismograph&#x27;s, by a pen that is hotter and wider for what is louder: what the accumulated spectrum throws away, which is when.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/the-drum-spectrogram.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-drum-spectrogram">The drum spectrogram</h1>
+<p><strong>A short-time Fourier transform of a Geiger counter, kept a row at a time and laid down the paper like a seismograph's, by a pen that is hotter and wider for what is louder: what the accumulated spectrum throws away, which is when.</strong></p>
+<p><em>A lab report in the IEEE style, on the trail <code>radbeeper-gui</code> draws under its spectrum. Written against radbeeper 0.5.0, 29 September 2026, and rewritten the same day as the thing it describes was (§X). The technique is described first and named last, in <a href="#ix-naming">§IX</a>; the short answer is that this document calls it a <strong>drum spectrogram</strong>, and its pen a <strong>thermal pen</strong>. Every figure in it was measured on the day, either on the bench's two counters or on simulated counts, and says which.</em></p>
+<p><img src="screenshots/gui-drum-spectrogram.png" alt="the drum spectrogram under the spectrum, on the bench&#x27;s two counters" loading="lazy"></p>
+<hr>
+<h2 id="abstract">Abstract</h2>
+<p>RadBeeper already looks for anything arriving on a schedule, with a power spectrum averaged over every window it has ever taken. Averaging is how a faint period is found and how its <em>time</em> is lost: a line that was present for ten minutes an hour ago and one that has been present all along come out as the same bar. This report describes the view that was added under it. A periodogram of the last 300 seconds is taken every 10 seconds and kept as a row; to its left each row is carried on, by the spectrum's longer windows, as far as the axis goes. The newest 48 rows are drawn as line traces, one under another, the full width of the panel and on the spectrum's own axis. The paper holds <strong>7 minutes 50 seconds of rows, made from 12 minutes 50 seconds of counts</strong> at periods up to five minutes, and from as much as nine hours beyond them. Rows are held against the average of the last 3000 seconds, so their heights can be compared, and drawn by their logarithm against the loudest thing in view, so one loud period cannot flatten the rest and nothing is ever off the scale. The pen says how loud in its colour, its width and its glow; the whole trace is as bright as the room counted; and a row's peaks are marked. A row on its own is noise by construction. The report gives the arithmetic of a row, the flow from the counter's serial port to the pixel, the measured length of the ridges that chance draws, and what the view can and cannot find.</p>
+<p><strong>Index terms</strong> -- short-time Fourier transform, spectrogram, ridgeline plot, helicorder, periodogram, Poisson process, automatic gain, colour scale, radiation monitoring.</p>
+<hr>
+<h2 id="i-introduction">I. Introduction</h2>
+<h3 id="a-the-problem">A. The problem</h3>
+<p>Radioactive decay is a Poisson process and the power spectrum of a Poisson process is flat. <a href="the-spectrum.html">The spectrum</a> uses that: it averages periodograms, the scatter falls as 1/√<em>N</em>, and anything periodic -- mains hum on a tube's supply, a fan carrying a source past, firmware that batches its reports -- climbs out of a floor that is settling under it.</p>
+<p>The average has one number for each period. It cannot say whether the period is there <em>now</em>, whether it came and went, or whether it began when somebody switched something on. Those are the questions asked of a line once it has been seen.</p>
+<h3 id="b-what-was-asked-for">B. What was asked for</h3>
+<p>A paper-feed plot, of the kind a drum seismograph makes: many traces laid one under another, each a little later than the last, so that something which persists is a shape running down the page. It was to be part of the spectrum it comes from and not a display of its own -- the same axis, the same ground, no frame and no words around it -- with each row five minutes long, coloured by how loud it is, and scaled so that detail is shown whatever is loudest.</p>
+<hr>
+<h2 id="ii-one-row">II. One row</h2>
+<p>A row is a periodogram of the last <code>W</code> = 300 seconds of counts per second, summed across the tubes. In order:</p>
+<table><thead><tr><th>Step</th><th>What is done</th><th>Why</th></tr></thead><tbody><tr><td>1</td><td>Take the newest 300 seconds, *x*₀ … *x*₂₉₉</td><td>five minutes, which is the stretch somebody asks about</td></tr><tr><td>2</td><td>Subtract their mean</td><td>the DC term is the count rate, which every other number on the panel gives</td></tr><tr><td>3</td><td>Multiply by a Hann taper, *w*ᵢ = ½ − ½ cos(2π*i*/299)</td><td>a period that does not divide the window would otherwise leak into every bin [2]</td></tr><tr><td>4</td><td>Transform: *X*ₖ = Σ *x*ᵢ *w*ᵢ e^(−2π*ik*/300)</td><td>see below</td></tr><tr><td>5</td><td>Take \</td><td>*X*ₖ\</td><td>² for <em>k</em> = 1 … 149</td><td>bin <em>k</em> is the period 300/<em>k</em> seconds; <em>k</em> = 0 is DC and <em>k</em> = 150 is left out</td></tr><tr><td>6</td><td>Divide by <em>r</em> · Σ *w*ᵢ²</td><td><em>r</em> is the average rate of the last 3000 seconds; see §II.B</td></tr></tbody></table>
+<h3 id="a-three-hundred-is-not-a-power-of-two">A. Three hundred is not a power of two</h3>
+<p>The transform the spectrum uses is radix-2 and wants 256 or 512. Padding 300 seconds to 512 with noughts would give bins that are not three hundred seconds' and are not independent of their neighbours, which is what the luck line counts on. So step 4 is summed as it is written, from a table of one turn of the circle: 149 bins of 300 terms, <strong>44,700 steps a row</strong>, once every ten seconds. <code>analysis::powers</code> uses the fast transform where the length allows it, and a test holds the two to the same answer at 256.</p>
+<h3 id="b-the-normaliser-is-the-long-average">B. The normaliser is the long average</h3>
+<p>The first form divided a row by its own mean, which makes every row flat at 1.0 and so makes every row the same height: five minutes in which the room counted twice as much were drawn no taller than the five before.</p>
+<p>Counts that arrive by chance at <em>r</em> a second have a variance of <em>r</em>, so they put <em>r</em> · Σ *w*ᵢ² in every bin, on average. The rate therefore says what flat <em>should</em> be. Taken over the last 3000 seconds -- the fourth of the panel's five averages -- it says so without being moved much by the five minutes being measured. Against it a row reads 1.0 when the room is as it has been, and the whole of it stands higher when the room is not.</p>
+<p>A test runs fifty minutes at 0.9 counts a second and then five at 1.8. The rows before the change average 1.0; the row after it reads about 2; the same row divided by its own mean reads 1.0.</p>
+<p>The price is that a row's level now wanders by chance: over 400,000 simulated seconds the mean of a row had a standard deviation of 0.15.</p>
+<h3 id="c-a-row-is-joined-from-several-windows">C. A row is joined from several windows</h3>
+<p>A window holds no period longer than itself, so a row of 300 seconds stops at five minutes, and on a panel whose axis ran to an hour the traces had the right-hand three fifths of it and the left was bare. The periods beyond are in longer windows, and the spectrum already has three: 512, 4096 and 32768 seconds. <code>analysis::Trail</code> takes a row from all of them, every one ending at the same second:</p>
+<table><thead><tr><th>Window</th><th>Bins it gives</th><th>Their periods</th><th>Steps a row</th></tr></thead><tbody><tr><td>300 s</td><td>149, which is all it has</td><td>300 s to 2.013 s</td><td>44,700</td></tr><tr><td>512 s</td><td>1</td><td>512 s</td><td>512</td></tr><tr><td>4096 s</td><td>7</td><td>4096 s to 585 s</td><td>28,672</td></tr><tr><td>32768 s</td><td>7</td><td>32768 s to 4681 s</td><td>229,376</td></tr></tbody></table>
+<p>From each window after the first, only the bins that are longer than the window before it could hold. That is 164 bins in a row, and the fifteen on the left are all there is out there: a window has one bin at its own length, one at half of it, one at a third.</p>
+<p>Only the bins that are asked for are worked out, by the sum; and only the rows that are on show. <code>add</code> keeps the second and nothing else, and <code>rows</code> works out what is missing, so a window that is handed hours of history when it attaches works out forty-eight rows at the end and not three thousand on the way.</p>
+<p>A window that has not yet its seconds is left out of the row, and the trace begins where there is something to draw.</p>
+<h3 id="d-the-parameters">D. The parameters</h3>
+<table><thead><tr><th></th><th>Value</th><th>In seconds</th></tr></thead><tbody><tr><td>Window, <code>W</code></td><td>300 samples</td><td>5 m</td></tr><tr><td>Hop, <code>H</code></td><td>10 samples</td><td>10 s</td></tr><tr><td>Depth, <code>D</code></td><td>48 rows</td><td>—</td></tr><tr><td>Bins of the window</td><td>149</td><td>periods of 300 s down to 2.013 s</td></tr><tr><td>Spacing of the bins</td><td>1/300 Hz</td><td>—</td></tr><tr><td>Bins joined on from longer windows</td><td>15</td><td>512 s to 32768 s</td></tr><tr><td>Overlap of a row with the one before</td><td>290 of 300 seconds</td><td>96.7%</td></tr><tr><td>The normaliser's average</td><td>3000 samples</td><td>50 m</td></tr></tbody></table>
+<hr>
+<h2 id="iii-the-flow">III. The flow</h2>
+<p>This is what happens to a count between the tube and the screen. Each box is one place in the code.</p>
+<pre><code class="language-text"> two GMC-320s                     each reports the counts of its last second
+      │  serial, once a second
+      ▼
+ radbeeper service                holds the ports, logs, and serves the stream
+      │  unix socket, a line a sample: who, when, counts
+      ▼
+ feed thread (gui)                one per window; replays what the service
+      │                           holds when it attaches
+      │  samples are summed by WHOLE WALL-CLOCK SECOND across the tubes
+      │  when the second closes: sec_sum
+      ▼
+ ┌─────────────────────────────┐
+ │ Trail::add(sec_sum)         │  analysis.rs
+ │  ring of the last 33,248 s  │  the longest window and the rows on show
+ └─────────────────────────────┘
+      │
+      │  once a second, when a snapshot is made:
+      │  has a whole ten seconds gone by since the newest row?
+      ├── no ──► the rows there were
+      ▼
+ ┌─────────────────────────────┐
+ │ Trail::rows()               │  the 48 that end at the last whole ten
+ │                             │  seconds and the 47 tens before it
+ │  a row that was kept: kept  │
+ │  a row that is new:         │
+ │    r = mean of the 3000 s   │  the rate, before the row's end
+ │    for 32768, 4096, 512,    │  each window that has its seconds,
+ │        300:                 │  the longest first
+ │      mean off · Hann        │  §II, steps 2 and 3
+ │      |X|² of its bins       │  steps 4 and 5, §II.C
+ │      ÷ (r · Σw²)            │  step 6
+ │    joined, longest first    │
+ └─────────────────────────────┘
+      │  rows (shared, remade only when a row is due),
+      │  the second the newest ends at · seconds since
+      ▼
+ Snapshot, once a second          the same message that carries the rest
+      │
+      ▼
+ Chart::draw                      one canvas: dials, counts, spectrum, trail
+      │  is (made, age, axis) what was drawn last time?
+      ├── yes ──► the kept drawing, as it is
+      └── no  ──► Chart::trail
+                    loudest = the largest power on the paper
+                    the ground, shaded
+                    rows NEWEST FIRST, which is furthest away:
+                       line  = the spectrum's floor + (index + age/10) × 4 px
+                       x     = the spectrum's own axis, by period
+                       y     = line − gain(power, loudest) × 24 px: up is more
+                       ground painted back in under the trace
+                       trace stroked by the thermal pen, as bright as
+                         the row's level; a dot on each peak
+                    a ring round the loudest peak on the paper
+      then Chart::spectrum, over it: bars standing on the newest row's line</code></pre>
+<p>Three things about it are worth saying.</p>
+<p><strong>The rows are shared, not sent.</strong> A snapshot goes to the interface every second and the rows change every tenth, so they sit behind a reference count and are rebuilt only when a row is due.</p>
+<p><strong>The drawing is kept.</strong> The canvas is redrawn twelve times a second, because the needles on the dials move that often. The trail is some five thousand line segments and changes once a second, so it is drawn into a <code>canvas::Cache</code> that is cleared only when the newest row, its age or the axis changes. The software renderer the window uses in a virtual machine notices the difference.</p>
+<p><strong>A window that attaches late is not behind.</strong> The service replays what it holds, the feed gives every second of it to <code>add</code>, and the paper is full by the time the first live sample arrives.</p>
+<hr>
+<h2 id="iv-how-much-time-it-captures">IV. How much time it captures</h2>
+<p>The question has four answers, and they are different numbers. They are of the 300-second window, which is five sixths of the panel; the stretches to its left are after the table.</p>
+<table><thead><tr><th>What is meant</th><th>Arithmetic</th><th>Time</th></tr></thead><tbody><tr><td><strong>One row</strong></td><td><code>W</code></td><td><strong>300 s = 5 m</strong></td></tr><tr><td><strong>The rows on the paper</strong>, top to bottom</td><td>(<code>D</code> − 1) × <code>H</code> = 47 × 10</td><td><strong>470 s = 7 m 50 s</strong></td></tr><tr><td>… as the oldest leaves it</td><td><code>D</code> × <code>H</code> = 48 × 10</td><td>480 s = 8 m</td></tr><tr><td><strong>The counts in the picture</strong></td><td><code>W</code> + (<code>D</code> − 1) × <code>H</code> = 300 + 470</td><td><strong>770 s = 12 m 50 s</strong></td></tr><tr><td>The counts behind the normaliser</td><td>3000</td><td>50 m</td></tr></tbody></table>
+<p>The row at the foot of the paper was taken 7 minutes 50 seconds ago. But it was itself made from the 300 seconds before that, so the oldest count with any say in a trace arrived nearly thirteen minutes ago; and the level every trace is held against looks back fifty.</p>
+<h3 id="the-long-periods-on-the-left">The long periods, on the left</h3>
+<table><thead><tr><th>Stretch</th><th>Its window</th><th>A row is</th><th>Counts in the picture</th></tr></thead><tbody><tr><td>5 m to 1 h 8 m</td><td>4096 s</td><td>1 h 8 m 16 s</td><td>4566 s = 1 h 16 m</td></tr><tr><td>1 h 8 m to 9 h 6 m</td><td>32768 s</td><td>9 h 6 m 8 s</td><td>33,238 s = 9 h 14 m</td></tr></tbody></table>
+<p>So the whole picture, when every window has answered, is made from <strong>9 hours 14 minutes of counts</strong>. But the rows there are not forty-eight looks at anything: see §V.D.</p>
+<h3 id="what-that-is-worth">What that is worth</h3>
+<table><thead><tr><th></th><th>Arithmetic</th><th></th></tr></thead><tbody><tr><td>Windows that share no seconds</td><td>770 / 300</td><td>2.6</td></tr><tr><td>Looks that are nearly independent, at half overlap</td><td>470 / 150 + 1</td><td>4.1</td></tr><tr><td>Counts in one row, at the bench's 0.9 a second</td><td>0.9 × 300</td><td>about 270</td></tr><tr><td>Counts in the whole picture</td><td>0.9 × 770</td><td>about 690</td></tr><tr><td>Until the first row, from a cold start</td><td><code>W</code></td><td>5 m</td></tr><tr><td>Until the paper is full</td><td><code>W</code> + (<code>D</code> − 1) × <code>H</code></td><td>12 m 50 s</td></tr><tr><td>Arithmetic</td><td>44,700 steps every 10 s</td><td>—</td></tr></tbody></table>
+<p>Forty-eight rows are therefore <strong>four measurements, not forty-eight</strong>. The other forty-four are those four seen again as they slide past, which is what makes a ridge a line rather than four dots, and is also what §V is about.</p>
+<p>The taper matters to the first figure. A Hann window weighs the middle of its 300 seconds fully and the two ends hardly at all, so a row answers mostly for the two and a half minutes at its centre.</p>
+<h3 id="against-the-spectrum-it-is-drawn-under">Against the spectrum it is drawn under</h3>
+<table><thead><tr><th></th><th>Window</th><th>Reach</th><th>Keeps the time?</th></tr></thead><tbody><tr><td>Trail</td><td>300 s</td><td>12 m 50 s</td><td>yes, to 10 s</td></tr><tr><td>Spectrum, short</td><td>512 s</td><td>everything since it started</td><td>no</td></tr><tr><td>Spectrum, middle</td><td>4096 s</td><td>the same</td><td>no</td></tr><tr><td>Spectrum, long</td><td>32768 s</td><td>the same</td><td>no</td></tr></tbody></table>
+<hr>
+<h2 id="v-reading-it">V. Reading it</h2>
+<h3 id="a-one-spike-means-nothing">A. One spike means nothing</h3>
+<p>A single bin of a single periodogram of noise is an exponential variable, and the tallest of 164 stands about ln 164 above the mean. <code>chance_max</code> puts the line at <strong>7.59</strong> for one row of 164 bins, and at 7.50 for the 149 of the 300-second window alone, which is what the measurements below were made with. A trace is inked in the warning's colour from there up.</p>
+<h3 id="b-nor-does-a-short-ridge">B. Nor does a short ridge</h3>
+<p>A row shares 290 of its 300 seconds with the row before. A spike that luck put in one is in its neighbours too, so chance draws ridges of its own. How long was measured, on simulated Poisson counts with nothing periodic in them, 400,000 seconds at each of two rates, with the rows held against the long average as the window holds them:</p>
+<table><thead><tr><th>Rate</th><th>Runs over the line</th><th>Median</th><th>90% within</th><th>99% within</th><th>Longest</th></tr></thead><tbody><tr><td>0.45 counts/s</td><td>677</td><td>5 rows</td><td>9 rows</td><td>13 rows</td><td>17 rows</td></tr><tr><td>0.90 counts/s</td><td>642</td><td>5 rows</td><td>9 rows</td><td>12 rows</td><td>22 rows</td></tr></tbody></table>
+<p>And of papers of 48 rows, how many held a run that long in any bin:</p>
+<table><thead><tr><th>A run of at least</th><th>8 rows</th><th>15 rows</th><th>24 rows</th></tr></thead><tbody><tr><td>Share of papers, 0.45/s</td><td>15%</td><td>0.24%</td><td>none</td></tr><tr><td>Share of papers, 0.90/s</td><td>13%</td><td>0.12%</td><td>none</td></tr></tbody></table>
+<p>So: a coloured streak <strong>under fifteen rows</strong> -- half a window, a third of the paper -- is what noise looks like here. One of fifteen or more is luck's about twice in a thousand papers. One that runs <strong>half the paper</strong>, 24 rows, was not seen in 800,000 seconds. <code>Waterfall::chance_rows</code> is the fifteen.</p>
+<p>These are a little longer than the first form's, which was measured at 256 seconds and 8 with rows held against themselves: there the longest of 981 runs was 16, and a test holds that arrangement to it. The long average lets a whole row stand a little high by chance, and a row that stands high carries its spikes over the line with it.</p>
+<h3 id="c-what-it-finds">C. What it finds</h3>
+<p>A source with a period of 10 seconds was added to a background of 0.9 counts a second, 200,000 seconds at each strength:</p>
+<table><thead><tr><th>Source, as a share of background</th><th>Its bin reads</th><th>Rows over the line</th><th>Longest run in a paper, median</th></tr></thead><tbody><tr><td>50%</td><td>8.3</td><td>54%</td><td>20 rows</td></tr><tr><td>20%</td><td>2.7</td><td>3%</td><td>none</td></tr><tr><td>10%</td><td>1.4</td><td>none</td><td>none</td></tr></tbody></table>
+<p>This is the honest limit. The trail sees a period that is <strong>strong</strong>, and says when it was there. A faint one it does not see at all: at a fifth of background the bin reads 2.7 and the line is at 7.5. Finding the faint one is what averaging is for, and the spectrum above it does that; the two are not rivals.</p>
+<h3 id="d-the-left-of-the-paper-is-texture">D. The left of the paper is texture</h3>
+<p>A row of the 4096-second window shares 4086 of its seconds with the row before it, and one of the 32768-second window shares all but ten. Two rows are as good as independent when they are half a window apart, which is 205 rows for the first and 1638 for the second, and the paper holds 48.</p>
+<p>So out there the traces are very nearly the same trace, forty-eight times, and they run down the paper as parallel lines: whatever one row reads, they all read. <strong>A coloured streak on the left that runs the whole paper is one draw of chance and not forty-eight</strong>, and the fifteen-row rule is no use to it. What is to be believed about a long period is the averaged spectrum above, where a window has been taken many times. The trail says how that bin is moving, slowly, and no more.</p>
+<hr>
+<h2 id="vi-the-drawing">VI. The drawing</h2>
+<p>There is a ground, a line for each row, a height, a pen and an order.</p>
+<p><strong>The ground is shaded</strong>, the panel's own colour half way to black, from the floor of the counts to the foot of the canvas and the full width. On paper a pen can only be darker than its ground, and the loudest thing drawn was the least like light. Against a shaded ground a bright line is bright, and what is faint falls back into it.</p>
+<p><strong>Up is more.</strong> A trace rises from its line for what is louder, as a bar of the spectrum does and as every other chart on the panel does. For an afternoon the spectrum hung from the floor of the counts and the traces hung under it; a peak that points at the floor is read as a dip, and they were turned the right way up.</p>
+<p><strong>Where a row is.</strong> The spectrum's bars stand in a band at the head of the ground, and the newest row is on the line they stand on. Each older one is 4 pixels further down the paper. A row's place is (index + age/10) × 4, where <code>age</code> is the seconds since the newest row, so the paper moves down four tenths of a pixel each second and the new row arrives into the gap it has made. Nothing is copied to make it move: a row's place is its index.</p>
+<p><strong>Across</strong> is the period, on the spectrum's axis and by the spectrum's arithmetic: <code>stretches</code> cuts the axis and <code>place</code> puts a period on it, for both. A line in the spectrum therefore has its ridge straight down the paper under it. The axis grows as the spectrum's longer windows answer -- 8 minutes, then 1 hour 8, then 9 hours 6 -- and the trail grows with it, the full width each time.</p>
+<p><strong>The left of the axis is compressed.</strong> An axis that gave every doubling of the period the same width gave the periods over five minutes the left two fifths of the panel, and fifteen bins to put there, while the right-hand fifth held a hundred. So it is cut where the windows are, as the counts' strip is cut into tiers, and each stretch is a logarithm of its own:</p>
+<table><thead><tr><th>Stretch</th><th>Width</th><th>Bins of a row in it</th></tr></thead><tbody><tr><td>9 h 6 m to 1 h 8 m</td><td>10%</td><td>7</td></tr><tr><td>1 h 8 m to 5 m</td><td>14%</td><td>7, and 512 s is among them</td></tr><tr><td>5 m down to where the axis ends</td><td>76%</td><td>up to 149</td></tr></tbody></table>
+<p>While the 512-second window is the longest to have answered, its stretch is 5 minutes to 8 m 32 s and has 6%. Under the panel each stretch has a caption at its left, which is the period it begins at.</p>
+<p><strong>How far a trace rises</strong> is <code>analysis::gain</code>:</p>
+<pre><code class="language-text"> height  =  ln(1 + power) / ln(1 + loudest)        from nought to one</code></pre>
+<p>times 24 pixels, six rows. <code>loudest</code> is the largest power on the paper, and never less than the luck line, so the scale <strong>adjusts itself</strong>. That is a logarithm and an automatic gain together, and each does a different thing. The logarithm is nought at nought and nearly the power itself while the power is small, so the floor of noise is drawn as it is; above that every doubling is the same step, so something forty times the mean is two and a half times as tall as something three times it, and not thirteen. The automatic top means the tallest thing on the paper is as tall as there is room for, whatever it is.</p>
+<table><thead><tr><th>Power</th><th>Drawn, with 40 the loudest</th><th>In proportion it would be</th></tr></thead><tbody><tr><td>1.0, flat</td><td>19%</td><td>2.5%</td></tr><tr><td>7.5, the luck line</td><td>58%</td><td>19%</td></tr><tr><td>40</td><td>100%</td><td>100%</td></tr></tbody></table>
+<p><strong>Nothing is off the chart.</strong> Whatever is loudest is the top, so there is no figure a signal can pass and be cut off at. With something of 2000 on the paper:</p>
+<table><thead><tr><th>Power</th><th>Drawn, with 2000 the loudest</th><th>In pixels</th><th>In proportion it would be</th></tr></thead><tbody><tr><td>1.0, flat</td><td>9%</td><td>2.2</td><td>0.05%</td></tr><tr><td>7.6, the luck line</td><td>28%</td><td>6.8</td><td>0.4%</td></tr><tr><td>2000</td><td>100%</td><td>24</td><td>100%</td></tr></tbody></table>
+<p>The floor has given up half its height to make room and can still be seen, and when the loud thing has gone down the paper and off it, the scale is what is left. A test holds <code>gain</code> to those figures.</p>
+<p>The spectrum's bars are drawn by the same function, against the loudest bar in view. Before, they were drawn in proportion, and the longest periods -- which hold the room's slow drift and every tube that stopped and started -- left everything else a pixel high.</p>
+<p><strong>The pen is a thermal one</strong>, and says how loud in three ways at once. Each stretch of a trace is drawn for the louder of its two ends, in one of sixteen shades; which shade is <code>gain(power, 1.5 × luck)</code>, a logarithm again, so that the shades are spent where the powers are.</p>
+<table><thead><tr><th>Shade</th><th>Power</th><th>Colour</th><th>Width</th></tr></thead><tbody><tr><td>1</td><td>nothing</td><td>teal, hardly there</td><td>0.7 px</td></tr><tr><td>5</td><td>1.0, flat</td><td>sea green</td><td>1.3 px</td></tr><tr><td>8 to 11</td><td>2 to 5</td><td>green to lime</td><td>1.8 to 2.2 px</td></tr><tr><td>14</td><td>7.6, the luck line</td><td>yellow</td><td>2.7 px</td></tr><tr><td>15</td><td>over it</td><td>orange to red</td><td>2.8 px</td></tr><tr><td>16</td><td>11.4 and over</td><td>white</td><td>3.0 px</td></tr></tbody></table>
+<p><em>Its colour is a temperature, and most of it is green.</em> Most of what is drawn is the floor, and the eye tells more greens apart than it does any other colour: eleven shades of the sixteen run from teal through green to lime, for the part of the paper where the detail is. Then it is hot -- yellow at the line luck reaches, orange and red over it, which no floor ever is, and white for what is half as much again as luck could do.</p>
+<p><em>Its width grows with the same figure</em>, from under a pixel to three.</p>
+<p><em>And over the luck line it glows</em>: a stroke four pixels wider, of the same colour at a fifth of the opacity, under the line itself.</p>
+<p>All three are measured against the luck line and not against the loudest in view. So the height of a trace is relative to the paper it is on, and its colour and width are not: yellow is the luck line on every paper.</p>
+<p><strong>The whole trace is as bright as the room counted.</strong> A row has a level: what was counted in its own five minutes, against the long average. It is 1.0 when the room is as it has been. The trace's opacity is 0.30 + 0.70 × <code>gain(level, busiest)</code>, where <code>busiest</code> is the highest level on the paper and never less than 2:</p>
+<table><thead><tr><th>Level</th><th>The room was counting</th><th>Opacity</th></tr></thead><tbody><tr><td>0.5</td><td>half its usual</td><td>56%</td></tr><tr><td>1.0</td><td>its usual</td><td>74%</td></tr><tr><td>2.0 and the most on the paper</td><td>twice it</td><td>100%</td></tr></tbody></table>
+<p>So the paper says when the rate rose as well as what it rose at. A test raises a room from 0.9 counts a second to 27: the row stands at 7.7 -- not 30, because the five minutes are themselves a tenth of the long average -- and every bin of it is up with it, so the whole trace is hot, wide and at full brightness. Over the next fifty minutes the average catches up and the rows come back to 1.0.</p>
+<p><strong>A peak is marked.</strong> Where a row stands over both its neighbours and over the luck line it has a dot, in the pen's colour. The one loudest of them on the whole paper has a ring round it, which is the only pure white there is. <code>TrailRow::peaks</code> finds them, and a level top is one peak and not two.</p>
+<p><strong>The order</strong> is the painter's, and in front is further down the paper. A trace rises over the lines above its own, so the newest row is drawn first and every older one over it; under each trace the ground is painted back in, from the trace down to the row's own line, so a row hides what is behind it and the lines do not run through each other. The newest row is the furthest away and is drawn at two thirds of its brightness, and a row comes up to the whole of it as it comes down the paper. The spectrum's bars are drawn last and over everything.</p>
+<p><strong>There are no words in it.</strong> The axis under the panel is the spectrum's and serves both.</p>
+<hr>
+<h2 id="vii-what-the-bench-showed">VII. What the bench showed</h2>
+<p>The first picture taken of the first form had a bright patch near the 2-second end. It was measured rather than believed: a program attached to the service, took the 6168 seconds it replayed, and ran the last 1024 through <code>Waterfall</code> three ways, at 256 seconds and 8.</p>
+<table><thead><tr><th>Input</th><th>Bins over the line in 3 rows or more</th></tr></thead><tbody><tr><td>The two tubes summed</td><td>one: period 2.72 s, 8 rows running, tallest 8.0</td></tr><tr><td>Tube A alone</td><td>none</td></tr><tr><td>Tube B alone</td><td>none</td></tr></tbody></table>
+<p>Eight rows is inside what chance draws, and a period that belonged to the room would be in each tube as well as in their sum. <strong>It is noise</strong>, and it is the example of why §V.B was measured.</p>
+<p>The same run found something that is not noise and is not a period. In those 6168 seconds, one tube delivered two samples inside a single wall-clock second 41 times and the other 13 times -- a counter's second and the machine's are not the same second, and now and then two of the first land in one of the second. Each of those is a second that reads double with a second beside it that reads nothing. They are rare and not regular, so they raise the floor a little and draw no line.</p>
+<hr>
+<h2 id="viii-examples">VIII. Examples</h2>
+<p>All four are of the bench on 29 September 2026, two GMC-320 counters in a room at background, in a window 626 pixels wide beside another.</p>
+<h3 id="a-the-panel">A. The panel</h3>
+<p><img src="screenshots/gui-drum-window.png" alt="the whole window" loading="lazy"></p>
+<p>Top to bottom: who is on the other end, with each tube's newest second; the dials and the averages; the counts, compressing as they age, with the trend line over them; and the drum spectrogram on its shaded ground, the spectrum's bars at its head. Under it is the one axis both are drawn on: <code>1h 8m</code> and <code>5m</code> are where its stretches begin and <code>6s</code> is where it ends.</p>
+<h3 id="b-the-drum-spectrogram">B. The drum spectrogram</h3>
+<p><img src="screenshots/gui-drum-spectrogram.png" alt="the drum spectrogram" loading="lazy"></p>
+<p>Forty-eight rows. The newest is at the top, on the line the spectrum's bars stand on, and the oldest at the foot. Nearly all of it is green, which is the floor of noise: nothing in this room is arriving on a schedule. The left seventh is the stretch from an hour to five minutes, where a row has seven bins and the traces are nearly the same trace (§V.D). The patches of yellow and orange are where a bin stood over the luck line for some rows running.</p>
+<h3 id="c-a-peak-and-the-loudest-on-the-paper">C. A peak, and the loudest on the paper</h3>
+<p><img src="screenshots/gui-drum-detail.png" alt="a detail, twice the size" loading="lazy"></p>
+<p>Twice life size. The pen is wider where it is hotter, and glows over the luck line. The ring is round the one loudest peak on the whole paper. The hot patch is 47 pixels from top to bottom in the picture it was cut from, which is twelve rows at most and under the fifteen that chance draws (§V.B): it is what noise looks like, and is here as the example of a thing that looks like a finding and is not one.</p>
+<h3 id="d-the-pointer-over-the-counts">D. The pointer over the counts</h3>
+<p><img src="screenshots/gui-drum-hover.png" alt="the pointer over the counts" loading="lazy"></p>
+<p>A circle on the trend line at the bar the pointer is over, a hair from it down to the floor, and the words: the bar began at 17:51:08, is four seconds long, the trend there reads 15.8 CPM and the bar itself 30.0.</p>
+<hr>
+<h2 id="ix-naming">IX. Naming</h2>
+<p>A <strong>drum spectrogram</strong>. A spectrogram is what it is: power against period, row by row in time. The drum is the recorder it is drawn after -- the seismograph's, whose pen writes a line round a turning drum and moves along it, so that an hour is a page of lines one under another and an earthquake is a shape that runs down them.</p>
+<p>It is not a waterfall, though it was filed under that name for an afternoon. A waterfall colours a cell for each row and each frequency, and its rows have no height; here a row is a trace with a height, which is what lets a peak be seen as a peak. It is not quite a ridgeline plot either, which stacks distributions and has no time in it.</p>
+<p>Its parts have names of their own, which are the names in the code:</p>
+<table><thead><tr><th>Name</th><th>What it is</th><th>Where</th></tr></thead><tbody><tr><td><strong>trail</strong></td><td>the rows on the paper</td><td><code>analysis::Trail</code>, <code>Chart::trail</code></td></tr><tr><td><strong>reach</strong></td><td>one window of a row, and the bins it is asked for</td><td><code>Reach</code></td></tr><tr><td><strong>stretch</strong></td><td>one cut of the period axis</td><td><code>stretches</code>, <code>place</code></td></tr><tr><td><strong>thermal pen</strong></td><td>colour, width and glow by power</td><td><code>heat</code>, <code>pen</code>, <code>shade_of</code></td></tr><tr><td><strong>level</strong></td><td>what a row's room counted, against the long average</td><td><code>TrailRow::level</code></td></tr><tr><td><strong>gain</strong></td><td>a height by its logarithm, against the loudest in view</td><td><code>analysis::gain</code></td></tr></tbody></table>
+<p>The mechanism, in one line: <strong>joined-window periodograms, held against a long average, drawn as a falling stack of traces by a thermal pen on a logarithmic scale that sets its own top.</strong></p>
+<hr>
+<h2 id="x-what-was-built-first-and-replaced">X. What was built first, and replaced</h2>
+<p>The first form, of the same afternoon, was a glass box on a dark ground seen in perspective, after the screensaver of SETI@home [3]: period across in the colours of the rainbow, power as spikes standing on a floor, time running back, a title and an axis of its own, and a camera fixed by three constants. It is in the history at <code>d3b1cfd</code>.</p>
+<table><thead><tr><th>The box</th><th>The trail</th><th>Why it changed</th></tr></thead><tbody><tr><td>A display of its own, under the spectrum</td><td>The spectrum, going away</td><td>it was the same measurement, drawn as though it were another</td></tr><tr><td>Its own axis, 256 s to 2 s</td><td>The spectrum's axis</td><td>a period was in two places on one panel</td></tr><tr><td>A dark ground of its own, in a frame</td><td>The panel's ground, shaded</td><td>it was a hole in the paper; the shade is the paper, darker</td></tr><tr><td>A title, a luck figure, two axis labels</td><td>No words</td><td>the axis is already under the panel</td></tr><tr><td>Colour by period</td><td>Colour, width and glow by power</td><td>where a spike is, its place already says</td></tr><tr><td>Spikes standing up</td><td>Traces rising, after an afternoon of hanging</td><td>up is more</td></tr><tr><td>Height in proportion, cut off at 12</td><td>Logarithm, against the loudest in view</td><td>detail, whatever is loudest</td></tr><tr><td>Divided by the row's own mean</td><td>By the 3000-second average</td><td>rows that can be compared</td></tr><tr><td>256 s a row, every 8 s</td><td>300 s a row, every 10 s</td><td>five minutes was what was asked for</td></tr></tbody></table>
+<p>And of the trail's own first hours: its rows were of the 300-second window alone and began two fifths of the way across, on an axis of one logarithm. They are joined from four windows now and the axis is in stretches (§II.C, §VI), because the paper was to be the full width. Its pen was the panel's own inks on the panel's own ground, ten shades in proportion to the power; it is the thermal pen now, on a shaded ground, because on paper the loudest thing was the darkest.</p>
+<hr>
+<h2 id="xi-limitations">XI. Limitations</h2>
+<ol><li><strong>The long periods are coarse, and slow.</strong> Fifteen bins cover everything from five minutes to nine hours, and their rows hardly differ from one to the next (§V.D). The 32768-second window has no row until the window has been given nine hours of seconds.</li><li><strong>It is the sum of the tubes.</strong> When a tube stops answering, the rate halves. The mean is removed from each row, but a step inside a window is not a mean, and it puts power into the long-period end until the step has left the window, five minutes later. The long average takes fifty minutes to forget it.</li><li><strong>Faint periods are invisible to it</strong>, by §V.C.</li><li><strong>Heights on two papers are not the same heights.</strong> The top of the scale is the loudest thing in view, so a trace that rises six rows on a quiet paper rises three beside something loud. The colours and the widths do not move.</li><li><strong>A raised rate and a period are both hot.</strong> A row from a room counting eight times its usual is over the luck line in every bin, by chance alone, and is drawn as hot as a period would be. What tells them apart is the shape: a raised rate is a whole trace, from one side of the paper to the other, and a period is a streak down it.</li><li><strong>The window only.</strong> <code>radbeeper watch</code> in a terminal has no trail; a character cell is too coarse for it.</li><li><strong>It is drawn in a window 640 high or more.</strong> Under that the counts and the spectrum keep the panel.</li></ol>
+<hr>
+<h2 id="xii-where-it-is">XII. Where it is</h2>
+<table><tbody><tr><td><code>src/analysis.rs</code></td><td><code>Trail</code>, which the window uses; <code>Waterfall</code> and <code>Waterfall::leveled</code>, one window of it, which the measurements were made with; <code>TrailRow</code> and its <code>peaks</code>; <code>powers</code>, <code>gain</code>, <code>chance_max_of</code>; and twelve tests: a ridge in every row, no ridge in noise, how long luck's ridges run, nothing before a window, a window of any length, a row against the long average, a height by its logarithm, a height adjusting itself, a row as far as its longest window, the short end of that row being the waterfall's, a row as high as the room counted, and a peak over its neighbours</td></tr><tr><td><code>gui/src/main.rs</code></td><td><code>FALL_*</code>, <code>TRAIL_*</code> and <code>STRETCH_*</code> constants, <code>regions</code>, <code>stretches</code>, <code>place</code>, <code>shade_of</code>, <code>heat</code>, <code>pen</code>, <code>shaded</code>, <code>Chart::axis</code>, <code>Chart::trail</code>, <code>Chart::spectrum</code></td></tr><tr><td>Root crate's dependencies</td><td>unchanged: <code>libc</code></td></tr></tbody></table>
+<hr>
+<h2 id="references">References</h2>
+<p>[1] P. D. Welch, "The use of fast Fourier transform for the estimation of power spectra: a method based on time averaging over short, modified periodograms," <em>IEEE Trans. Audio Electroacoust.</em>, vol. AU-15, no. 2, pp. 70–73, 1967.</p>
+<p>[2] F. J. Harris, "On the use of windows for harmonic analysis with the discrete Fourier transform," <em>Proc. IEEE</em>, vol. 66, no. 1, pp. 51–83, 1978.</p>
+<p>[3] D. P. Anderson, J. Cobb, E. Korpela, M. Lebofsky and D. Werthimer, "SETI@home: an experiment in public-resource computing," <em>Commun. ACM</em>, vol. 45, no. 11, pp. 56–61, 2002.</p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>
