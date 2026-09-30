@@ -37,11 +37,11 @@ pub const COPAL: &str = "https://github.com/vonglurt/copal";
 /// What a search engine is handed before it reads a word of the README. It is
 /// one sentence and it has to carry the hardware, the job and the platform,
 /// because those are the three things somebody actually searches for.
-pub const DESCRIPTION: &str = "RadBeeper reads a GQ GMC-320 Plus Geiger-Muller \
-counter over USB serial on Linux: a terminal monitor and a Wayland window, \
-five averaging windows at once, an interleaved cascade of counts per second, \
-and tab-separated data logging you can publish. Built in Rust for Copal \
-Linux, an Alpine distillation.";
+pub const DESCRIPTION: &str = "RadBeeper shows what a GQ GMC-320 Plus Geiger \
+counter is counting, on Linux: a reading at a glance in a terminal or a \
+window, a log with no gaps, a web page you can publish, and a drum \
+spectrogram that shows whether anything is arriving on a schedule. For \
+Alpine and Copal Linux.";
 
 pub const KEYWORDS: &str = "geiger counter linux, GMC-320 Plus, GQ GMC, geiger \
 muller counter USB, radiation monitor Linux, tty serial geiger counter, counts \
@@ -647,65 +647,67 @@ footer a{color:var(--dim)}
 ///
 /// A README opens by telling somebody who already has the hardware what to
 /// type. A landing page has to answer "what is this and is it for me?" first
-/// -- what the hardware is, what the program does with it, and which Linux it
-/// is built on and for.
+/// -- what it does for somebody with a counter, in words that somebody
+/// would use. How it does it is docs/technical-description.md, which the
+/// page links; it was on this page, and a visitor had to read termios and
+/// Poisson to find out whether the thing was for them.
 ///
 /// `r##` rather than `r#`, because the page links its own anchor: `href="#`
 /// would end a `r#` string two thousand characters early.
 fn hero() -> String {
     format!(r##"<header class="hero"><div class="wrap">
-<p class="eyebrow">GQ GMC-320 Plus &middot; USB serial &middot; Linux</p>
-<h1>A Geiger&ndash;M&uuml;ller counter on the desk, and a record of what it heard</h1>
-<p class="lede">RadBeeper reads a <strong>GQ GMC-320 Plus</strong> over its
-USB-to-serial link on Linux, counts the beeps itself, and turns them into
-something you can read at a glance and keep: a terminal monitor, a Wayland
-window, five averaging windows at once, an <strong>interleaved cascade</strong>
-of counts as they age, and tab-separated logs that publish as a web page.</p>
+<p class="eyebrow">GQ GMC-320 Plus &middot; USB &middot; Linux</p>
+<h1>See what your Geiger counter is counting, and keep a record of it</h1>
+<p class="lede">Plug in a <strong>GQ GMC-320 Plus</strong>, switch it on, and
+RadBeeper finds it. It shows the reading at a glance, in a terminal or a
+window, logs it whether or not you are watching, and builds a web page you
+can publish. Its <strong>drum spectrogram</strong> shows whether anything is
+reaching the counter on a schedule, which radiation never does.</p>
 <ul class="badges">
-<li>MIT</li><li>Rust, one dependency</li><li>crates.io</li>
-<li>Alpine &amp; Copal Linux</li><li>Hyprland / Wayland</li>
+<li>Free, MIT</li><li>One command to install</li><li>Terminal and window</li>
+<li>Alpine &amp; Copal Linux</li><li>One counter or several</li>
 </ul>
 <div class="cta">
-<a class="primary" href="#radbeeper">Read the documentation</a>
+<a class="primary" href="#get-started">Get started</a>
 <a href="monitor.html">See a live counter's report</a>
-<a href="{}">Source on GitHub</a>
+<a href="docs/reading-the-drum-spectrogram.html">The drum spectrogram</a>
+<a href="docs/technical-description.html">How it works</a>
+<a href="{}">Source</a>
 </div>
 </div></header>
 
 <div class="wrap"><section class="facts">
-<div class="fact"><h2>The hardware</h2><p>A <strong>GQ GMC-320 Plus</strong>
-Geiger&ndash;M&uuml;ller counter, plugged into USB. It presents as a CH340
-serial device at <code>/dev/ttyUSB0</code>; RadBeeper opens it with termios and
-reads the counter's own heartbeat &mdash; two bytes, once a second.</p></div>
+<div class="fact"><h2>Read it at a glance</h2><p>One big number, dials with
+the bands named on them, and <strong>five averages at once</strong>, from
+three seconds to a working day. You see what the counter says now and whether
+now is unusual.</p></div>
 
-<div class="fact"><h2>The calculation</h2><p>The counter reports one rolling
-60-second count. RadBeeper counts the arrivals itself and keeps <strong>five
-windows at once</strong> &mdash; 3&nbsp;s, 30&nbsp;s, 300&nbsp;s, 3000&nbsp;s
-and a working day &mdash; each with the Poisson precision of its own figure,
-and CPM converted to &micro;Sv/h by the tube's own factor.</p></div>
+<div class="fact"><h2>Half a day on one line</h2><p>A strip of counts that
+shows this second in full and the past twelve hours in outline, with a trend
+line over it. Point at any bar to see when it was and what it read.</p></div>
 
-<div class="fact"><h2>The interleaved log view</h2><p>Counts are drawn as a
-cascade that <strong>compresses as it ages</strong>: a second a bar at the
-right, twice as long in a bar at every step left. With two or more counters the
-finest tier is <strong>arrival order</strong>, one tube's reading per bar in
-that tube's own colour, so the interleave can be seen rather than assumed.</p></div>
+<div class="fact"><h2>The drum spectrogram</h2><p>A chart drawn like a
+seismograph's paper. <strong>Green is ordinary background.</strong> A hot
+stripe from top to bottom is something arriving on a schedule: a fan, a
+fault, electrical noise. <a href="docs/reading-the-drum-spectrogram.html">How
+to read it</a>.</p></div>
 
-<div class="fact"><h2>The record</h2><p>One tab-separated row every thirty
-seconds per counter, plus a merged record of the room when there is more than
-one tube. Nothing is averaged into an instrument's own file. The counter's
-flash is read back to fill gaps from while nothing was listening.</p></div>
+<div class="fact"><h2>A record with no gaps</h2><p>A row to disk every thirty
+seconds. The counter's own memory is read back to fill in the time nothing
+was listening, and the whole record becomes a web page with one
+command.</p></div>
 
-<div class="fact"><h2>Built on Copal Linux</h2><p>RadBeeper is designed and
-maintained for <a href="{}"><strong>Copal</strong></a>, a distillation of
-<strong>Alpine Linux</strong> &mdash; which also provides its development
-environment. Copal carries RadBeeper as a stage, and installs the
-<code>linux-lts</code> kernel the counter needs to be seen at all.</p></div>
+<div class="fact"><h2>One counter or several</h2><p>Plug in a second and both
+are read, with nothing to set. The reading gets more precise, each keeps its
+own log, and one that stops answering is left out until it
+returns.</p></div>
 
-<div class="fact"><h2>What it targets</h2><p>Copal's own surface: a terminal,
-and <strong>Hyprland on Wayland</strong> for the window. Rust from
-<a href="{}">crates.io</a> with <code>cargo</code>, driven by
-<code>make</code>, developed and recorded inside the <strong>Copal virtual
-machine</strong> this project's own screenshots come from.</p></div>
+<div class="fact"><h2>Made for Copal Linux</h2><p>RadBeeper is built for
+<a href="{}"><strong>Copal</strong></a>, which is made from
+<strong>Alpine Linux</strong>, and runs on either. It installs from
+<a href="{}">crates.io</a> or as a ready-made binary.
+<a href="docs/technical-description.html">The technical
+description</a> has the rest.</p></div>
 </section></div>
 "##, REPO, COPAL, CRATE)
 }
@@ -790,9 +792,9 @@ fn nav(here: &str) -> String {
     let items: [(&str, &str); 7] = [
         ("index.html", "Overview"),
         ("monitor.html", "Live report"),
-        ("docs/the-log.html", "The log"),
-        ("docs/the-stream.html", "The stream"),
-        ("docs/cascade.html", "The cascade"),
+        ("docs/reading-the-drum-spectrogram.html", "Drum spectrogram"),
+        ("docs/technical-description.html", "How it works"),
+        ("docs/index.html", "Lab reports"),
         (REPO, "GitHub"),
         (CRATE, "crates.io"),
     ];

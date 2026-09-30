@@ -26,11 +26,11 @@ use std::time::{Duration, Instant};
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const BIG_ROWS: usize = 12;
 const SERVICE_WAIT: f64 = 10.0;
-/// Samples kept for the cascade strip. Six tiers of doubling reach back
-/// most of an hour across a wide terminal, and every tube sends a sample a
-/// second: this is that hour for nine of them. The rest is the windows'
-/// business, not the strip's.
-const STRIP_KEEP: usize = 32768;
+/// Samples kept for the cascade strip. Eleven tiers of doubling reach back
+/// half a day across a wide terminal, and every tube sends a sample a
+/// second: this is that half day for three of them. The rest is the
+/// windows' business, not the strip's.
+const STRIP_KEEP: usize = 131072;
 /// How often a running service looks for a counter that was not there before.
 ///
 /// ONE LOG CYCLE. Often enough that plugging a tube in and looking at the
@@ -1337,10 +1337,10 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
         let counts_rows = if hv > row + 12 { 5 } else if hv > row + 8 { 3 } else { 1 };
         // THE COUNTS, COMPRESSING AS THEY AGE. A second a bar on the right,
         // then k seconds, then k*k and k*k*k, reaching back as far as the
-        // spectrum's window -- see analysis::tiers. Six tiers of equal
-        // width, so each one leftwards is another doubling, out to thirty-
-        // two seconds a bar. One scale for all of them, so the same height
-        // is the same rate wherever it is drawn.
+        // spectrum's window -- see analysis::tiers. Eleven tiers of equal
+        // width, so each one leftwards is another doubling, out to 1024
+        // seconds a bar. One scale for all of them, so the same height is
+        // the same rate wherever it is drawn.
         let series: Vec<f64> = merged.iter().copied().collect();
         // WHOLE SECONDS, AND ONE TIER BELOW THEM FOR THE INTERLEAVE. One tube
         // keeps the strip it always had; see analysis::tiers_interleaved.

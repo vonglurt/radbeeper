@@ -338,8 +338,8 @@ Two details earned their tests:
   drawing it as `None` would make the strip appear to have a gap. It is drawn
   as the mean of what it has, which is also what it will keep.
 
-The counts strip -- four tiers deep in that picture, six since 2026-09-29,
-out to thirty-two seconds a bar -- is the wide band across the middle of
+The counts strip -- four tiers deep in that picture, eleven since
+2026-09-29, out to 1024 seconds a bar -- is the wide band across the middle of
 [`docs/screenshots/watch.png`](screenshots/watch.png); the README's animation
 shows it filling, tier by tier, over the first ten minutes of a session.
 
