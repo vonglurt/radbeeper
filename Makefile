@@ -59,8 +59,23 @@ GIFPLAY ?= 2
 # How wide the frames are scaled before they become a GIF. The starting
 # point, not the answer: GIFMAXMB is what decides.
 GIFWIDTH ?= 1100
+# What `make gui-drum` records: the whole panel filling from empty, a frame
+# per drum row. The drum lays a row every DRUMEVERY seconds and holds
+# ninety-six, and the first needs the spectrum's 512-second window, so
+# 512 + 96 * 8 = 1280 s is the paper filling end to end; DRUMSECS is that
+# with a little over. One clip per theme, full screen, and the last frame
+# of each is kept as that theme's full-screen still.
+DRUMSECS ?= 1320
+DRUMEVERY ?= 8
+DRUMPLAY ?= 4
+DRUMTHEMES ?= dark antiquity
+# Where the pointer is parked for a recording: on the bar, just right of its
+# menu. The pointer is drawn into a screen grab, so it has to be outside the
+# window, and the bar is outside. Not the top-right corner -- that is the
+# clock, and hovering it spawns its overlay into every frame.
+GIFCURSOR ?= 40 12
 
-.PHONY: all build test check clippy install uninstall package publish-dry \
+.PHONY: gui-drum gui-clips all build test check clippy install uninstall package publish-dry \
         release-check release release-media release-verify bump probe watch \
         sim service gui gui-build gui-install gui-gif gui-shots site site-py site-serve \
         py-test py-check py-install promo promo-fast play clean help
@@ -188,6 +203,9 @@ release-media:
 	@command -v grim >/dev/null && test -n "$$WAYLAND_DISPLAY" \
 	  && $(PYTHON) tools/guishots.py $(if $(GIFWS),--workspace $(GIFWS),) \
 	  || echo "  SKIPPED the theme shots -- no Wayland compositor with grim"
+	@command -v grim >/dev/null && test -n "$$WAYLAND_DISPLAY" \
+	  && $(MAKE) --no-print-directory gui-clips \
+	  || echo "  SKIPPED the window clips -- no Wayland compositor with grim"
 	@$(PYTHON) tools/promo.py $(if $(SHOTS),--only $(SHOTS)) \
 	  || echo "  SKIPPED the terminal shots -- promo.py could not run"
 	@echo "  media done"
@@ -323,6 +341,57 @@ gui-install: gui-build
 gui-shots: gui-build
 	$(PYTHON) tools/guishots.py $(if $(GIFWS),--workspace $(GIFWS),)
 
+## gui-drum: the panel filling from empty, a frame a drum row, both themes
+# A FRESH WINDOW PER THEME, and its own window by pid: the panel computes
+# every graph from the moment it attaches, so a new window is the graphs
+# filling, and `radbeeper hotplug` may have a window of its own open in
+# whatever theme the desktop wears. Twenty-two minutes a theme; that is
+# the point -- and on a headless output of the display's size, so the
+# desktop stays usable for those minutes and a workspace switch cannot put
+# a terminal into the picture. The bar and gaps stay, as in every clip.
+# ALL AT ONCE. Each theme gets a headless output of its own, side by side
+# off the right edge of the display, and its own window on it; the clips
+# are the same twenty-two minutes whether one records or three, so they
+# all record. A restart of the service just before is what makes the log
+# and the flash read start from empty too: `doas rc-service radbeeper
+# restart`, then this.
+gui-drum: gui-build
+	@command -v grim >/dev/null || { echo "no grim -- a Wayland compositor is needed"; exit 1; }
+	@test -n "$$WAYLAND_DISPLAY" || { echo "no WAYLAND_DISPLAY -- this records a window"; exit 1; }
+	@i=0; for t in $(DRUMTHEMES); do i=$$((i+1)); \
+	  echo "== $$t: $(DRUMSECS)s, a frame every $(DRUMEVERY)s, headless slot $$i"; \
+	  ( ./$(GUIBIN) --theme $$t >/dev/null 2>&1 & pid=$$!; \
+	    sleep 8; \
+	    $(PYTHON) tools/guicast.py --pid $$pid -o docs/screenshots/gui-drum-$$t.gif \
+	      --every $(DRUMEVERY) --seconds $(DRUMSECS) --play-fps $(DRUMPLAY) \
+	      --width $(GIFWIDTH) --max-mb $(GIFMAXMB) \
+	      --headless drum-$$t --slot $$i --park $(GIFCURSOR) \
+	      --still docs/screenshots/gui-$$t.png \
+	      || echo "  FAILED $$t"; \
+	    kill $$pid 2>/dev/null ) & \
+	  sleep 4; \
+	done; wait
+
+## gui-clips: every window clip in one go -- gui.gif, then the drum in each theme
+# The README's short clip from a fresh window too, on a slot of its own
+# past the drum's, in whatever theme the desktop wears, so one command
+# after a service restart records everything the pages show of the window.
+# THE HERO FIRST, AND TO THE END. It used to run alongside the drum, and
+# its headless output came down in the same second the drum's were going
+# up; Hyprland 0.54.3 segfaulted on that and took the session, and the
+# drum clips, with it (2026-09-30). The hero is a minute; the drum waits
+# for it, and no output is removed while another is being made.
+gui-clips: gui-build
+	@command -v grim >/dev/null || { echo "no grim -- a Wayland compositor is needed"; exit 1; }
+	@test -n "$$WAYLAND_DISPLAY" || { echo "no WAYLAND_DISPLAY -- this records a window"; exit 1; }
+	@./$(GUIBIN) >/dev/null 2>&1 & pid=$$!; sleep 8; \
+	  $(PYTHON) tools/guicast.py --pid $$pid -o $(GIFOUT) --seconds $(GIFSECS) \
+	    --fps $(GIFFPS) --play-fps $(GIFPLAY) --width $(GIFWIDTH) \
+	    --max-mb $(GIFMAXMB) --headless hero --slot 9 --park $(GIFCURSOR) \
+	    || echo "  FAILED gui.gif"; \
+	  kill $$pid 2>/dev/null
+	$(MAKE) --no-print-directory gui-drum
+
 ## gui-gif: re-record docs/screenshots/gui.gif from the running window
 # WHY NOT `make promo`. That records a TERMINAL -- it keeps the bytes a
 # program writes to a pty, which is exact and tiny and no use at all for a
@@ -338,7 +407,7 @@ gui-gif:
 	  || { echo "no radbeeper-gui running -- start it first: make gui"; exit 1; }
 	$(PYTHON) tools/guicast.py -o $(GIFOUT) --seconds $(GIFSECS) \
 	  --fps $(GIFFPS) --play-fps $(GIFPLAY) --width $(GIFWIDTH) \
-	  --max-mb $(GIFMAXMB) $(if $(GIFFULL),--fullscreen,) \
+	  --max-mb $(GIFMAXMB) $(if $(GIFFULL),--fullscreen,) --park $(GIFCURSOR) \
 	  $(if $(GIFWS),--workspace $(GIFWS),)
 
 ## service: what the boot service runs, in the foreground

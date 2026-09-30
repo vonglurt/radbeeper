@@ -97,6 +97,16 @@ make promo-fast            # the same, reusing the last monitor recording
 make promo SHOTS=probe     # just one
 ```
 
+The window is recorded the other way, from pixels — see below — and its long
+clip is `make gui-drum`: a fresh window per theme, full screen, one frame per
+row of the drum spectrogram for twenty-two minutes, which is the paper filling
+end to end from the moment the window opened. The last frame of each is kept as
+that theme's still, `gui-dark.png` and `gui-antiquity.png`, so the stills show a
+panel with every graph full rather than one opened a minute ago. Long captures
+are the point of the instrument: a schedule shows up as a stripe, and a stripe
+takes time. Restart the service first if the record is to start from empty
+there too.
+
 ### The window is pixels, because it has to be
 
 That whole apparatus records a **terminal**: it keeps the bytes a program

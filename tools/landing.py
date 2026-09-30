@@ -267,6 +267,9 @@ body{margin:0;background:var(--bg);color:var(--fg);
 font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
 header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.drum img{display:block;width:100%;height:auto;margin:1.75rem 0 0;
+border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.caption{font-size:.9rem;color:var(--dim);margin:.6rem 0 0;max-width:44rem}
 .eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
 letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
 h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
@@ -383,6 +386,14 @@ reaching the counter on a schedule, which radiation never does.</p>
 <a href="docs/technical-description.html">How it works</a>
 <a href="%s">Source</a>
 </div>
+<picture class="drum">
+<source srcset="docs/screenshots/gui-drum-dark.gif" media="(prefers-color-scheme: dark)">
+<img src="docs/screenshots/gui-drum-antiquity.gif"
+     alt="radbeeper-gui filling from empty: the dials, the counts strip and the drum spectrogram, a frame per drum row over twenty-two minutes">
+</picture>
+<p class="caption">Twenty-two minutes of two counters, a frame per row of the
+drum, from the moment the window opened. Long captures are the point: a
+schedule shows up as a stripe, and a stripe takes time.</p>
 </div></header>
 
 <div class="wrap"><section class="facts">

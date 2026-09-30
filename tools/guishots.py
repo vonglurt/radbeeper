@@ -34,9 +34,12 @@ APP_ID = "radbeeper-gui"
 
 # (theme, width, height, filename). The two comparison shots are the same size
 # so the only difference between them is the one being demonstrated.
+# THE TWO THEME SHOTS ARE NOT HERE ANY MORE. gui-dark.png and
+# gui-antiquity.png are the last frames of `make gui-drum`'s clips: the whole
+# screen, after twenty-two minutes, with every graph full -- which a window
+# opened forty-five seconds ago cannot show. What is left is the one claim
+# only a small window can make.
 SHOTS = [
-    ("dark", 900, 720, "gui-dark.png"),
-    ("antiquity", 900, 720, "gui-antiquity.png"),
     ("dark", 560, 400, "gui-small.png"),
 ]
 
@@ -46,12 +49,20 @@ def need(program, why):
         sys.exit("guishots: %s is not installed -- %s" % (program, why))
 
 
-def window(app_id):
-    """The window's address, geometry and workspace, or None."""
+def window(app_id, pid=None):
+    """The window's address, geometry and workspace, or None.
+
+    THE WINDOW THIS TOOL STARTED, BY PID. `radbeeper hotplug` keeps a window
+    of its own open in whatever theme the desktop wears, and taking the
+    first radbeeper-gui the compositor lists photographed that one: both
+    theme shots came out light, and had for a day (2026-09-30).
+    """
     try:
         out = subprocess.run(["hyprctl", "clients", "-j"],
                              capture_output=True, text=True, timeout=10)
         for c in json.loads(out.stdout):
+            if pid and c.get("pid") != pid:
+                continue
             if c.get("class") == app_id or c.get("initialClass") == app_id:
                 return (c["address"],
                         "%d,%d %dx%d" % (c["at"][0], c["at"][1],
@@ -73,8 +84,6 @@ def showing():
 
 
 def shoot(binary, theme, w, h, out, logs, settle, workspace):
-    subprocess.run(["pkill", "-f", binary], capture_output=True)
-    time.sleep(2)
     cmd = [binary, "--theme", theme]
     if logs:
         cmd += ["--logs", logs]
@@ -85,7 +94,7 @@ def shoot(binary, theme, w, h, out, logs, settle, workspace):
     address = None
     for _ in range(40):
         time.sleep(1)
-        address, _geom, _ws = window(APP_ID)
+        address, _geom, _ws = window(APP_ID, proc.pid)
         if address:
             break
     if not address:
@@ -110,7 +119,7 @@ def shoot(binary, theme, w, h, out, logs, settle, workspace):
     # windows are what the dials read, and a picture taken before they have
     # anything in them is a picture of two needles on the stop.
     time.sleep(settle)
-    _address, geom, ws = window(APP_ID)
+    _address, geom, ws = window(APP_ID, proc.pid)
     if not geom:
         proc.terminate()
         return "the window went away before the shot"
