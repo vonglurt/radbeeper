@@ -62,6 +62,31 @@ fails at once, because no amount of waiting fixes either. And if the service is
 gets there first wins, so stop it, start the monitor, and start the service
 again after.
 
+**5. The counter's date is wrong.** Its clock runs off the same battery as
+everything else, so a battery pull sends it back to the year 2000, and it drifts
+about half a minute a day between pulls. Nothing needs doing: every start of
+`service` and `watch`, and every time a counter is plugged back in, reads the
+counter's flash and *then* sets its clock from this machine when it is more than
+a second out. After, not before, because the rows in the flash were stamped by
+the old clock and are placed with it. `radbeeper clock` shows the figures and
+`clock --set` does it by hand.
+
+One thing the program cannot do is erase the counter's memory — GQ's protocol has
+no command for it. That matters once, after a battery pull: the samples the
+counter recorded between losing its clock and having it set carry year-2000
+stamps, and the next start re-reads them under the corrected clock and files
+them under a `cpm-<serial>-2000-01.tsv`. Erase saved data from the counter's own
+menu once the clock is right, and delete the stray file if one appeared.
+
+**6. `probe` shows one counter, or the status file names one.** `probe` lists
+every counter: the ones the service holds, from what the service says, and the
+ones on free ports, opened and asked their battery and clock. A counter that
+arrives after the service started joins it on the next thirty-second sweep, and
+until then it is on the free list. Under each counter `probe` prints what the
+last start found, from `/var/lib/radbeeper/starts` — one line per counter per
+start, appended, and readable without root, unlike the service's own log under
+`/var/log/radbeeper`.
+
 ---
 
 [← back to the README](../README.md)

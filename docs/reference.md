@@ -43,6 +43,17 @@ second on a tube that saturates three orders of magnitude below that. `log pull`
 writes the raw flash image before decoding it, which is why both were fixable
 against data already on disk.
 
+**And one to the reply itself.** Both counters here — `GMC-320Re 4.26` and
+`GMC-320+V4Re 4.83` — answer a 2048-byte `<SPIR>>` with 2049 bytes: the extra one
+is the next byte of flash. It is still on the wire when the port is flushed for
+the next command, so it arrives as the first byte of the next reply. Read back to
+back, every chunk after the first began with the previous chunk's spare byte and
+lost its own last one — a duplicated byte every 2 KiB, which is where much of the
+"corrupt flash" the decoder tolerates came from — and in the search for the
+newest data a spare byte at the head of an all-`FF` probe made a blank block look
+written. The reader now waits for the line to go quiet after every chunk before
+it sends the next command.
+
 ## Speed
 
 The monitor's budget is one sample a second and it uses a fraction of a percent of

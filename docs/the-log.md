@@ -150,6 +150,15 @@ radbeeper --clock-offset 2180 backfill      # if you have since set its clock
   unwritten byte in it: the newest sample sits just *before* the write pointer.
   Reading the physical tail would hand back the oldest hours while claiming they
   were the newest.
+- **The clock is corrected after the read, never before.** A counter that lost
+  its battery comes back in the year 2000. The offset measured before the read
+  is what places the rows; only once they are placed is the counter set from
+  this machine, and only when it is more than a second out.
+- **What each start found is written down.** `starts`, beside the log, gets one
+  line per counter per start — the samples read, the rows placed, and whether
+  the clock was set — and `radbeeper probe` shows the newest line for each
+  counter. The service's own stdout goes to a root-only log; this is the copy
+  anyone can read.
 
 ---
 
