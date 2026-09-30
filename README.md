@@ -456,9 +456,9 @@ two programs can both write, and publishing in more detail.
 
 | | |
 |---|---|
-| `probe` | find the counter and say what it is |
+| `probe` | every counter on the machine, held by the service or free, and what its last start did |
 | `watch` | the monitor, logging while it is open; `--no-log` to only watch |
-| `clock` | how far the counter's clock is out; `--set` corrects it |
+| `clock` | how far the counter's clock is out; `--set` corrects it, as every start of `service` and `watch` does |
 | `cpm` | one 30-second average, for a script. Takes 30 s, and says so |
 | `service` | monitor and log every counter found; dormant when there is nothing to read |
 | `hotplug` | sit in the session, open the monitor on plug-in |

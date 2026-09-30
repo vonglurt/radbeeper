@@ -692,6 +692,25 @@ mod tests {
     /// `cat /var/lib/radbeeper/status` is what the init script tells people
     /// to read when nothing seems to be happening.
     #[test]
+    fn each_counter_keeps_its_own_newest_start() {
+        let root = std::env::temp_dir().join(format!("rb-starts-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        assert_eq!(last_start(&root, "F48824B8207F7E"), None, "no file yet");
+
+        note_start(&root, "F48824B8207F7E", "backfill -- 12 samples; clock set -- was 26.7 years behind");
+        note_start(&root, "F7F4CA7F05C2EA", "backfill -- 3 samples, 1 rows, 1 added, 0 already logged");
+        note_start(&root, "F48824B8207F7E", "backfill skipped -- the counter returned no history");
+
+        let (stamp, what) = last_start(&root, "F48824B8207F7E").unwrap();
+        assert_eq!(what, "backfill skipped -- the counter returned no history");
+        assert_eq!(stamp.len(), "2026-09-30 08:51:52".len(), "{}", stamp);
+        let (_, other) = last_start(&root, "F7F4CA7F05C2EA").unwrap();
+        assert!(other.starts_with("backfill -- 3 samples"), "{}", other);
+        assert_eq!(last_start(&root, "nobody"), None);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn a_status_is_written_where_it_was_told_and_nowhere_else() {
         let root = std::env::temp_dir().join(format!("rb-status-{}", std::process::id()));
         let (real, other) = (root.join("real"), root.join("other"));
@@ -769,6 +788,37 @@ pub fn write_status(directory: &Path, text: &str) -> PathBuf {
         let _ = writeln!(f, "{}  {}", clock::format(clock::now(), "%Y-%m-%d %H:%M:%S"), text);
     }
     path
+}
+
+/// What a start did to one counter, appended to `starts` beside the log.
+///
+/// THE STATUS FILE IS ONE LINE AND THE NEXT THING OVERWRITES IT. The service
+/// reads each counter's flash and corrects its clock before it says
+/// "monitoring", and the line saying what that found went only to its own
+/// stdout -- which is root's log file under the init script, and nobody
+/// else's to read. So it goes here as well: one line per counter per start,
+/// stamped, appended, in the directory the log lives in, readable by
+/// whoever can read the log. `probe` shows the newest line for each counter
+/// it names, and `radbeeper hotplug` re-reads a flash every time the USB
+/// comes back, so this is also the record of how often that happens.
+pub fn note_start(directory: &Path, serial: &str, text: &str) -> PathBuf {
+    let path = directory.join("starts");
+    if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&path) {
+        let _ = writeln!(f, "{}  {}  {}",
+                         clock::format(clock::now(), "%Y-%m-%d %H:%M:%S"), serial, text);
+    }
+    path
+}
+
+/// The newest `starts` line for one counter: (stamp, what happened).
+pub fn last_start(directory: &Path, serial: &str) -> Option<(String, String)> {
+    let text = fs::read_to_string(directory.join("starts")).ok()?;
+    text.lines().rev().find_map(|line| {
+        let (stamp, rest) = line.split_at(line.find("  ")?);
+        let rest = rest.trim_start();
+        let (who, what) = rest.split_at(rest.find("  ")?);
+        (who == serial).then(|| (stamp.to_string(), what.trim_start().to_string()))
+    })
 }
 
 /// What happened between two log lines, in constant space.

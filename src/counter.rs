@@ -215,6 +215,22 @@ impl Counter {
                     break;
                 }
             }
+            // AND THEN WAIT FOR THE COUNTER TO STOP TALKING. Both GMC-320s
+            // on the bench -- Re 4.26 and +V4 Re 4.83 -- answer a 2048-byte
+            // <SPIR>> with 2049: the extra byte is the next byte of flash,
+            // whatever GQ's document says. The flush before the next command
+            // cannot catch it -- at 115200 baud it is still in flight when
+            // the flush runs, and lands as the first byte of the next reply.
+            // Read back to back, every chunk after the first then began
+            // with the previous chunk's spare byte and lost its own last
+            // one: a duplicated byte every 2 KiB, which is the "corrupt or
+            // half-erased flash" the decoder has been coping with on this
+            // unit since the beginning. And in the tail search a single
+            // spare data byte at the head of an all-0xFF probe made a
+            // blank 512 KiB block look written, so a freshly erased flash
+            // backfilled nothing at all (2026-09-30). Twenty milliseconds
+            // is two hundred byte-times, and a few USB polling intervals.
+            self.port.drain(Duration::from_millis(20));
             if chunk.is_empty() {
                 break;
             }

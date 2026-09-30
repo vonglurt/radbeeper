@@ -1891,7 +1891,15 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
             if let (Some(s), Some(c)) = (srv.as_mut(), id.counters.get(who)) {
                 s.announce(who, c);
             }
-            log::write_status(&dir, &format!("monitoring {} ({})", path, version));
+            // EVERY LIVE COUNTER, NOT THE ONE THAT JOINED. The line at start
+            // names them all, and `cat status` after a rescan adopted the
+            // second tube read "monitoring /dev/ttyUSB1" as though the first
+            // had gone (2026-09-30).
+            log::write_status(&dir, &format!(
+                "monitoring {} ({})",
+                id.counters.iter().map(|c| c.path.as_str()).collect::<Vec<_>>().join(", "),
+                id.counters.iter().map(|c| c.version.as_str()).collect::<Vec<_>>().join(", ")
+            ));
             println!("radbeeper: {} joined -- {} ({})", path, version, serial);
             if downloading.is_empty() {
                 if let Some(s) = srv.as_mut() {
@@ -2054,19 +2062,135 @@ fn while_serving<T>(srv: Option<&mut broker::Server>, what: &str,
 /// ring, and the gaps are wherever nothing was listening: `history::backfill`
 /// finds the newest end of the ring and fills only the slots that are empty.
 ///
+/// AND THE COUNTER'S CLOCK IS SET, AFTER THE DOWNLOAD, when it is out by
+/// more than `CLOCK_SLACK`. The flash is stamped by the counter's own clock,
+/// so the offset that places its rows must be the one the rows were recorded
+/// under: measure, download, and only then correct. A counter whose battery
+/// was pulled comes back reading the year 2000, and every start is the one
+/// moment something with the right time is holding its port. It is set to
+/// THIS machine's clock, synchronised or not, because this machine's clock
+/// is the one the log is written in -- see `clock_cmd` for the warning a
+/// person gets when that clock is nothing to copy.
+///
 /// One line saying what happened, for whoever is showing it.
 fn backfill_at_start(c: &counter::Counter, dir: &Path, spans: &[f64], every: f64,
                      bytes: usize, max_gap: f64, quiet: bool) -> String {
-    let offset = measure_clock_offset(c).unwrap_or(0.0);
+    let before = c.clock_ahead();
+    let offset = before.map(|o| -o.ahead).unwrap_or(0.0);
     let blob = read_history_tail(c, bytes, quiet);
-    if blob.is_empty() {
-        return "backfill skipped -- the counter returned no history".to_string();
+    let mut note = if blob.is_empty() {
+        "backfill skipped -- the counter returned no history".to_string()
+    } else {
+        let sites = log::read_sites(dir);
+        let r = history::backfill(&blob, spans, every, max_gap, offset, dir,
+                                  Some(c.serial_no.as_str()), &sites, None);
+        format!("backfill -- {} samples, {} rows, {} added, {} already logged",
+                r.samples, r.rows, r.added, r.clashed)
+    };
+    match before {
+        Some(o) if o.ahead.abs() > CLOCK_SLACK => {
+            note.push_str(&match aim_clock(c) {
+                Ok(after) => format!("; clock set -- was {} at {}, now {}",
+                                     describe_drift(o.ahead),
+                                     clock::format(o.theirs, "%Y-%m-%d %H:%M:%S"),
+                                     describe_offset(&after)),
+                Err(e) => format!("; clock NOT set -- was {}, and {}",
+                                  describe_drift(o.ahead), e),
+            });
+        }
+        Some(_) => {}
+        None => note.push_str("; clock not read -- the counter did not answer <GETDATETIME>>"),
     }
-    let sites = log::read_sites(dir);
-    let r = history::backfill(&blob, spans, every, max_gap, offset, dir,
-                              Some(c.serial_no.as_str()), &sites, None);
-    format!("backfill -- {} samples, {} rows, {} added, {} already logged",
-            r.samples, r.rows, r.added, r.clashed)
+    log::note_start(dir, &c.serial_no, &note);
+    note
+}
+
+/// `radbeeper probe`: every counter on the machine, in one listing.
+///
+/// TWO PLACES A COUNTER CAN BE, AND BOTH ARE ASKED. A service holding a
+/// port introduces its counters over the socket, and interrupting its
+/// stream to ask one a question would cost the log a sample -- so those are
+/// listed from what the service says, without the battery and the clock.
+/// Whatever is on a free port is opened and asked everything. `-d` narrows
+/// either list. With the service holding one tube and the other on a port
+/// it has not swept yet, the old `probe` showed one and said nothing of the
+/// other, and which one depended on the moment (2026-09-30).
+fn probe_cmd(devices: &[String], baud: Option<u32>, dir: &Path, cpm_per_usvh: f64) -> i32 {
+    let wanted = |path: &str| devices.is_empty() || devices.iter().any(|d| d == path);
+    let mut shown = 0usize;
+    if let Some(client) = broker::Client::attach(dir) {
+        let id = client.identity();
+        for c in id.counters.iter().filter(|c| wanted(&c.path)) {
+            if shown > 0 {
+                println!();
+            }
+            println!("counter    {}", c.version);
+            println!("model      {}", counter::model_of(&c.version));
+            println!("serial     {}", c.serial_no);
+            println!("port       {} @ {} baud", c.path, c.baud);
+            println!("held by    the radbeeper serving {}",
+                     broker::socket_path(dir).display());
+            print_last_start(dir, &c.serial_no);
+            shown += 1;
+        }
+    }
+    // The ports the service holds fail at the flock and drop out here, so
+    // this is exactly the counters nobody is reading.
+    let (free, why) = counter::find_all(devices, baud);
+    for c in &free {
+        if shown > 0 {
+            println!();
+        }
+        println!("counter    {}", c.version);
+        println!("model      {}", c.model());
+        println!("serial     {}", c.serial_no);
+        println!("port       {} @ {} baud", c.path, c.baud);
+        if let Some(v) = c.voltage() {
+            println!("battery    {:.1} V", v);
+        }
+        if let Some(o) = c.clock_ahead() {
+            println!("its clock  {}   {}",
+                     clock::format(o.theirs, "%Y-%m-%d %H:%M:%S"), describe_offset(&o));
+            if o.ahead.abs() > 1.0 {
+                println!("           radbeeper clock --set  corrects it from this machine");
+            }
+        }
+        if let Some(n) = c.cpm() {
+            println!("reading    {} CPM  ({:.3} uSv/h at {:.1} CPM per uSv/h)",
+                     n, n as f64 / cpm_per_usvh, cpm_per_usvh);
+        }
+        print_last_start(dir, &c.serial_no);
+        shown += 1;
+    }
+    if shown == 0 {
+        if let Some(e) = why {
+            eprintln!("{}: {}", if e.busy { "port busy" } else { "no counter" }, e.reason);
+            for line in e.detail.lines() {
+                eprintln!("    {}", line);
+            }
+        }
+        return 1;
+    }
+    if shown > free.len() {
+        println!();
+        println!("battery and clock of a served counter need the port itself:");
+        println!("    doas rc-service radbeeper stop");
+        println!("radbeeper watch attaches to the service -- no handover needed");
+    }
+    0
+}
+
+/// `probe`'s lines for what the last start did to this counter, from the
+/// `starts` journal: the backfill on one line and the clock on the next.
+fn print_last_start(dir: &Path, serial: &str) {
+    let Some((stamp, what)) = log::last_start(dir, serial) else { return };
+    for (k, part) in what.split("; ").enumerate() {
+        if k == 0 {
+            println!("last start {}  {}", stamp, part);
+        } else {
+            println!("           {}", part);
+        }
+    }
 }
 
 /// Rows to the dated log, one every `every` seconds.
@@ -3216,6 +3340,65 @@ fn describe_offset(o: &counter::ClockOffset) -> String {
     format!("{} {} this machine ({})", size, way, within)
 }
 
+/// How far out a counter's clock has to be before a start corrects it.
+///
+/// A second, which is where `clock` starts suggesting `--set`: the set is
+/// aimed at a whole second and measured to a few hundredths, so anything
+/// under this is inside what one set would land on anyway.
+const CLOCK_SLACK: f64 = 1.0;
+
+/// "26.7 years behind", "3.2 s ahead": how far a clock was out, in the unit
+/// a person would pick. For the note a start leaves, where "8.4e8 s" says
+/// nothing and a full `describe_offset` is a mouthful twice over.
+fn describe_drift(ahead: f64) -> String {
+    let n = ahead.abs();
+    let size = if n < 60.0 {
+        format!("{:.1} s", n)
+    } else if n < 3600.0 {
+        format!("{:.1} min", n / 60.0)
+    } else if n < 86400.0 {
+        format!("{:.1} h", n / 3600.0)
+    } else if n < 365.25 * 86400.0 {
+        format!("{:.1} days", n / 86400.0)
+    } else {
+        format!("{:.1} years", n / (365.25 * 86400.0))
+    };
+    format!("{} {}", size, if ahead > 0.0 { "ahead" } else { "behind" })
+}
+
+/// Set the counter's clock from this machine's, and measure where it landed.
+///
+/// THE SET IS AIMED AT A WHOLE SECOND. <SETDATETIME>> carries whole seconds,
+/// so it is sent as this machine's clock reaches the second it names, and
+/// the result is measured the same way `probe` measures. If it landed off --
+/// the counter's own latency, or a firmware that keeps its sub-second phase
+/// -- the send is moved by what was measured and tried once more, and
+/// whatever the second measurement says is what comes back. Costs two to
+/// four seconds, mostly waiting for the second to come round.
+fn aim_clock(c: &counter::Counter) -> Result<counter::ClockOffset, &'static str> {
+    let mut lead = 0.0f64;
+    let mut after = None;
+    for _ in 0..2 {
+        let now = clock::now();
+        let target = now.floor() + 2.0;
+        let wait = target - lead - clock::now();
+        if wait > 0.0 {
+            std::thread::sleep(Duration::from_secs_f64(wait));
+        }
+        if !c.set_clock(target) {
+            return Err("the counter did not acknowledge <SETDATETIME>>");
+        }
+        after = c.clock_ahead();
+        match after {
+            Some(o) if o.ahead.abs() > o.within.max(0.05) => {
+                lead = (lead - o.ahead).clamp(-0.9, 0.9);
+            }
+            _ => break,
+        }
+    }
+    after.ok_or("set, but the counter did not answer the check")
+}
+
 /// Whether the kernel believes this machine's clock is disciplined by NTP.
 ///
 /// Setting the counter from this clock copies its error, so a clock nothing
@@ -3226,14 +3409,10 @@ fn system_clock_synced() -> bool {
     unsafe { libc::adjtimex(&mut t) != libc::TIME_ERROR }
 }
 
-/// `radbeeper clock`, and `--set` to correct it from this machine.
-///
-/// THE SET IS AIMED AT A WHOLE SECOND. <SETDATETIME>> carries whole seconds,
-/// so it is sent as this machine's clock reaches the second it names, and
-/// the result is measured the same way `probe` measures. If it landed off --
-/// the counter's own latency, or a firmware that keeps its sub-second phase
-/// -- the send is moved by what was measured and tried once more, and
-/// whatever the second measurement says is what gets printed.
+/// `radbeeper clock`, and `--set` to correct it from this machine. The set
+/// itself is `aim_clock`, which every start of `service` and `watch` also
+/// runs when the counter is out by more than `CLOCK_SLACK`; this is the
+/// command for doing it by hand, and for seeing the figures.
 fn clock_cmd(c: &counter::Counter, set: bool) -> i32 {
     let before = match c.clock_ahead() {
         Some(o) => o,
@@ -3260,31 +3439,10 @@ fn clock_cmd(c: &counter::Counter, set: bool) -> i32 {
         println!("               setting anyway: the counter will be as right as this machine is");
     }
 
-    let mut lead = 0.0f64;
-    let mut after = None;
-    for _ in 0..2 {
-        let now = clock::now();
-        let target = now.floor() + 2.0;
-        let wait = target - lead - clock::now();
-        if wait > 0.0 {
-            std::thread::sleep(Duration::from_secs_f64(wait));
-        }
-        if !c.set_clock(target) {
-            eprintln!("radbeeper: the counter did not acknowledge <SETDATETIME>>");
-            return 1;
-        }
-        after = c.clock_ahead();
-        match after {
-            Some(o) if o.ahead.abs() > o.within.max(0.05) => {
-                lead = (lead - o.ahead).clamp(-0.9, 0.9);
-            }
-            _ => break,
-        }
-    }
-    let after = match after {
-        Some(o) => o,
-        None => {
-            eprintln!("radbeeper: set, but the counter did not answer the check");
+    let after = match aim_clock(c) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("radbeeper: {}", e);
             return 1;
         }
     };
@@ -3842,6 +4000,12 @@ fn main() {
         return;
     }
 
+    // `probe` lists everything, served or free; only `--wait` still goes
+    // the one-counter way, because waiting is for one port to turn up.
+    if command == "probe" && wait.is_none() {
+        let dir = logs.clone().unwrap_or_else(log::state_dir);
+        std::process::exit(probe_cmd(&devices, baud, &dir, cpm_per_usvh));
+    }
     let found = match wait {
         Some(limit) => find_waiting(devices.first().map(|s| s.as_str()), baud, limit),
         None => counter::find(devices.first().map(|s| s.as_str()), baud),
@@ -3870,6 +4034,7 @@ fn main() {
                         println!("model      {}", counter::model_of(&c.version));
                         println!("serial     {}", c.serial_no);
                         println!("port       {} @ {} baud", c.path, c.baud);
+                        print_last_start(&dir, &c.serial_no);
                     }
                     println!("held by    the radbeeper serving {}",
                              broker::socket_path(&dir).display());
@@ -3909,6 +4074,7 @@ fn main() {
                     n, n as f64 / cpm_per_usvh, cpm_per_usvh
                 );
             }
+            print_last_start(&logs.clone().unwrap_or_else(log::state_dir), &c.serial_no);
         }
         "cpm" => std::process::exit(cpm_cmd(&c, cpm_per_usvh)),
         "clock" => std::process::exit(clock_cmd(&c, set_clock)),
@@ -4240,6 +4406,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_clock_that_lost_its_battery_is_years_behind_and_not_a_count_of_seconds() {
+        assert_eq!(describe_drift(-26.7 * 365.25 * 86400.0), "26.7 years behind");
+        assert_eq!(describe_drift(3.2), "3.2 s ahead");
+        assert_eq!(describe_drift(-1830.0), "30.5 min behind");
+        assert_eq!(describe_drift(4.0 * 3600.0), "4.0 h ahead");
+        assert_eq!(describe_drift(-3.5 * 86400.0), "3.5 days behind");
+    }
+
+    #[test]
     fn the_top_row_says_what_each_tube_last_counted() {
         let serials = vec!["F7F4CA7F05C2EA".to_string(), "F48824B8207F7E".to_string()];
         assert_eq!(
@@ -4270,6 +4445,8 @@ mod tests {
         assert_eq!(tier_label(1, 16.0, 26), "F 16s/bar \u{b7} 6m");
         // Eighty columns, six tiers and an interleave: twelve each.
         assert_eq!(tier_label(1, 16.0, 12), "F 16s/bar");
+        // Eleven tiers and an interleave across eighty columns: six each.
+        assert_eq!(tier_label(1, 1024.0, 6), "1024s");
         assert_eq!(tier_label(6, 0.5, 8), "1/2s");
         assert_eq!(tier_label(1, 16.0, 3), "");
     }

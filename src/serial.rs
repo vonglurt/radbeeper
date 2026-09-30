@@ -170,6 +170,27 @@ impl Serial {
     pub fn flush_input(&self) {
         unsafe { libc::tcflush(self.fd, libc::TCIFLUSH) };
     }
+
+    /// Read and discard whatever arrives until the line has been quiet for
+    /// `settle`. For a reply that runs a byte or two past what was asked
+    /// for: a flush only discards what has already landed, and a byte still
+    /// in flight when the next command goes out arrives as the first byte
+    /// of the next reply. Waiting for quiet is the only way to be sure the
+    /// counter has finished talking.
+    pub fn drain(&self, settle: Duration) {
+        let mut buf = [0u8; 64];
+        loop {
+            if !self.wait(false, settle) {
+                return;
+            }
+            let n = unsafe {
+                libc::read(self.fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len())
+            };
+            if n <= 0 {
+                return;
+            }
+        }
+    }
 }
 
 impl Drop for Serial {

@@ -30,8 +30,16 @@ doas install -m 0755 target/release/radbeeper /usr/local/bin/radbeeper
 doas rc-service radbeeper start   # reads the flash first, then logs
 ```
 
-On start it backfills from the counter's flash before appending anything —
-`--no-backfill` skips that. If the new build logs a different set of windows
+On start it backfills from the counter's flash before appending anything, and
+then sets the counter's clock from this machine's if it is more than a second
+out — a counter that lost its battery comes back reading the year 2000, and a
+start is the one moment something with the right time holds its port. The
+flash it just read was placed with the old clock, so the set comes after the
+download, never before. `--no-backfill` skips both. What each start found --
+the backfill's counts and what it did to the clock -- is appended to `starts`
+in the log directory, one line per counter, and `radbeeper probe` shows the
+newest line for each counter it names; the service's own stdout goes to a
+root-only log file, and this is the copy anyone can read. If the new build logs a different set of windows
 from the old one, it writes a second header line into the month's file
 rather than writing five columns under a four-column header; both readers take
 the last header above a row as that row's.
