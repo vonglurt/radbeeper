@@ -310,6 +310,71 @@ fn fft(values: &[f64]) -> Vec<C> {
     a
 }
 
+/// The power in bins 1 to n/2 - 1 of `values`, whatever their number.
+///
+/// BY THE TRANSFORM WHERE IT CAN BE, AND BY THE SUM WHERE IT CANNOT. The
+/// radix-2 transform wants a power of two, and a window is sometimes asked
+/// for in the seconds somebody thinks in: three hundred is five minutes and
+/// is not a power of two. Padding it to 512 with noughts would give bins
+/// that are not three hundred seconds' and are not independent of their
+/// neighbours, which is what `chance_max_of` counts on. So it is summed as
+/// it is written -- X(k) = sum of x(i) e^(-2 pi i k / n) -- from a table of
+/// one turn. That is n/2 times n steps: 45,000 for three hundred seconds,
+/// once every ten.
+fn powers(values: &[f64]) -> Vec<f64> {
+    let n = values.len();
+    if n < 4 {
+        return Vec::new();
+    }
+    if n & (n - 1) == 0 {
+        return fft(values)[1..n / 2].iter().map(|c| c.norm()).collect();
+    }
+    let turn: Vec<(f64, f64)> = (0..n)
+        .map(|j| (2.0 * std::f64::consts::PI * j as f64 / n as f64).sin_cos())
+        .collect();
+    (1..n / 2)
+        .map(|k| {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            let mut at = 0usize;
+            for v in values {
+                let (sin, cos) = turn[at];
+                re += v * cos;
+                im -= v * sin;
+                at += k;
+                if at >= n {
+                    at -= n;
+                }
+            }
+            re * re + im * im
+        })
+        .collect()
+}
+
+/// How tall a power is drawn, from nought to one, on a scale that ends at
+/// `top`.
+///
+/// BY ITS LOGARITHM, AND AGAINST THE LOUDEST THING IN VIEW. Drawn in
+/// proportion, a spectrum is as tall as its tallest bar and the rest of it
+/// is whatever is left: the longest periods hold the room's slow drift and
+/// every tube that stopped and started, stand forty times the mean, and
+/// leave the floor -- where a faint line would be -- a pixel high. A fixed
+/// gain cures that and cuts the top off what is loud. The logarithm keeps
+/// both: `ln(1 + v)`, which is nought at nought and nearly `v` while `v`
+/// is small, so the floor is drawn as it is, and which grows by the same
+/// step for every doubling above it, so forty is two and a half times as
+/// tall as three and not thirteen.
+///
+/// `top` is the loudest in view, so the tallest thing drawn is as tall as
+/// there is room for, whatever it is: that is the automatic part. With a
+/// top of 40 what is flat stands at 19% and what luck reaches, in one
+/// window, at 58%.
+pub fn gain(value: f64, top: f64) -> f64 {
+    if !(value > 0.0) || !(top > 0.0) {
+        return 0.0;
+    }
+    (value.ln_1p() / top.ln_1p()).clamp(0.0, 1.0)
+}
+
 /// The tallest of `bins` bins in an average of `n` independent periodograms
 /// of noise, by luck alone. The account of it is on `Spectrum::chance_max`.
 pub fn chance_max_of(bins: usize, n: f64) -> f64 {
@@ -350,12 +415,25 @@ fn hann(n: usize) -> Vec<f64> {
 /// Poisson counts at each of two rates: a run of rows over the line in one
 /// bin had a median of 5 rows, 99 in 100 were 13 or fewer, and the longest
 /// of 981 was 16. Half a window, which is `chance_rows`; a ridge longer
-/// than that is not luck's.
+/// than that is not luck's. Held against the long average, at 300 seconds
+/// and 10, luck runs a little longer: 17 and 22 were the longest of 1319,
+/// which is past half a window twice in a thousand papers, and none
+/// reached 24. docs/the-drum-spectrogram.md has both tables.
 ///
 /// A row is `window` seconds, mean removed, Hann tapered, transformed, and
 /// divided by its own mean so that flat reads 1.0 wherever the rate is.
 /// One is taken every `hop` seconds, so neighbouring rows share most of
 /// their seconds and a ridge is continuous rather than a row of dots.
+///
+/// OR BY THE LONG AVERAGE, which is `leveled`. Dividing a row by its own
+/// mean makes every row flat at 1.0 and so makes every row the same
+/// height: five minutes in which the room counted twice as much are drawn
+/// no taller than the five before. Counts that arrive by chance at a rate
+/// of r a second put r times the taper's energy in every bin, so the rate
+/// says what flat should be -- and the rate of the last fifty minutes says
+/// it without being moved by the five being measured. Against that, a row
+/// reads 1.0 when the room is as it has been, and the whole of it stands
+/// higher when the room is not.
 pub struct Waterfall {
     pub window: usize,
     pub hop: usize,
@@ -367,6 +445,11 @@ pub struct Waterfall {
     since: usize,
     taper: Vec<f64>,
     rows: std::collections::VecDeque<Vec<f32>>,
+    /// The seconds the long average is of, or nought for a row's own mean;
+    /// those seconds, and what they add up to.
+    over: usize,
+    long: std::collections::VecDeque<f64>,
+    long_sum: f64,
 }
 
 impl Waterfall {
@@ -380,7 +463,26 @@ impl Waterfall {
             since: 0,
             taper: hann(window),
             rows: std::collections::VecDeque::with_capacity(depth + 1),
+            over: 0,
+            long: std::collections::VecDeque::new(),
+            long_sum: 0.0,
         }
+    }
+
+    /// Rows against the average of the last `over` seconds, where `new`
+    /// gives them against their own. Until there are `over` seconds it is
+    /// the average of what there is, which is never less than a window.
+    pub fn leveled(window: usize, hop: usize, depth: usize, over: usize) -> Waterfall {
+        let mut w = Waterfall::new(window, hop, depth);
+        w.over = over.max(window);
+        w
+    }
+
+    /// The rate the rows are held against, in counts a second; None for
+    /// rows held against themselves, and before the first second.
+    pub fn level(&self) -> Option<f64> {
+        (self.over > 0 && !self.long.is_empty())
+            .then(|| self.long_sum / self.long.len() as f64)
     }
 
     /// One more second. True when it made a row.
@@ -388,6 +490,13 @@ impl Waterfall {
         self.buf.push_back(counts as f64);
         if self.buf.len() > self.window {
             self.buf.pop_front();
+        }
+        if self.over > 0 {
+            self.long.push_back(counts as f64);
+            self.long_sum += counts as f64;
+            if self.long.len() > self.over {
+                self.long_sum -= self.long.pop_front().unwrap_or(0.0);
+            }
         }
         self.since += 1;
         if self.buf.len() < self.window || self.since < self.hop {
@@ -401,11 +510,15 @@ impl Waterfall {
             .zip(&self.taper)
             .map(|(v, t)| (v - mean) * t)
             .collect();
-        let spec = fft(&shaped);
         // The DC term is the rate, which every other number on the panel
         // already gives; the rest, against their own mean.
-        let power: Vec<f64> = spec[1..self.window / 2].iter().map(|c| c.norm()).collect();
-        let level = power.iter().sum::<f64>() / power.len().max(1) as f64;
+        let power = powers(&shaped);
+        let level = match self.level() {
+            // What chance puts in a bin at that rate: the rate, times the
+            // energy of the taper.
+            Some(rate) => rate * self.taper.iter().map(|t| t * t).sum::<f64>(),
+            None => power.iter().sum::<f64>() / power.len().max(1) as f64,
+        };
         let row = power
             .iter()
             .map(|p| if level > 0.0 { (p / level) as f32 } else { 0.0 })
@@ -448,6 +561,233 @@ impl Waterfall {
     /// in half a window. See the account at the head of `Waterfall`.
     pub fn chance_rows(&self) -> usize {
         (self.window / (2 * self.hop)).max(1)
+    }
+}
+
+/// One window of a `Trail`: its length, the bins it is asked for, and what
+/// it needs to work them out.
+struct Reach {
+    window: usize,
+    bins: Vec<usize>,
+    taper: Vec<f64>,
+    /// The taper's energy: what chance puts in a bin, for each count a
+    /// second.
+    energy: f64,
+    /// One turn of the circle in `window` steps, as (sine, cosine).
+    turn: Vec<(f64, f64)>,
+}
+
+/// Rows of spectrum that reach the whole way across: each row from several
+/// windows at once, every one of them ending at the same second.
+///
+/// WHY SEVERAL. A window holds no period longer than itself, so a row of
+/// 300 seconds stops at five minutes and a panel whose axis runs to nine
+/// hours had traces on the right-hand half of it only. The periods beyond
+/// are in longer windows. So a row here is a join: from the shortest
+/// window, every bin it has; from each longer one, only the bins that are
+/// longer than the window before it could hold. Three hundred seconds
+/// gives 149, and 512, 4096 and 32768 after it give 1, 7 and 7 -- which is
+/// all there is out there, and is why the left of a spectrum is a few
+/// bars far apart.
+///
+/// ONLY THE BINS THAT ARE ASKED FOR ARE WORKED OUT, by the sum and not the
+/// transform: seven bins of 32768 seconds are 229,000 steps, where the
+/// whole transform of them would be sixteen thousand bins nobody draws.
+///
+/// AND ONLY THE ROWS THAT ARE ASKED FOR. `add` keeps the second and does
+/// nothing else. `rows` works out the rows that are on show and keeps
+/// them, so a row is worked out once; a window that is handed eight hours
+/// of history in a breath works out forty-eight rows at the end of it and
+/// not three thousand on the way.
+///
+/// Every row is held against the long average, as `Waterfall::leveled`
+/// holds them, and a window that has not yet its seconds is left out of
+/// the row: the trace begins where there is something to draw.
+///
+/// THE LONG END OF A ROW IS NOT NEWS. A row of 4096 seconds shares 4086 of
+/// them with the row ten seconds before, so out there forty-eight rows are
+/// very nearly one row, and a streak the length of the paper is one draw
+/// of chance. `Waterfall::chance_rows` is about the shortest window only.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TrailRow {
+    /// What the room counted in the row's own seconds -- the shortest
+    /// window's -- against the long average: 1.0 when it was as it has
+    /// been, 2.0 when it counted twice that. It is what the whole row
+    /// stands at, and a front end draws the row as bright as this.
+    pub level: f32,
+    /// (period, power), the longest period first.
+    pub bins: Vec<(f32, f32)>,
+}
+
+impl TrailRow {
+    /// The bins that stand over both their neighbours and over `floor`:
+    /// the row's peaks, as places in `bins`. An end of the row has one
+    /// neighbour and is a peak if it stands over that.
+    pub fn peaks(&self, floor: f32) -> Vec<usize> {
+        let p = |i: usize| self.bins[i].1;
+        (0..self.bins.len())
+            .filter(|&i| {
+                p(i) > floor
+                    && (i == 0 || p(i) > p(i - 1))
+                    && (i + 1 == self.bins.len() || p(i) >= p(i + 1))
+            })
+            .collect()
+    }
+}
+
+pub struct Trail {
+    reaches: Vec<Reach>,
+    pub hop: usize,
+    pub depth: usize,
+    over: usize,
+    /// The newest seconds, as many as the longest window and the rows on
+    /// show need; and how many there have ever been.
+    seconds: std::collections::VecDeque<f64>,
+    keep: usize,
+    pub total: u64,
+    /// Rows by the second they end at, newest first.
+    kept: std::collections::VecDeque<(u64, TrailRow)>,
+}
+
+impl Trail {
+    /// `windows` in any order; the shortest is the one that gives every
+    /// bin it has.
+    pub fn new(windows: &[usize], hop: usize, depth: usize, over: usize) -> Trail {
+        let mut lengths: Vec<usize> = windows.iter().copied().filter(|w| *w >= 4).collect();
+        lengths.sort_unstable();
+        lengths.dedup();
+        let mut before = 0usize;
+        let reaches: Vec<Reach> = lengths
+            .iter()
+            .map(|&window| {
+                // Longer than the window before could hold, and no longer
+                // than this one: window / k > before.
+                let bins: Vec<usize> = (1..window / 2)
+                    .filter(|k| before == 0 || window > before * k)
+                    .collect();
+                before = window;
+                let taper = hann(window);
+                Reach {
+                    window,
+                    bins,
+                    energy: taper.iter().map(|t| t * t).sum(),
+                    taper,
+                    turn: (0..window)
+                        .map(|j| (2.0 * std::f64::consts::PI * j as f64 / window as f64).sin_cos())
+                        .collect(),
+                }
+            })
+            .collect();
+        let (hop, depth) = (hop.max(1), depth.max(1));
+        let longest = lengths.last().copied().unwrap_or(0);
+        Trail {
+            reaches,
+            hop,
+            depth,
+            over: over.max(1),
+            seconds: std::collections::VecDeque::new(),
+            keep: longest.max(over) + depth * hop,
+            total: 0,
+            kept: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// One more second.
+    pub fn add(&mut self, counts: u32) {
+        self.seconds.push_back(counts as f64);
+        if self.seconds.len() > self.keep {
+            self.seconds.pop_front();
+        }
+        self.total += 1;
+    }
+
+    /// The second the newest row ends at: the last whole hop, once the
+    /// shortest window has its seconds.
+    pub fn newest(&self) -> Option<u64> {
+        let first = self.reaches.first()?.window as u64;
+        let end = self.total / self.hop as u64 * self.hop as u64;
+        (end >= first).then_some(end)
+    }
+
+    /// Seconds since the newest row, which is how far the paper has moved
+    /// towards the next.
+    pub fn age(&self) -> usize {
+        match self.newest() {
+            Some(end) => (self.total - end) as usize,
+            None => 0,
+        }
+    }
+
+    /// How many bins a row has when every window has its seconds.
+    pub fn bins(&self) -> usize {
+        self.reaches.iter().map(|r| r.bins.len()).sum()
+    }
+
+    /// How tall the tallest bin of one row gets by luck.
+    pub fn chance_max(&self) -> f64 {
+        chance_max_of(self.bins() + 1, 1.0)
+    }
+
+    /// The rows on show, newest first.
+    pub fn rows(&mut self) -> Vec<TrailRow> {
+        let Some(newest) = self.newest() else { return Vec::new() };
+        let first = self.reaches[0].window as u64;
+        let ends: Vec<u64> = (0..self.depth as u64)
+            .map(|k| newest.saturating_sub(k * self.hop as u64))
+            .take_while(|end| *end >= first)
+            .collect();
+        self.kept.retain(|(end, _)| ends.contains(end));
+        for end in &ends {
+            if !self.kept.iter().any(|(e, _)| e == end) {
+                let row = self.row(*end);
+                self.kept.push_back((*end, row));
+            }
+        }
+        self.kept.make_contiguous().sort_by(|a, b| b.0.cmp(&a.0));
+        self.kept.iter().map(|(_, row)| row.clone()).collect()
+    }
+
+    /// The row that ends at `end`, from the seconds that are kept.
+    fn row(&mut self, end: u64) -> TrailRow {
+        let oldest = self.total - self.seconds.len() as u64;
+        let seconds = self.seconds.make_contiguous();
+        let upto = (end - oldest.min(end)) as usize;
+        if end < oldest || upto > seconds.len() {
+            return TrailRow { level: 0.0, bins: Vec::new() };
+        }
+        // The rate the row is held against: see `Waterfall::leveled`.
+        let long = &seconds[upto.saturating_sub(self.over)..upto];
+        let rate = long.iter().sum::<f64>() / long.len().max(1) as f64;
+        let mut row = Vec::new();
+        let mut level = 0.0f32;
+        for reach in self.reaches.iter().rev() {
+            if upto < reach.window {
+                continue;
+            }
+            let x = &seconds[upto - reach.window..upto];
+            let mean = x.iter().sum::<f64>() / reach.window as f64;
+            // The last to be set is the shortest window's, which is the
+            // row's own.
+            level = if rate > 0.0 { (mean / rate) as f32 } else { 0.0 };
+            let shaped: Vec<f64> = x.iter().zip(&reach.taper).map(|(v, t)| (v - mean) * t).collect();
+            let level = rate * reach.energy;
+            for &k in &reach.bins {
+                let (mut re, mut im) = (0.0f64, 0.0f64);
+                let mut at = 0usize;
+                for v in &shaped {
+                    let (sin, cos) = reach.turn[at];
+                    re += v * cos;
+                    im -= v * sin;
+                    at += k;
+                    if at >= reach.window {
+                        at -= reach.window;
+                    }
+                }
+                let power = if level > 0.0 { (re * re + im * im) / level } else { 0.0 };
+                row.push(((reach.window as f64 / k as f64) as f32, power as f32));
+            }
+        }
+        TrailRow { level, bins: row }
     }
 }
 
@@ -1029,8 +1369,14 @@ pub fn tiers_arrivals(arrivals: &[Arrival], live: &[bool], width: usize) -> Stri
     Strip { tiers, sources, live: n }
 }
 
-/// How many bars either side of a bar its trend is taken over.
-pub const TREND_SIDE: usize = 1;
+/// How many bars either side of a bar its trend is taken over: nine bars
+/// in all.
+///
+/// IT WAS ONE, three bars, and the line followed the bars it was meant to
+/// steady: at a count every three seconds, three one-second bars are one
+/// count between them, and the mean of that is the dice again. Nine bars of
+/// a second are three counts and nine of thirty-two seconds are a hundred.
+pub const TREND_SIDE: usize = 4;
 
 /// The trend line: for every bar, the mean of it and its neighbours.
 ///
@@ -1058,6 +1404,11 @@ pub const TREND_SIDE: usize = 1;
 ///
 /// One value for each bar of each tier, in the tiers' own order.
 pub fn trend(tiers: &[Tier]) -> Vec<Vec<Option<f64>>> {
+    trend_over(tiers, TREND_SIDE)
+}
+
+/// The trend, over `side` bars either side of each.
+pub fn trend_over(tiers: &[Tier], side: usize) -> Vec<Vec<Option<f64>>> {
     // Every bar of every aggregating tier, left to right: what it says and
     // how many seconds it says it of.
     let run: Vec<(Option<f64>, f64)> = tiers
@@ -1075,8 +1426,8 @@ pub fn trend(tiers: &[Tier]) -> Vec<Vec<Option<f64>>> {
             let line = (at..at + t.values.len())
                 .map(|i| {
                     run[i].0?;
-                    let lo = i.saturating_sub(TREND_SIDE);
-                    let hi = (i + TREND_SIDE + 1).min(run.len());
+                    let lo = i.saturating_sub(side);
+                    let hi = (i + side + 1).min(run.len());
                     let (mut counts, mut seconds) = (0.0f64, 0.0f64);
                     for (v, s) in &run[lo..hi] {
                         if let Some(v) = v {
@@ -1091,6 +1442,51 @@ pub fn trend(tiers: &[Tier]) -> Vec<Vec<Option<f64>>> {
             line
         })
         .collect()
+}
+
+/// The seconds each bar of a strip covers: where it begins and where it
+/// ends, for every bar of every tier.
+///
+/// THE SAME WALK THE STRIP WAS CUT BY, so a bar is said to be when it is.
+/// `end` is where the aggregating tiers end -- the second after the newest
+/// one in them -- and from there each tier leftwards is cut on whole
+/// multiples of its step, its newest bar stopping short where the tier to
+/// its right begins. A tier finer than a second is the interleave: its
+/// bars are arrivals and not stretches of time, and it has none.
+///
+/// In whatever the strip was cut in. For several tubes that is seconds by
+/// the clock; for one it is samples, which are seconds, counted from the
+/// first.
+pub fn bar_spans(tiers: &[Tier], end: i64) -> Vec<Vec<(i64, i64)>> {
+    let mut out: Vec<Vec<(i64, i64)>> = vec![Vec::new(); tiers.len()];
+    let unit = tiers
+        .iter()
+        .map(|t| t.seconds)
+        .filter(|s| *s >= 1.0)
+        .fold(f64::MAX, f64::min);
+    let mut b = end;
+    for (k, t) in tiers.iter().enumerate().rev() {
+        if t.seconds < 1.0 {
+            continue;
+        }
+        let c = t.values.len() as i64;
+        if (t.seconds - unit).abs() < 1e-9 {
+            // The finest: a bar a second, up to the end.
+            out[k] = (0..c).map(|j| (b - c + j, b - c + j + 1)).collect();
+            b -= c;
+            continue;
+        }
+        let step = (t.seconds / unit).round() as i64;
+        let top = (b - 1).div_euclid(step);
+        out[k] = (0..c)
+            .map(|j| {
+                let g = top - c + 1 + j;
+                (g * step, (g * step + step).min(b))
+            })
+            .collect();
+        b = (top - c + 1) * step;
+    }
+    out
 }
 
 /// Which tubes are answering at `now`, from when each was last heard.
@@ -2035,7 +2431,7 @@ mod tests {
             Tier { columns: 3, seconds: 1.0, values: some(&[4.0, 0.0, 6.0]) },
             Tier { columns: 2, seconds: 0.5, values: some(&[9.0, 9.0]) },
         ];
-        let line = trend(&t);
+        let line = trend_over(&t, 1);
         assert_eq!(line.iter().map(|l| l.len()).collect::<Vec<_>>(), [3, 3, 2]);
         // The first bar has one neighbour, the second two.
         assert_eq!(line[0][0], Some(2.5));
@@ -2061,8 +2457,335 @@ mod tests {
         }];
         // An empty bar has no trend, and is not a nought in its
         // neighbour's: the bar beside two empty ones is itself.
-        assert_eq!(trend(&t)[0], [None, Some(3.0), None, Some(3.0), Some(3.0)]);
+        assert_eq!(trend_over(&t, 1)[0], [None, Some(3.0), None, Some(3.0), Some(3.0)]);
         assert!(trend(&[]).is_empty());
+    }
+
+    #[test]
+    fn a_height_is_a_logarithm_against_the_loudest_in_view() {
+        assert_eq!(gain(0.0, 40.0), 0.0);
+        assert_eq!(gain(40.0, 40.0), 1.0);
+        // Over the top is the top, and nothing is less than nothing.
+        assert_eq!(gain(400.0, 40.0), 1.0);
+        assert_eq!(gain(-1.0, 40.0), 0.0);
+        assert_eq!(gain(1.0, 0.0), 0.0);
+        assert_eq!(gain(f64::NAN, 40.0), 0.0);
+        // What is flat can be seen beside something forty times it, which
+        // in proportion it could not: a fortieth of sixty pixels is one.
+        assert!((gain(1.0, 40.0) - 0.1867).abs() < 1e-3);
+        assert!((gain(7.5, 40.0) - 0.5763).abs() < 1e-3);
+        // The louder is the taller, all the way up.
+        let mut last = 0.0;
+        for k in 1..=400 {
+            let g = gain(k as f64 / 10.0, 40.0);
+            assert!(g > last, "{} is not taller than the one before", k);
+            last = g;
+        }
+        // And every doubling is the same step, once it is well over one.
+        let step = |v: f64| gain(2.0 * v, 1000.0) - gain(v, 1000.0);
+        assert!((step(50.0) - step(200.0)).abs() < 0.002);
+    }
+
+    #[test]
+    fn the_trend_is_of_nine_bars() {
+        // One bar of nine counts a second in a run of noughts: the line
+        // stands at one for the nine bars that can see it, and at nought
+        // for the rest. Near an end there are fewer bars to share it.
+        let mut values = vec![Some(0.0); 21];
+        values[10] = Some(9.0);
+        let line = &trend(&[Tier { columns: 21, seconds: 1.0, values }])[0];
+        assert_eq!(TREND_SIDE, 4);
+        for (i, v) in line.iter().enumerate() {
+            let near = (6..=14).contains(&i);
+            assert_eq!(*v, Some(if near { 1.0 } else { 0.0 }), "bar {}", i);
+        }
+        let mut values = vec![Some(0.0); 21];
+        values[0] = Some(9.0);
+        let line = &trend(&[Tier { columns: 21, seconds: 1.0, values }])[0];
+        assert_eq!(line[0], Some(9.0 / 5.0));
+        assert_eq!(line[4], Some(1.0));
+        assert_eq!(line[5], Some(0.0));
+    }
+
+    #[test]
+    fn a_bar_is_said_to_be_when_it_is() {
+        // Each second's count is its own number, so a bar's mean says
+        // which seconds it holds; and those are the seconds it is said
+        // to hold.
+        let both: Vec<Arrival> = (1000..1400)
+            .flat_map(|t| {
+                [0usize, 1].map(|who| Arrival { who, when: t as f64 + 0.25 * who as f64, counts: t as u32 })
+            })
+            .collect();
+        let s = tiers_arrivals(&both, &[true, true], 128);
+        let end = 1400 - INTERLEAVE_SECONDS as i64;
+        let spans = bar_spans(&s.tiers, end);
+        assert_eq!(spans.len(), s.tiers.len());
+        assert!(spans.last().unwrap().is_empty(), "the interleave has no spans");
+        let mut bars = 0;
+        for (tier, at) in s.tiers.iter().zip(&spans).filter(|(t, _)| t.seconds >= 1.0) {
+            assert_eq!(tier.values.len(), at.len());
+            for (v, (from, to)) in tier.values.iter().zip(at) {
+                let Some(v) = v else { continue };
+                assert!(to > from && (to - from) as f64 <= tier.seconds);
+                // The oldest bar with anything in it begins before the
+                // first count did: it is the mean of what it has.
+                let from = (*from).max(1000);
+                let mean = (from..*to).map(|t| t as f64).sum::<f64>() / (to - from) as f64;
+                assert_eq!(*v, mean, "{}s bar said to be {}..{}", tier.seconds, from, to);
+                bars += 1;
+            }
+        }
+        assert!(bars > 80, "only {} bars were checked", bars);
+        // The newest second bar is the second before the interleave.
+        assert_eq!(spans[TIERS - 1].last(), Some(&(end - 1, end)));
+        // And one tube's strip, which is cut in samples.
+        let one: Vec<u32> = (0..300).collect();
+        let t = tiers(&one, 0, 60, 60);
+        for (tier, at) in t.iter().zip(bar_spans(&t, 300)) {
+            for (v, (from, to)) in tier.values.iter().zip(at) {
+                let Some(v) = v else { continue };
+                let mean = (from..to).map(|t| t as f64).sum::<f64>() / (to - from) as f64;
+                assert_eq!(*v, mean);
+            }
+        }
+    }
+
+    /// Counts that arrive by chance at `rate` a second: Knuth's draw, from
+    /// the same fixed scramble.
+    fn by_chance(n: usize, rate: f64, seed: u64) -> Vec<u32> {
+        let mut x = seed;
+        let mut unit = move || {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((x >> 11) as f64 + 0.5) / (1u64 << 53) as f64
+        };
+        let limit = (-rate).exp();
+        (0..n)
+            .map(|_| {
+                let (mut k, mut p) = (0u32, unit());
+                while p > limit {
+                    k += 1;
+                    p *= unit();
+                }
+                k
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_row_is_held_against_the_long_average() {
+        // Fifty minutes of a room at 0.9 a second, then five at twice it.
+        let mut counts = by_chance(3000, 0.9, 21);
+        counts.extend(by_chance(300, 1.8, 22));
+        let mean = |row: &[f32]| row.iter().sum::<f32>() / row.len() as f32;
+        let (mut own, mut long) = (Waterfall::new(300, 10, 48), Waterfall::leveled(300, 10, 48, 3000));
+        assert_eq!((own.level(), long.level()), (None, None));
+        let mut before = Vec::new();
+        for (t, c) in counts.iter().enumerate() {
+            own.add(*c);
+            if long.add(*c) && t < 3000 {
+                before.push(mean(&long.rows()[0]));
+            }
+        }
+        // While the room was as it had been, flat read 1.0: not row by row,
+        // which is what dividing by its own mean is for, but over them.
+        let usual = before.iter().sum::<f32>() / before.len() as f32;
+        assert!((usual - 1.0).abs() < 0.05, "flat read {}", usual);
+        assert!(before.iter().all(|m| (0.6..1.5).contains(m)), "{:?}", before);
+        // The five minutes at twice the rate stand twice as high, against
+        // an average they have moved by a tenth; and against themselves
+        // they are as flat as every other row.
+        let level = long.level().unwrap();
+        assert!((0.9..1.1).contains(&level), "the long average is {}", level);
+        let raised = mean(&long.rows()[0]);
+        assert!((1.6..2.2).contains(&raised), "the raised row reads {}", raised);
+        assert!((mean(&own.rows()[0]) - 1.0).abs() < 1e-4);
+        // A window is the least it is an average of.
+        assert_eq!(Waterfall::leveled(300, 10, 48, 60).over, 300);
+    }
+
+    #[test]
+    fn a_row_reaches_as_far_as_its_longest_window() {
+        let mut t = Trail::new(&[4096, 300, 512], 10, 48, 3000);
+        // Every bin of the shortest; of the others, what is longer than
+        // the one before could hold: 512 itself, and 4096 down to 585.
+        assert_eq!(t.bins(), 149 + 1 + 7);
+        assert_eq!((t.newest(), t.rows().len()), (None, 0));
+        // A room at 0.9 a second, with a swell every 1024 seconds in it.
+        let counts: Vec<u32> = by_chance(6000, 0.9, 31)
+            .into_iter()
+            .enumerate()
+            .map(|(i, c)| c + if i % 1024 < 512 { 1 } else { 0 })
+            .collect();
+        for c in &counts[..299] {
+            t.add(*c);
+        }
+        assert_eq!(t.newest(), None);
+        t.add(counts[299]);
+        assert_eq!((t.newest(), t.age()), (Some(300), 0));
+        // Five minutes in, a row is five minutes wide.
+        let early = t.rows();
+        assert_eq!((early.len(), early[0].bins.len()), (1, 149));
+        assert_eq!(early[0].bins[0].0, 300.0);
+        // Five minutes is all it has counted, so the row is as the room
+        // has been: they are the same seconds.
+        assert_eq!(early[0].level, 1.0);
+        for c in &counts[300..] {
+            t.add(*c);
+        }
+        assert_eq!((t.newest(), t.age()), (Some(6000), 0));
+        let rows = t.rows();
+        assert_eq!(rows.len(), 48);
+        for row in &rows {
+            // The swell is up for eight minutes and down for eight, so
+            // five minutes of it are over the long average or under.
+            assert!((0.5..1.6).contains(&row.level), "the row stands at {}", row.level);
+            let peaks = row.peaks(t.chance_max() as f32);
+            assert!(peaks.iter().any(|i| row.bins[*i].0 == 1024.0), "the swell is not a peak");
+            let row = &row.bins;
+            assert_eq!(row.len(), 157);
+            // From the longest period to the shortest, and none twice.
+            assert_eq!(row[0].0, 4096.0);
+            assert!(row.windows(2).all(|p| p[0].0 > p[1].0), "the periods are not in order");
+            assert!((row[156].0 - 300.0 / 149.0).abs() < 1e-4);
+            // The swell is the loudest thing out where it is, and is over
+            // the line: 4096 / 4.
+            let far = &row[..7];
+            let loudest = far.iter().max_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
+            assert_eq!(loudest.0, 1024.0);
+            assert!(loudest.1 as f64 > t.chance_max(), "it reads {}", loudest.1);
+        }
+        // Asked for every ten seconds or once at the end, a row is the row.
+        let mut often = Trail::new(&[4096, 300, 512], 10, 48, 3000);
+        for (i, c) in counts.iter().enumerate() {
+            often.add(*c);
+            if i % 10 == 9 {
+                often.rows();
+            }
+        }
+        assert_eq!(often.rows(), rows);
+        // And between rows it says how long since the last.
+        often.add(1);
+        often.add(1);
+        assert_eq!((often.newest(), often.age()), (Some(6000), 2));
+        assert_eq!(often.rows(), rows);
+    }
+
+    #[test]
+    fn a_row_stands_as_high_as_the_room_counted() {
+        // Fifty minutes at 0.9 a second and five at thirty times it.
+        let mut counts = by_chance(3000, 0.9, 51);
+        counts.extend(by_chance(300, 27.0, 52));
+        let mut t = Trail::new(&[300], 10, 48, 3000);
+        for c in &counts[..3000] {
+            t.add(*c);
+        }
+        let before = t.rows();
+        assert!(before.iter().all(|r| (0.8..1.2).contains(&r.level)));
+        for c in &counts[3000..] {
+            t.add(*c);
+        }
+        let after = t.rows();
+        // The long average has the five minutes in it, a tenth of it, so
+        // thirty times the room is not thirty times the average: 27 over
+        // (0.9 * 2700 + 27 * 300) / 3000 is 7.7.
+        assert!((7.0..8.4).contains(&after[0].level), "it stands at {}", after[0].level);
+        // And the row of five minutes before is as it was.
+        assert!((0.8..1.2).contains(&after[30].level), "{}", after[30].level);
+        // The whole of the raised row is up: by chance alone, every bin of
+        // it is what the rate is.
+        let mean = after[0].bins.iter().map(|b| b.1).sum::<f32>() / 149.0;
+        assert!((6.0..10.0).contains(&mean), "its bins average {}", mean);
+    }
+
+    #[test]
+    fn a_peak_stands_over_its_neighbours_and_over_the_floor() {
+        let row = |powers: &[f32]| TrailRow {
+            level: 1.0,
+            bins: powers.iter().enumerate().map(|(i, p)| (100.0 - i as f32, *p)).collect(),
+        };
+        assert_eq!(row(&[1.0, 9.0, 2.0, 8.5, 8.0, 1.0, 3.0]).peaks(7.5), [1, 3]);
+        // Under the floor is not a peak, however it stands over its own.
+        assert_eq!(row(&[1.0, 5.0, 1.0]).peaks(7.5), Vec::<usize>::new());
+        // An end is one, and a level top is one peak and not two.
+        assert_eq!(row(&[9.0, 1.0, 1.0, 8.0]).peaks(7.5), [0, 3]);
+        assert_eq!(row(&[1.0, 8.0, 8.0, 1.0]).peaks(7.5), [1]);
+        assert_eq!(row(&[]).peaks(7.5), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn a_height_adjusts_itself_to_what_is_loudest() {
+        // Something two thousand times the mean is the top of the scale
+        // and is all of it; what is flat beside it can still be seen, and
+        // what luck reaches is more than a quarter of the way.
+        assert_eq!(gain(2000.0, 2000.0), 1.0);
+        assert!((gain(1.0, 2000.0) - 0.0912).abs() < 1e-3);
+        assert!((gain(7.59, 2000.0) - 0.2829).abs() < 1e-3);
+        // In proportion, flat would be a twentieth of a pixel in a hundred.
+        assert!(1.0 / 2000.0 * 100.0 < 0.06);
+        // And when it has gone, the scale is what is left.
+        assert!((gain(1.0, 7.59) - 0.3224).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_short_end_of_a_row_is_the_waterfalls_row() {
+        let counts = by_chance(3600, 0.9, 41);
+        let mut fall = Waterfall::leveled(300, 10, 48, 3000);
+        let mut trail = Trail::new(&[300], 10, 48, 3000);
+        for c in &counts {
+            fall.add(*c);
+            trail.add(*c);
+        }
+        let (a, b) = (fall.rows(), trail.rows());
+        assert_eq!(a.len(), b.len());
+        for (x, y) in a.iter().zip(&b) {
+            assert_eq!(x.len(), y.bins.len());
+            for (k, (p, (period, q))) in x.iter().zip(&y.bins).enumerate() {
+                assert_eq!(*period, (300.0 / (k + 1) as f64) as f32);
+                assert!((p - q).abs() <= 1e-4 * p.max(1.0), "{} and {}", p, q);
+            }
+        }
+    }
+
+    #[test]
+    fn a_window_of_any_length_is_transformed() {
+        // Where both can be asked, the sum and the transform agree.
+        let x: Vec<f64> = scramble(256, 5).into_iter().map(|c| c as f64 - 1.5).collect();
+        let by_fft = powers(&x);
+        let by_sum: Vec<f64> = (1..128)
+            .map(|k| {
+                let (mut re, mut im) = (0.0f64, 0.0f64);
+                for (i, v) in x.iter().enumerate() {
+                    let a = 2.0 * std::f64::consts::PI * (k * i) as f64 / 256.0;
+                    re += v * a.cos();
+                    im -= v * a.sin();
+                }
+                re * re + im * im
+            })
+            .collect();
+        assert_eq!(by_fft.len(), 127);
+        for (a, b) in by_fft.iter().zip(&by_sum) {
+            assert!((a - b).abs() <= 1e-6 * a.max(1.0), "{} and {}", a, b);
+        }
+        // Three hundred seconds, which is not a power of two: 149 bins,
+        // and a swell every ten seconds is the thirtieth of them.
+        let swell = [3u32, 4, 4, 3, 2, 1, 0, 0, 1, 2];
+        let mut w = Waterfall::new(300, 10, 48);
+        for (t, c) in scramble(1200, 7).into_iter().enumerate() {
+            w.add(c + swell[t % 10]);
+        }
+        assert_eq!(w.made, 1 + (1200 - 300) / 10);
+        assert_eq!((w.period(29), w.chance_rows()), (10.0, 15));
+        let luck = w.chance_max() as f32;
+        assert!((7.4..7.6).contains(&luck), "{}", luck);
+        for (k, row) in w.rows().iter().enumerate() {
+            assert_eq!(row.len(), 149);
+            let loudest = (0..row.len()).max_by(|a, b| row[*a].total_cmp(&row[*b])).unwrap();
+            assert_eq!(loudest, 29, "row {} is loudest somewhere else", k);
+            assert!(row[29] > luck);
+            let mean = row.iter().sum::<f32>() / row.len() as f32;
+            assert!((mean - 1.0).abs() < 1e-4);
+        }
     }
 
     #[test]
