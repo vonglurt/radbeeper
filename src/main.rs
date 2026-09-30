@@ -1673,7 +1673,7 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
     // The bank is made here but not started -- no reader runs until every
     // flash has been read. See Bank::start.
     let mut bank = Bank::open(found);
-    let id = bank.identity(spans);
+    let mut id = bank.identity(spans);
     let tubes = bank.len();
     // THE FAN-OUT, BOUND BEFORE THE BACKFILL. This process holds the flocks,
     // so it owes the stream to everybody who wants a counter and cannot have
@@ -1884,7 +1884,14 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
                 // log does not.
                 each[who] = Windows::new(spans);
             }
-            let id = bank.identity(spans);
+            // THE ONE LIST, REFRESHED, NOT A SECOND ONE IN ITS SHADOW. This
+            // used to be `let id`, a new list that lived to the end of this
+            // block; the writer of the random records further down kept
+            // indexing the list taken at start, and a tube that joined by
+            // hot-plug had no entry in it. Seven minutes after the second
+            // counter joined -- when its pool first had a record to draw --
+            // the service died of an index out of bounds (2026-09-30).
+            id = bank.identity(spans);
             merged_log.counters(
                 &id.counters.iter().map(|c| c.serial_no.clone()).collect::<Vec<_>>(),
             );
@@ -1972,9 +1979,11 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
             let frame = frames.then(|| pools[who].frame(pools[who].seq, suspect));
             let (text, record) = pools[who].draw();
             let at_time = clock::format(clock::now(), "%H:%M:%S");
-            let _ = entropy::write_record(&dir, &record, &id.counters[who].serial_no, suspect);
+            // BY LOOKUP, NOT BY INDEX: see the note where a tube joins.
+            let serial = id.counters.get(who).map(|c| c.serial_no.as_str()).unwrap_or("");
+            let _ = entropy::write_record(&dir, &record, serial, suspect);
             if let Some(f) = frame.as_ref() {
-                if let Err(e) = entropy::write_frame(&dir, f, &id.counters[who].serial_no) {
+                if let Err(e) = entropy::write_frame(&dir, f, serial) {
                     eprintln!("radbeeper: could not write the frame -- {}", e);
                 }
             }
