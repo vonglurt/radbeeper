@@ -70,7 +70,7 @@ footer a{color:var(--dim)}
 </head>
 <body>
 <div class="wrap"><main>
-<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><strong>The stream</strong></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <h1 id="the-stream">The stream</h1>
 <p><strong>One reader, many watchers: sharing an exclusively-locked serial port among a logger, a terminal monitor and a window, and the instrument panel built on top of it.</strong></p>
 <p><em>A lab report in the IEEE style, on the process architecture RadBeeper uses to fan one Geiger counter out to every program that wants it, on the arrangement that lets two counters be read at once, and on the layout of the window that draws the result. Written against radbeeper 0.3.1 and radbeeper-gui 0.3.1, 18 September 2026.</em></p>
@@ -314,7 +314,7 @@ run  226110 counts in 1s</code></pre>
 <h2 id="ix-summary">IX. Summary</h2>
 <p>The exclusive lock on a serial port protects against two readers splitting a byte stream. It says nothing about how many programs may <em>consume</em> what one reader produces. Recognising that distinction converted a handover protocol -- with its hole in the record every time somebody looked at the instrument -- into a publisher with any number of subscribers, at a cost of one unix socket, one text protocol and a 700 KB ring buffer; made a freshly-opened window more complete than the old one ever was at any age; and generalised without further work to two counters, where the same stream carries both and the display is free to average what the record keeps apart.</p>
 </main></div>
-<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><strong>The stream</strong></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
 Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
 Alpine Linux, which is also its development environment.

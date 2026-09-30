@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Technical description — RadBeeper</title>
+<meta name="description" content="How RadBeeper works, for somebody who wants to know: what it reads, what it computes, what every part of the screen is made of, and what it writes to disk.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/technical-description.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Technical description — RadBeeper">
+<meta property="og:description" content="How RadBeeper works, for somebody who wants to know: what it reads, what it computes, what every part of the screen is made of, and what it writes to disk.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/technical-description.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><strong>How it works</strong></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="technical-description">Technical description</h1>
+<p><strong>How RadBeeper works, for somebody who wants to know: what it reads, what it computes, what every part of the screen is made of, and what it writes to disk.</strong></p>
+<p><em><a href="../index.html">The front page</a> says what RadBeeper is for and how to start it. This page is what was taken off it to keep it short. Each part has a lab report behind it, listed at <a href="#the-lab-reports">the end</a>, with the arithmetic and the measurements.</em></p>
+<hr>
+<h2 id="one-port-many-readers">One port, many readers</h2>
+<p><strong>Only one program can hold the port — but only one needs to.</strong> The process that has it serves what it reads on a socket beside the log, and <code>watch</code> asks that socket before it asks <code>/dev</code>: with the boot service logging, the monitor attaches to it and the port is never touched. Nothing has to be stopped, and the log does not skip a second while you watch. With no service running, the monitor takes the port itself and serves it in turn, so the second window attaches to the first.</p>
+<p><strong>No counter yet?</strong> <code>tests/fake_gmc.py</code> puts a synthetic counter on a pseudo-terminal — a real Poisson background, because decay is a Poisson process — and exercises the serial path as well as the display: <code>python3 tests/fake_gmc.py --cpm 400</code>, then <code>radbeeper -d /dev/pts/N watch</code>.</p>
+<hr>
+<h2 id="the-hardware-and-the-kernel">The hardware and the kernel</h2>
+<p><strong>A GQ GMC-320 Plus, plugged into USB.</strong> There is no substitute for it in software: RadBeeper reads a real tube over a real serial port, and every number on the screen comes off the wire.</p>
+<table><tbody><tr><td><strong>The counter</strong></td><td>A <strong>GQ GMC-320 Plus</strong>. A <strong>GMC-300</strong> works — RadBeeper tries its 57600 baud as well as the 320's 115200 — and a 500 or 600 will be found and read, but its tube is not an M4011, so give it <code>--cpm-per-usvh</code> (see <a href="reference.html#the-tube-factor">the tube factor</a>).</td></tr><tr><td><strong>The cable</strong></td><td>The <strong>USB cable that came with it</strong>. It is easy to grab a charge-only cable by mistake: one that carries no data leaves you with nothing plugged in as far as Linux is concerned.</td></tr><tr><td><strong>The counter, switched on</strong></td><td>The USB-serial chip inside is powered by the counter, not by the bus. A 320 that is off, or flat, enumerates as nothing.</td></tr><tr><td><strong>A kernel with <code>ch341</code></strong></td><td>The 320 Plus presents as a CH340 USB-serial device. <code>linux-lts</code> and <code>linux-rpi</code> carry the driver; Alpine's <code>linux-virt</code> <strong>does not</strong>.</td></tr><tr><td><strong>Membership of <code>dialout</code></strong></td><td>The serial node is <code>root:dialout</code> and RadBeeper does not want root.</td></tr></tbody></table>
+<p>Plug it in, and Linux should say so:</p>
+<pre><code class="language-sh">dmesg | tail -5                       # ch341-uart converter now attached to ttyUSB0
+ls -l /dev/ttyUSB*                    # crw-rw---- 1 root dialout ... /dev/ttyUSB0</code></pre>
+<p><strong>The kernel is the thing that catches people.</strong> These logs were taken from a 320 Plus shared into a VM, and the counter cannot tell the difference — but pass the device through to a guest running <code>linux-virt</code> and it will never appear, however correct the pass-through is:</p>
+<pre><code>$ lsusb
+Bus 003 Device 002: ID 1a86:7523  USB2.0-Serial      # the counter is right there
+
+$ ls /dev/ttyUSB*
+ls: cannot access '/dev/ttyUSB*': No such file or directory</code></pre>
+<p><code>doas apk add linux-lts</code>, reboot into it, and the same device enumerates as <code>/dev/ttyUSB0</code>. This is the trap <strong>Copal</strong> avoids by installing <code>linux-lts</code> rather than the virt kernel a VM image would otherwise default to.</p>
+<p>If <code>/dev/ttyUSB0</code> still is not there, <a href="troubleshooting.html">Troubleshooting</a> names the four things it can be, and they have four different fixes.</p>
+<hr>
+<h2 id="two-crates">Two crates</h2>
+<p>A static binary off the releases page needs no toolchain at all, which is the point on a Pi. From a clone, <code>make install</code> is <code>cargo install --path .</code>.</p>
+<p>The window is a <strong>separate crate on purpose</strong> — RadBeeper has one dependency and it is <code>libc</code>; Iced brings several hundred, which is the right price for a GPU-accelerated window and the wrong price to put on <code>cargo install radbeeper</code>:</p>
+<hr>
+<h2 id="the-counters-clock">The counter's clock</h2>
+<p><code>radbeeper clock</code> says how far the counter's own clock has drifted from this machine's, and <code>--set</code> corrects it. It matters for the <a href="the-log.html#backfill-from-the-counters-own-memory">backfill</a>: the timestamps in the counter's flash are its own.</p>
+<hr>
+<h2 id="the-monitor">The monitor</h2>
+<p><strong>The monitor is also the logger.</strong> Only one program can hold the counter's port, so the log used to have a hole exactly where somebody was watching. Now <code>watch</code> does what the service does, with a screen on top: it reads the counter's history on connect and fills the log's gaps, writes a row every thirty seconds through the same code the service uses, appends every random line, and writes <code>index.html</code> beside the log. <code>--no-log</code> turns all of that off.</p>
+<p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-hero.gif" alt="the monitor: five minutes at 100x, then a hundred seconds at 10x, then the random line" loading="lazy"></p>
+<p><strong>Ten minutes of it, three ways</strong>: the first five minutes at a hundred times speed, the hundred seconds after them at ten, and the second the random pool delivered its first line.</p>
+<table><tbody><tr><td><strong>The number, big</strong></td><td>The 30-second CPM in block digits. 3 s is too jumpy to read as a headline and 300 s too slow to react to anything you are doing with your hands.</td></tr><tr><td><strong>Five averages</strong></td><td>3 s to see a source come and go under your hand, 30 s to read the room, 300 s for a number worth writing down, 3000 s for what the background here actually is, and 30000 s — a working day. The counter's own reading is one rolling 60-second count: one number, one time constant, one question answered.</td></tr><tr><td><strong>The counts, compressing as they age</strong></td><td>A second a bar at the right, and each panel to its left holds twice as long in a bar, out to 1024 seconds: eleven panels. Half a day of history in one row of a terminal, at one-second resolution where it matters. In the window a <strong>trend line</strong> runs over the bars — each bar taken with the four either side of it, weighted by the seconds they cover — because a bar at background is two or three counts and the eye follows the tallest. <strong>Point at a bar</strong> and a circle marks the trend there, with when the bar was, how long it is, and the trend's and the bar's own rate in CPM.</td></tr><tr><td><strong>The spectrum</strong></td><td>Three windows at once, looking for anything arriving on a schedule. In the window its axis reaches as far as the longest window that has answered: 8m, then 1h 8m, then 9h 6m. Bars are drawn by their logarithm against the loudest in view, so one loud period does not leave the rest a pixel high. The periods over five minutes are a few bins far apart, so the left of the axis is compressed: a tenth of the width for one to nine hours, a seventh for five minutes to an hour. Over it, on the same axis and the full width of it, the window draws <strong>the drum spectrogram</strong>: a spectrum every eight seconds as a line of its own — the spectrum's own 512-second window for the periods up to eight and a half minutes, joined to its longer windows for the rest — laid up a shaded ground the way a drum recorder lays an earthquake down. The pen is hotter and wider for what is louder — green for the floor, yellow at what luck reaches, red and white over it — each trace is as bright as the room was counting, and a peak has a dot. A period is a coloured streak down the paper. One spike there is noise, and so is a streak under thirty-two rows long. <strong>Flat is the good answer</strong> — decay is Poisson, and a Poisson process has a flat power spectrum. A peak means something periodic is contaminating the arrivals.</td></tr><tr><td><strong>The random line</strong></td><td>256 bits of hex out of decay timing, the moment the pool has measured enough min-entropy to justify them. With several tubes each earns its own, from its own counts, and the newest is shown with the letter of the tube that earned it.</td></tr><tr><td><strong>The log, scrolling</strong></td><td>In the terminal, the rows as they go to disk, so what is on screen is what is in the file.</td></tr></tbody></table>
+<p><code>--line</code> prints one line a second for a pipe instead of drawing a screen.</p>
+<hr>
+<h2 id="the-window">The window</h2>
+<p>An instrument cluster: a round dial per counter with a 270-degree sweep on a <strong>fixed logarithmic scale</strong>, the bands painted on the face at the same thresholds everything else uses, and the reading in digits on the black face under the needle. Beside it the five averaging windows, each with the <strong>precision</strong> of its own figure. Then the drum spectrogram with the spectrum at its foot, the cascade, the emission and its countdown, and a table of the trend line by tier: where it is now, its average, its high and its low over each panel of the counts, in CPM.</p>
+<p>It opens no serial port — it <em>cannot</em>, it has no code for one — which is exactly what makes it safe to open and close all day while the logging carries on underneath.</p>
+<h3 id="the-two-meters">The two meters</h3>
+<p><strong>They answer different questions and neither answers the other.</strong></p>
+<table><tbody><tr><td><strong>RAW</strong></td><td>A needle per counter, each in that counter's colour. A tube that has wandered off is a needle that has wandered off. This is <em>do they agree?</em></td></tr><tr><td><strong>COLLECTED</strong></td><td>One needle, carrying three time constants at once. This is <em>what is the room doing?</em></td></tr></tbody></table>
+<p>They share a scale, because two dials that don't cannot be compared — which is the only reason to draw them side by side.</p>
+<p><strong>A dial can show more than one answer at a time and a number cannot.</strong> The collected face carries the <strong>three seconds</strong> its needle points at, the <strong>half minute</strong> the chrome pointer sits at, and — as two arcs outside the bands — where the needle has been over the last half minute and minute. The gap between needle and pointer <em>is</em> the trend.</p>
+<p>The needle has mass: it leans out fast and settles back slower, the way every moving-coil meter does mechanically. Without it the needle teleports once a second and the eye cannot follow which way it went.</p>
+<h3 id="the-scale-does-not-move">The scale does not move</h3>
+<p><strong>Three decades, <code>3 → 3000</code> CPM, and it is the same three every time you look.</strong> The range used to be picked from a list to suit the current reading, which meant a value sitting near a boundary flipped the whole face back and forth several times a minute — every band and every tick jumping with it. A fixed scale cannot do that, and a logarithmic one is the right fixed scale here because the quantity is: background is tens of counts a minute, a source is thousands, and on a linear face the only reading anybody ever takes sits in the bottom tenth.</p>
+<p>The decades land on the numbers the bands are named after — 3 at the bottom stop, 30 a third of the way round, 300 at two thirds, 3000 at full — with the 2..9 of each decade ticked between them and a heavy mark at every band floor.</p>
+<h3 id="the-bands-named">The bands, named</h3>
+<p>A reading is not "above 240" — it is a <strong>warning</strong>. The names are printed under the cluster in their own colours, and the floor of each is a mark on the face:</p>
+<table><thead><tr><th></th><th>sweep</th><th></th></tr></thead><tbody><tr><td><strong>attenuated</strong> — under 3 CPM</td><td>0%</td><td>not a clean room: a tube shielded, unplugged or dying</td></tr><tr><td><strong>nominal</strong> — 30</td><td>33%</td><td>ordinary background</td></tr><tr><td><strong>advisory</strong> — 120</td><td>53%</td><td>worth knowing about, not worth acting on</td></tr><tr><td><strong>warning</strong> — 240</td><td>63%</td><td></td></tr><tr><td><strong>deadly</strong> — 600</td><td>77%</td><td></td></tr></tbody></table>
+<p><strong>The floor of <em>nominal</em> is 30 and not 0, deliberately.</strong> Natural background does not go below a few counts a minute, so a counter reading under 30 is reporting <em>itself</em> rather than the room — which is why that band is cold blue and not green, and why the dial's bottom stop is 3 rather than nothing.</p>
+<h3 id="both-themes-and-it-follows-yours">Both themes, and it follows yours</h3>
+<p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-antiquity.png" alt="the panel under Antiquity, the desktop&#x27;s own light theme" loading="lazy"></p>
+<p>Copal writes down which theme is on, so the window <strong>asks rather than guesses</strong>. <code>--theme dark</code>, <code>--theme antiquity</code> or <code>--theme auto</code> (the default) override it.</p>
+<p><strong>The dial faces stay dark in both.</strong> Antiquity's own note about itself is that it is <em>dark chrome around light paper</em>, and a black-faced gauge on paper is what the instruments this borrows from actually look like.</p>
+<p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-dark.png" alt="the same panel, dark" loading="lazy"></p>
+<h3 id="it-fits-what-the-compositor-gives-it">It fits what the compositor gives it</h3>
+<p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-small.png" alt="the panel squeezed into 560 by 400" loading="lazy"></p>
+<p>A tiling compositor hands this window whatever is left once every other window has had its share. <strong>The charts are the instrument, so they are the last thing to go, not the first</strong>: the log table goes first, then the spectrum's axis. The dials, the numbers and the two charts keep their shape all the way down — and grow into the glass when there is more of it.</p>
+<p><code>radbeeper hotplug</code> opens the window when it is installed and a terminal running <code>watch</code> when it is not.</p>
+<hr>
+<h2 id="two-counters">Two counters</h2>
+<p><strong>Plug in a second GMC and <code>radbeeper service</code> reads both.</strong> No flag is needed, and it does not have to be restarted for one: once a log cycle the service looks for a counter that was not there before and adopts it on the spot — its own backfill, its own log, its own entropy pool, and a line on the wire telling every attached window.</p>
+<p>Two tubes watching one room are two measurements of one number. They do <strong>not</strong> double the dose — what doubles is the evidence:</p>
+<table><tbody><tr><td><strong>Each keeps its own log</strong></td><td>Separate files, keyed by serial. They are separate instruments and the record has to say which said what; a row that averaged two of them would be a reading neither took.</td></tr><tr><td><strong>The displays average them</strong></td><td>Every combined figure is the <em>mean</em> across the tubes: the same number one tube would report, measured from twice the arrivals.</td></tr><tr><td><strong>The precision is what improves</strong></td><td>Poisson error is 1/sqrt(N), so twice the counts is a factor of root two better. The window prints it: <code>452 CPM +-21 (4.7%)</code>.</td></tr><tr><td><strong>The cascade grows one more tier</strong></td><td>Counters on their own clocks interleave, so the strip ends in a tier of <em>arrival</em> rather than of time — <code>1/2</code> of a second with two tubes, <code>1/9</code> with nine — drawn in each tube's own colour.</td></tr><tr><td><strong>And a merged record is kept</strong></td><td><code>cpm-merged-YYYY-MM.tsv</code>, beside the per-counter files: the raw arrivals, the rate of the room, and the interleave. See <a href="the-log.html">the log</a>.</td></tr><tr><td><strong>A tube that stops is left out</strong></td><td>The mean is the counts over the <em>tube-seconds that took them</em>, not over the tubes plugged in. A counter whose USB port resets is out of the mean and out of the interleave from the second it goes quiet, and the room reads what it read.</td></tr><tr><td><strong>And comes back by itself</strong></td><td>Once a log cycle the port is asked again, on a thread of its own so nothing waits for a counter that is not answering. It returns to its own slot, its own colour and its own log.</td></tr><tr><td><strong>Each says what it last counted</strong></td><td>The top row names every tube by its serial, and beside it that tube's newest second in counts, <strong>CPS</strong> — the reading the interleave was given, and with one tube as with several. A number that changes is the data arriving. A tube that is not answering shows <strong>nothing, not nought</strong>: a nought is a second it listened to.</td></tr></tbody></table>
+<p><strong>The interleave is measured, not assumed.</strong> Two counters only sharpen <em>time</em> if they disagree about when a second starts, and neither clock can be steered, so the window reports the offset it actually sees: <code>2 tubes · interleave 0.50s (100%)</code>. Near zero is two tubes firing together — still twice the counts and still the better precision, but no extra resolution in time, and the display says so rather than claiming a half-second bar it has not earned.</p>
+<hr>
+<h2 id="the-log">The log</h2>
+<p>One row every 30 seconds into a dated file per counter. <code>watch</code> writes the same rows while it is open, so it does not matter which of the two has the port.</p>
+<p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/log-output.png" alt="the log on disk" loading="lazy"></p>
+<p>Tabs are invisible and that matters here, because an <strong>empty field is not a zero</strong> — it is a window that was not full yet. <strong>The peaks are the point</strong>: a row carrying only the averages as they stood at the instant it was written would miss a source that came and went between two rows, which is the one event actually worth having a log for.</p>
+<p>Files rotate by month and by counter (<code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code>), which needs no cron entry and nothing that renames a file while a service is appending to it. State lives in <code>/var/lib/radbeeper</code> when that is writable — <strong>not <code>/var/log</code>, because on Alpine desktops that is commonly a tmpfs</strong> and every reboot emptied it. A measurement record is state, not a log to rotate away.</p>
+<p><strong><a href="the-log.html">The log</a></strong> is the full column-by-column account, including the merged record two or more counters produce, the backfill, and where a counter has been.</p>
+<hr>
+<h2 id="random-numbers-out-of-decay">Random numbers out of decay</h2>
+<p>The moment a nucleus decays is not determined by anything, which makes a counter the textbook hardware entropy source.</p>
+<pre><code class="language-sh">radbeeper random</code></pre>
+<pre><code>b17c9c60 d5deeb7b 4b102dfc bec14efc b523818b 18d3ada0 582bd912 e61ff856
+
+  256 bits, min-entropy 258 measured, from 448 seconds at 0.68 counts/s
+  440 bits is what a Poisson model would have claimed for the same 448 seconds
+  spectrum flat -- the source looks like decay</code></pre>
+<p>That second line is the point: <strong>the bits are measured, not modelled</strong>, and on this tube the textbook model was measurably wrong — it claimed 1.15 bits a second where the samples support 0.62. A line therefore arrives about half as often as it used to, and the number on it is one the data will support.</p>
+<p>The counts behind every line are written beside it, so anyone can recompute it and check it was not invented:</p>
+<pre><code class="language-sh">radbeeper random --check  logs/random-F48824B8207F7E-2026-09.tsv   # the emission log
+radbeeper random --frames logs/random-F48824B8207F7E-2026-09.bin   # the raw seconds</code></pre>
+<p><strong>Every emission also keeps its raw material.</strong> The <code>.tsv</code> clamps each second to one hex digit — enough to recompute the key, not enough to say what the tube did — so the seconds are written unclamped to a <code>.bin</code> beside it, one byte each, with the gaps where the counter was away. A four-hundred-second frame is about 450 bytes, and each one recomputes the key written inside it. <code>--no-frames</code> turns it off.</p>
+<blockquote><p>Treat this as a good physical entropy source, not a certified one. It has not been through a statistical test battery, and 256 bits of accounted min-entropy is a claim about the model of the source, not a proof about the output.</p></blockquote>
+<p><strong><a href="the-random.html">Random numbers out of decay</a></strong> is the full account: the three ways this is normally done wrong, the measurement that replaced the model, and what the serial link's one-second resolution costs.</p>
+<h3 id="browsing-the-raw-seconds">Browsing the raw seconds</h3>
+<p>Every one of those keys came out of a particular stretch of decay, and that stretch is kept: <code>random-&lt;serial&gt;-YYYY-MM.bin</code>, appended, one byte for an ordinary second.</p>
+<pre><code class="language-sh">radbeeper frames list                     # what is on disk, by month
+radbeeper frames show --seq 124           # one frame: seconds, spectrum, key, link
+radbeeper export --logs logs -o monitor.html --frames-page   # and frames.html</code></pre>
+<p><code>frames.html</code> is the browser: months, then days, then one frame at a time -- as a strip of seconds you can zoom into, or as a spectrum, where <strong>flat is the good answer</strong>. A frame has its own address, so <code>frames.html#2026-09/124</code> opens that one.</p>
+<p>Getting the data out and back in is <code>frames export</code> and <code>frames import</code>; an imported frame is recomputed from its own counts before it is written and is relinked into this directory's chain rather than carrying somebody else's. <strong><a href="the-frame-browser.html">Reading the raw record</a></strong> is the full account, including the one thing to know before relying on any of it: only the process holding the serial port writes frames, so a service running an older build records emissions and no frames at all.</p>
+<hr>
+<h2 id="publishing">Publishing</h2>
+<p>One self-contained page: summary cards, a log-scale plot of counts per minute by the hour, a by-day table, the latest rows, and — with two or more counters — whether they agree. <strong>No JavaScript, no web fonts, no CDN</strong>; the chart is SVG the program draws itself. <code>watch</code> writes it by itself after its backfill, every hour and on quit, so a monitor left open keeps it current.</p>
+<p><code>random.html</code> is written beside it whenever there are emissions to account for. It is the one claim on the front page a reader cannot check by looking, so the audit gets its own page.</p>
+<p>To put it on the web: <strong>fork this repository, copy your <code>cpm-*.tsv</code>, <code>random-*.tsv</code> and <code>sites.tsv</code> into <code>logs/</code>, and push.</strong> A GitHub Action rebuilds the site and commits it back, with nothing to install in the workflow — your counter's report lands at <code>/monitor.html</code>, and <code>/</code> is this page, rendered.</p>
+<pre><code class="language-sh">make site          # build the whole site locally
+make site-serve    # and look at it on http://127.0.0.1:8765/</code></pre>
+<p><strong><a href="running-it.html">Running it</a></strong> covers the boot service, one log directory two programs can both write, and publishing in more detail.</p>
+<hr>
+<h2 id="options">Options</h2>
+<p>Options: <code>--source sim</code>, <code>--sim-cpm</code>, <code>--seed</code>, <code>--spans 3,30,300</code>, <code>--cpm-per-usvh</code>, <code>--log-every</code>, <code>--duration</code>, <code>--clock-offset</code>, <code>--backfill-bytes</code>, <code>--max-gap</code>, <code>--entropy-bits</code>, <code>--device</code>, <code>--baud</code>, <code>--no-log</code>, <code>--no-backfill</code>, <code>--no-export</code>, <code>--no-frames</code>, <code>--entropy-bits</code>, <code>--frames-page</code>, <code>--month</code>, <code>--seq</code>, <code>--json</code>/<code>--tsv</code>/<code>--bin</code>.</p>
+<hr>
+<h2 id="the-lab-reports">The lab reports</h2>
+<p>The lab reports. Each is the <em>why</em> behind one part of the program — written up properly, with the arithmetic, the failures that shaped it, and the prior art.</p>
+<table><tbody><tr><td><a href="the-log.html">The log</a></td><td>every column, the merged record two counters produce, the backfill, and where a counter has been</td></tr><tr><td><a href="the-stream.html">The stream</a></td><td>why an exclusive lock on a port is not an exclusive claim on the counter; the protocol, what a second tube buys, and the window's layout</td></tr><tr><td><a href="cascade.html">The cascade strip</a></td><td>chained dyadic time compression: its invariants, its arithmetic, the prior art from RRDtool to exponential histograms, and what to call it</td></tr><tr><td><a href="the-spectrum.html">The spectrum</a></td><td>why flat is the good answer, how windows are accumulated, and why a peak is not called on sigma alone</td></tr><tr><td><a href="the-drum-spectrogram.html">The drum spectrogram</a></td><td>the trail over the window's spectrum: a row every 8 seconds, joined from the spectrum's three windows, laid up the panel like a seismograph's paper; the thermal pen, the gain that sets its own top, the flow from the port to the pixel, and how long a ridge luck draws</td></tr><tr><td><a href="the-random.html">Random numbers out of decay</a></td><td>where the bits come from, three ways this is normally done wrong, and why the model was replaced by a measurement</td></tr><tr><td><a href="running-it.html">Running it</a></td><td>the boot service, one log directory two programs can both write, and publishing without a build step</td></tr><tr><td><a href="native-build.html">The native build</a></td><td>the Rust crate, what is ported and what is not, and how it is held to the reference implementation</td></tr><tr><td><a href="reference.html">Reference</a></td><td>the tube factor, the counter's protocol, what it costs to run, the tests, and how the screenshots are made</td></tr><tr><td><a href="troubleshooting.html">Troubleshooting</a></td><td>the four things it can be when <code>probe</code> finds nothing, and the four different fixes</td></tr><tr><td><a href="prior-art.html">Prior art</a></td><td>what else reads these counters, and what this does differently</td></tr><tr><td><a href="https://github.com/vonglurt/radbeeper/blob/main/SECURITY.md">Security</a></td><td>what is in scope, what is not, and how the supply chain is kept small</td></tr><tr><td><a href="the-chain-of-custody.html">A signed chain of custody</a></td><td>the four links from a commit on a Copal VM to a crate on crates.io, the three defects found building them, and what the arrangement does not establish</td></tr><tr><td><a href="the-frame-browser.html">Reading the raw record</a></td><td>the frame browser and the three surfaces under it: what a frame costs measured, months and days out of an append-only file, and the procedure for getting frames in and out</td></tr><tr><td><a href="the-monthly-record.html">The monthly record</a></td><td>how a record that never stops growing is published anyway: dated by construction, chained between months, and identified by a coordinate no finer than you asked for</td></tr><tr><td><a href="archive/index.html">Archive</a></td><td>the long-form README this replaced, kept as it stood at 0.3.1</td></tr></tbody></table>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><strong>How it works</strong></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>

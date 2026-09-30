@@ -70,7 +70,7 @@ footer a{color:var(--dim)}
 </head>
 <body>
 <div class="wrap"><main>
-<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><strong>The cascade</strong></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <h1 id="the-cascade-strip">The cascade strip</h1>
 <p><strong>Chained dyadic time compression: one row of a terminal that holds ten minutes of a Geiger counter and still shows this second.</strong></p>
 <p><em>A lab report in the IEEE style, on the counts strip RadBeeper draws across the middle of <code>radbeeper watch</code>. Written against radbeeper 0.3.0, 17 September 2026. The technique is described first and named last, in <a href="#viii-naming">§VIII</a>; the short answer is that this document calls it a <strong>cascade strip</strong>, and the mechanism <strong>chained dyadic time compression</strong>.</em></p>
@@ -138,7 +138,7 @@ footer a{color:var(--dim)}
 <p>In <code>src/analysis.rs</code>, <code>tiers()</code> returns a <code>Vec&lt;Tier&gt;</code> coarsest-first, each tier carrying its column count, its seconds-per-bar and its values as <code>Option&lt;f64&gt;</code> -- <code>None</code>, not zero, where the sample does not exist yet, so that a monitor started 20 seconds ago draws 20 bars and not 588. <code>src/main.rs</code> renders them left to right with one shared peak and one colour ramp, writes each tier's label above its first column, and marks the hand-over columns. Roughly 60 lines for the model and 40 for the drawing, in a program whose only dependency is <code>libc</code>.</p>
 <p>Two details earned their tests:</p>
 <ul><li><strong>Widths.</strong> The fourth tier was taken out of the <em>fine</em> tier's allocation, which had been half the strip. One second a bar for 42 seconds is as much of the present as a reader uses; the columns it gave up bought a doubling of the past. <code>every_tier_leftwards_is_one_more_doubling</code> asserts the property rather than the layout, so the constants can move and the shape cannot.</li><li><strong>The still-filling bar.</strong> The newest bar of every coarse tier is a partial mean, over however many of its *k*ⁱ seconds have arrived. Drawing it as a full bar would make the leftward edge of each panel flicker as it fills; drawing it as <code>None</code> would make the strip appear to have a gap. It is drawn as the mean of what it has, which is also what it will keep.</li></ul>
-<p>The counts strip -- four tiers deep in that picture, six since 2026-09-29, out to thirty-two seconds a bar -- is the wide band across the middle of <a href="screenshots/watch.png"><code>docs/screenshots/watch.png</code></a>; the README's animation shows it filling, tier by tier, over the first ten minutes of a session.</p>
+<p>The counts strip -- four tiers deep in that picture, eleven since 2026-09-29, out to 1024 seconds a bar -- is the wide band across the middle of <a href="screenshots/watch.png"><code>docs/screenshots/watch.png</code></a>; the README's animation shows it filling, tier by tier, over the first ten minutes of a session.</p>
 <hr>
 <h2 id="vi-what-the-recording-shows">VI. What the recording shows</h2>
 <p>The verification run is a single 680-second session against the counter these logs came from, recorded through a pty at 160 × 40 and reproduced by <code>make promo</code>. Read left to right, the strip fills in the order the technique predicts, and the fill times are the arithmetic above, not a tuning:</p>
@@ -173,7 +173,7 @@ footer a{color:var(--dim)}
 <hr>
 <p>MIT License — Copyright (c) 2026 Paul Richeson</p>
 </main></div>
-<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><strong>The cascade</strong></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
 Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
 Alpine Linux, which is also its development environment.

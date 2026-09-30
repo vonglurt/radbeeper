@@ -70,7 +70,7 @@ footer a{color:var(--dim)}
 </head>
 <body>
 <div class="wrap"><main>
-<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <h1 id="the-native-build">The native build</h1>
 <p><strong>This is where new work goes now.</strong> The one-file Python is the original, and it is now the archive: it is kept as the differential oracle, as the owner of the parts that have no Rust counterpart yet, and because it runs on a fresh Pi with python3 and nothing else. Every top-level function and class in it carries a <code># PORT:</code> line saying which Rust file and which Rust name replaced it, or saying plainly that nothing has:</p>
 <pre><code># PORT: replaced by src/analysis.rs :: Ladder (renamed) -- new/add/best, …
@@ -112,7 +112,7 @@ make check      # the warning-free build, the tests, clippy and the oracle</code
 <hr>
 <p><a href="../index.html">← back to the README</a></p>
 </main></div>
-<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="the-log.html">The log</a></li><li><a href="the-stream.html">The stream</a></li><li><a href="cascade.html">The cascade</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
 Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
 Alpine Linux, which is also its development environment.
