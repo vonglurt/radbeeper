@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Archive — RadBeeper</title>
-<meta name="description" content="Past versions of RadBeeper&#x27;s documentation, kept as they stood.">
-<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/archive/index.html">
+<title>The table — RadBeeper</title>
+<meta name="description" content="← The random line · ↑ Reading the window">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/reading-the-table.html">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Archive — RadBeeper">
-<meta property="og:description" content="Past versions of RadBeeper&#x27;s documentation, kept as they stood.">
-<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/archive/index.html">
+<meta property="og:title" content="The table — RadBeeper">
+<meta property="og:description" content="← The random line · ↑ Reading the window">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/reading-the-table.html">
 <meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
 <meta name="twitter:card" content="summary_large_image">
 <style>
@@ -70,23 +70,30 @@ footer a{color:var(--dim)}
 .nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
 @media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
 </style>
-<meta name="robots" content="noindex">
 </head>
 <body>
 <div class="wrap"><main>
-<ul class="nav"><li><a href="../../index.html">Overview</a></li><li><a href="../../monitor.html">Live report</a></li><li><a href="../reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="../technical-description.html">How it works</a></li><li><a href="../index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
-<h1 id="archive">Archive</h1>
-<p>Past versions of documents that were rewritten rather than edited, kept so the prose is not only recoverable through <code>git log</code>.</p>
-<table><tbody><tr><td><a href="https://github.com/vonglurt/radbeeper/blob/main/docs/archive/README-0.3.1.md">README-0.3.1.md</a></td><td>the long-form README, as it stood at 0.3.1 — the full guided tour, before the technical material moved into the lab reports beside this folder</td></tr></tbody></table>
-<p>Images are archived the same way, under <a href="https://github.com/vonglurt/radbeeper/blob/main/docs/screenshots/archive/README.md"><code>docs/screenshots/archive/</code></a>, one folder per version.</p>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-table">The table</h1>
+<p><a href="reading-the-random-line.html">← The random line</a> · <a href="reading-the-window.html">↑ Reading the window</a></p>
+<p><strong>The bottom of the window: the trend line in numbers.</strong></p>
+<p><img src="screenshots/gui-small.png" alt="a small window, the table first" loading="lazy"></p>
+<pre><code>trend   1024s   512s   256s   128s   64s   32s   16s    8s    4s    2s    1s
+now         -      -      -      -     -  28.7  25.4  21.0  26.8  33.9  24.0
+average     -      -      -      -     -  36.7  25.6  22.5  33.9  28.4  29.2
+high        -      -      -      -     -  44.9  28.1  27.3  47.5  37.6  60.0
+low         -      -      -      -     -  28.7  23.6  18.8  20.3  16.3  10.0</code></pre>
+<p>One column per panel of the counts, in CPM. <strong>now</strong> is where the trend line is at the newest bar of that panel; <strong>average</strong> is its mean over the whole panel; <strong>high</strong> and <strong>low</strong> are its extremes there. A dash is a panel that has not filled yet.</p>
+<p>It is the same information as the strip, for reading off rather than looking at: the table is what to quote, the strip is what to watch.</p>
+<p><strong>In a small window the table comes first.</strong> The window fits whatever space it is given; as it runs out of height the drum goes first, then the counts, and the table stays. The window follows the desktop's light or dark theme.</p>
 <hr>
-<p><a href="../../index.html">← back to the README</a></p>
+<p><a href="reading-the-random-line.html">← The random line</a> · <a href="reading-the-window.html">↑ Reading the window</a></p>
 </main></div>
-<footer><div class="wrap"><ul class="nav"><li><a href="../../index.html">Overview</a></li><li><a href="../../monitor.html">Live report</a></li><li><a href="../reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="../technical-description.html">How it works</a></li><li><a href="../index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
 Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
 Alpine Linux, which is also its development environment.
-<a href="../index.html">Lab reports</a> &middot;
+<a href="index.html">Lab reports</a> &middot;
 <a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
 <a href="https://crates.io/crates/radbeeper">crates.io</a></p>
 </div></footer>

@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Archive — RadBeeper</title>
-<meta name="description" content="Past versions of RadBeeper&#x27;s documentation, kept as they stood.">
-<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/archive/index.html">
+<title>The counts — RadBeeper</title>
+<meta name="description" content="← The drum spectrogram, read as a landscape · ↑ Reading the window · The random line →">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/reading-the-counts.html">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Archive — RadBeeper">
-<meta property="og:description" content="Past versions of RadBeeper&#x27;s documentation, kept as they stood.">
-<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/archive/index.html">
+<meta property="og:title" content="The counts — RadBeeper">
+<meta property="og:description" content="← The drum spectrogram, read as a landscape · ↑ Reading the window · The random line →">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/reading-the-counts.html">
 <meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
 <meta name="twitter:card" content="summary_large_image">
 <style>
@@ -70,23 +70,27 @@ footer a{color:var(--dim)}
 .nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
 @media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
 </style>
-<meta name="robots" content="noindex">
 </head>
 <body>
 <div class="wrap"><main>
-<ul class="nav"><li><a href="../../index.html">Overview</a></li><li><a href="../../monitor.html">Live report</a></li><li><a href="../reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="../technical-description.html">How it works</a></li><li><a href="../index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
-<h1 id="archive">Archive</h1>
-<p>Past versions of documents that were rewritten rather than edited, kept so the prose is not only recoverable through <code>git log</code>.</p>
-<table><tbody><tr><td><a href="https://github.com/vonglurt/radbeeper/blob/main/docs/archive/README-0.3.1.md">README-0.3.1.md</a></td><td>the long-form README, as it stood at 0.3.1 — the full guided tour, before the technical material moved into the lab reports beside this folder</td></tr></tbody></table>
-<p>Images are archived the same way, under <a href="https://github.com/vonglurt/radbeeper/blob/main/docs/screenshots/archive/README.md"><code>docs/screenshots/archive/</code></a>, one folder per version.</p>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-counts">The counts</h1>
+<p><a href="reading-the-drum-as-a-landscape.html">← The drum spectrogram, read as a landscape</a> · <a href="reading-the-window.html">↑ Reading the window</a> · <a href="reading-the-random-line.html">The random line →</a></p>
+<p><strong>The strip of bars under the drum: a second a bar at the right, and half a day of history to the left.</strong></p>
+<p><img src="screenshots/gui-drum-hover.png" alt="the pointer over a bar" loading="lazy"></p>
+<p><strong>One bar per second at the right</strong>, with older counts packed into longer bars to the left. Each panel to the left holds twice as long in a bar, doubling out to 1024 seconds a bar: eleven panels, half a day of history in one row, at one-second resolution where it matters.</p>
+<p><strong>Each panel is captioned</strong> with how much time a bar holds and how far the panel reaches (<code>4s/bar · 84s</code>). The <code>F</code> at a boundary marks where a finer panel hands over to a coarser one: a spike that crosses it is drawn half as wide on the far side. The seam is shown on purpose, because a reader who has noticed it once never misreads a spike's width again.</p>
+<p><strong>The line over the bars is the trend</strong>: each bar taken with the four either side of it, weighted by the seconds they cover. A bar at background is two or three counts and the eye follows the tallest; the line is what the eye should follow instead.</p>
+<p><strong>Point at a bar</strong> and a circle marks the trend there, with when the bar was, how long it is, and the trend's and the bar's own rate in CPM.</p>
+<p>The bars are coloured by the same bands as the dials, so a bar over 120 CPM is advisory-coloured wherever it is in the strip.</p>
 <hr>
-<p><a href="../../index.html">← back to the README</a></p>
+<p><a href="reading-the-drum-as-a-landscape.html">← The drum spectrogram, read as a landscape</a> · <a href="reading-the-window.html">↑ Reading the window</a> · <a href="reading-the-random-line.html">The random line →</a></p>
 </main></div>
-<footer><div class="wrap"><ul class="nav"><li><a href="../../index.html">Overview</a></li><li><a href="../../monitor.html">Live report</a></li><li><a href="../reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="../technical-description.html">How it works</a></li><li><a href="../index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
 Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
 Alpine Linux, which is also its development environment.
-<a href="../index.html">Lab reports</a> &middot;
+<a href="index.html">Lab reports</a> &middot;
 <a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
 <a href="https://crates.io/crates/radbeeper">crates.io</a></p>
 </div></footer>

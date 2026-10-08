@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Archive — RadBeeper</title>
-<meta name="description" content="Past versions of RadBeeper&#x27;s documentation, kept as they stood.">
-<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/archive/index.html">
+<title>The counters and the dials — RadBeeper</title>
+<meta name="description" content="↑ Reading the window · The big number and the five averages →">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/reading-the-counters.html">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Archive — RadBeeper">
-<meta property="og:description" content="Past versions of RadBeeper&#x27;s documentation, kept as they stood.">
-<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/archive/index.html">
+<meta property="og:title" content="The counters and the dials — RadBeeper">
+<meta property="og:description" content="↑ Reading the window · The big number and the five averages →">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/reading-the-counters.html">
 <meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
 <meta name="twitter:card" content="summary_large_image">
 <style>
@@ -70,23 +70,30 @@ footer a{color:var(--dim)}
 .nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
 @media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
 </style>
-<meta name="robots" content="noindex">
 </head>
 <body>
 <div class="wrap"><main>
-<ul class="nav"><li><a href="../../index.html">Overview</a></li><li><a href="../../monitor.html">Live report</a></li><li><a href="../reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="../technical-description.html">How it works</a></li><li><a href="../index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
-<h1 id="archive">Archive</h1>
-<p>Past versions of documents that were rewritten rather than edited, kept so the prose is not only recoverable through <code>git log</code>.</p>
-<table><tbody><tr><td><a href="https://github.com/vonglurt/radbeeper/blob/main/docs/archive/README-0.3.1.md">README-0.3.1.md</a></td><td>the long-form README, as it stood at 0.3.1 — the full guided tour, before the technical material moved into the lab reports beside this folder</td></tr></tbody></table>
-<p>Images are archived the same way, under <a href="https://github.com/vonglurt/radbeeper/blob/main/docs/screenshots/archive/README.md"><code>docs/screenshots/archive/</code></a>, one folder per version.</p>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-counters-and-the-dials">The counters and the dials</h1>
+<p><a href="reading-the-window.html">↑ Reading the window</a> · <a href="reading-the-averages.html">The big number and the five averages →</a></p>
+<p><strong>The top of the window: one line per counter, and one dial each.</strong></p>
+<p><img src="screenshots/gui-drum-window.png" alt="the window" loading="lazy"></p>
+<h2 id="the-counters">The counters</h2>
+<p>One line per counter: its port, its model and firmware, its serial, and what it counted <strong>in the last second</strong>. An empty space where the count should be means that counter has stopped answering. A counter that is not answering is left out of every average, so a figure is never made from a stale reading. It is the instrument saying it is not measuring, rather than claiming to.</p>
+<h2 id="the-dials">The dials</h2>
+<p>Two dials, needles on a fixed logarithmic scale with a 270-degree sweep, the reading in digits on the face. The coloured bands on the faces are the same thresholds everything else on the window uses, in counts per minute:</p>
+<table><thead><tr><th>Band</th><th>From</th></tr></thead><tbody><tr><td>nominal</td><td>30 CPM</td></tr><tr><td>advisory</td><td>120 CPM</td></tr><tr><td>warning</td><td>240 CPM</td></tr><tr><td>deadly</td><td>600 CPM</td></tr></tbody></table>
+<p>Below 30 CPM the reading is <em>attenuated</em>: less than an ordinary room, which usually means the tube is shielded or has stopped.</p>
+<p><strong>The left dial is raw.</strong> One needle per counter, in that counter's colour, at its own 30-second rate; the letters under the face say which counters are on it, and the digits read their mean. Captioned <code>raw · 30s</code>.</p>
+<p><strong>The right dial is the live one.</strong> Its needle sits at the last <strong>three seconds</strong>, the shortest window the panel keeps: one second of one tube is two or three arrivals and mostly noise, and three seconds is enough to read a value off while still showing a source passing under the tube. The chrome pointer behind it marks the 30-second figure, and the two arcs outside the bands show the lowest and highest the needle has been in that half minute. Its caption says all three: <code>3s held · 8–78</code> is the needle's window and the range, and the line above it, <code>1s 0 · 30s 33</code>, is this second's count and the half-minute rate the pointer is at.</p>
 <hr>
-<p><a href="../../index.html">← back to the README</a></p>
+<p><a href="reading-the-window.html">↑ Reading the window</a> · <a href="reading-the-averages.html">The big number and the five averages →</a></p>
 </main></div>
-<footer><div class="wrap"><ul class="nav"><li><a href="../../index.html">Overview</a></li><li><a href="../../monitor.html">Live report</a></li><li><a href="../reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="../technical-description.html">How it works</a></li><li><a href="../index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
 Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
 Alpine Linux, which is also its development environment.
-<a href="../index.html">Lab reports</a> &middot;
+<a href="index.html">Lab reports</a> &middot;
 <a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
 <a href="https://crates.io/crates/radbeeper">crates.io</a></p>
 </div></footer>

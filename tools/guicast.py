@@ -24,6 +24,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -129,6 +130,7 @@ def headless_start(address, workspace, name, slot):
     primary, w, h = primary_monitor()
     if not primary or not w:
         return None
+    pin_pointers(primary)
     showing = current_workspace()
     # SIDE BY SIDE TO THE LEFT OF THE DISPLAY, one slot each, so several
     # recordings at once do not overlap. To the left, at negative x: the
@@ -190,6 +192,60 @@ def headless_start(address, workspace, name, slot):
         subprocess.run(["hyprctl", "dispatch", "workspace", str(showing)],
                        capture_output=True)
     return primary
+
+
+def pin_pointers(primary):
+    """Map every mouse onto the real display, by name, for good.
+
+    THE POINTER APPEARED WHERE NOBODY HAD SENT IT. The antiquity drum clip
+    of 2026-09-30 had the arrow turn up on its headless output nineteen
+    minutes in, first on the bar, then on the panel's header for the last
+    twenty frames and the still -- and the dark clip on the output between
+    it and the display never saw it. It did not cross; it appeared. A VM's
+    mouse is a tablet, an absolute device, and the compositor lays its
+    coordinates over whichever monitor last had focus, so the moment
+    something gave a clip's output focus the host's pointer was on it.
+    Bound to the display by name it lands there whatever has focus. The
+    binding is left in place afterwards: on a machine whose mice are all
+    tablets it is right at all times, and a config reload clears it.
+    """
+    try:
+        out = subprocess.run(["hyprctl", "devices", "-j"],
+                             capture_output=True, text=True, timeout=10)
+        mice = [m["name"] for m in json.loads(out.stdout).get("mice", [])]
+    except (OSError, ValueError, KeyError, TypeError,
+            subprocess.SubprocessError):
+        return
+    for m in mice:
+        subprocess.run(["hyprctl", "keyword", "device[%s]:output" % m, primary],
+                       capture_output=True)
+
+
+def arrive(barrier, name, peers, slot=1, wait=True, timeout=300.0):
+    """Mark this recording as having its frames, wait for the others, and
+    take a turn before the output comes down.
+
+    ONE OUTPUT DOWN AT A TIME, AND NONE WHILE ANOTHER IS STILL BEING
+    GRABBED. Several recordings run at once, a headless output each, and
+    finish seconds apart. Hyprland 0.54.3 has segfaulted on an output
+    being removed (2026-09-30, twice -- see --slot); nobody knows why, so
+    the removals are kept as plain as the ones that went well: a recording
+    that is done says so here, one marker per recording in a directory the
+    caller made, waits for the rest, and then waits its slot's turn, so no
+    two outputs go in the same second and none goes under a grab. A
+    recording that fails marks the directory too, without waiting, so
+    nobody waits for it.
+    """
+    if not barrier:
+        return
+    os.makedirs(barrier, exist_ok=True)
+    open(os.path.join(barrier, name), "w").close()
+    if not wait:
+        return
+    due = time.monotonic() + timeout
+    while len(os.listdir(barrier)) < peers and time.monotonic() < due:
+        time.sleep(1.0)
+    time.sleep(3.0 * (slot - 1))
 
 
 def on_output(address, name):
@@ -423,16 +479,41 @@ def main():
                    help="record on a headless output of this name, the size "
                         "of the display, so the desktop stays free to use")
     p.add_argument("--slot", type=int, default=1,
-                   help="which headless output this is, 1, 2, ..., so several "
+                   help="which headless output this is, 1 or 2, so two "
                         "recordings at once sit side by side (default 1)")
     p.add_argument("--park", nargs=2, type=int, metavar=("X", "Y"),
                    help="move the pointer here first, out of the picture")
+    p.add_argument("--barrier", metavar="DIR",
+                   help="with the frames in hand, leave a marker in DIR and "
+                        "wait until --peers recordings have, before any "
+                        "headless output comes down")
+    p.add_argument("--peers", type=int, default=1,
+                   help="how many recordings share --barrier (default 1)")
     args = p.parse_args()
 
     need("grim", "it is what takes the screen grabs")
     need("ffmpeg", "it is what turns them into a GIF")
+    # A KILL MUST STILL TAKE THE OUTPUT DOWN. `make` and a person both stop
+    # a recording with kill, and a shell that started it in the background
+    # has SIGINT masked for it, so TERM is the signal that arrives -- and
+    # Python's default for TERM ends the process without running `finally`,
+    # leaving a headless output up with the window on it (2026-09-30).
+    # Raised as an exit instead, it unwinds through the teardown.
+    signal.signal(signal.SIGTERM,
+                  lambda *_: sys.exit("guicast: stopped"))
     if not os.environ.get("WAYLAND_DISPLAY"):
         sys.exit("guicast: no WAYLAND_DISPLAY -- this records a Wayland window")
+    # NO SLOT PAST THE SECOND. The outputs at slots 1 and 2 sit against the
+    # display's left edge, and every one of them has come down cleanly. The
+    # one at slot 9 -- an island at x = -11520 with nothing between it and
+    # the display, recording at two grabs a second -- took Hyprland 0.54.3
+    # down with it both times it was removed (2026-09-30), and without a
+    # backtrace on this build nobody can say which of the two did it. So a
+    # far slot is refused rather than tried again on somebody's desktop.
+    if args.headless and not 1 <= args.slot <= 2:
+        sys.exit("guicast: --slot %d -- only slots 1 and 2 are known to come "
+                 "down without taking the compositor with them; record two "
+                 "at a time, or the rest on the display" % args.slot)
 
     address = window_address(APP_ID, args.pid)
     came_from = None
@@ -479,6 +560,7 @@ def main():
              ("a frame every %gs" % args.every) if args.every
              else ("%d fps" % args.fps),
              "" if speed == 1 else ", played at %gx" % speed))
+    arrived = False
     try:
         frames = capture(geometry, args.seconds, args.fps, into, args.every,
                          headless if primary else None)
@@ -492,6 +574,8 @@ def main():
             shutil.copyfile(last, args.still)
             print("guicast: %s -- the last frame, %d bytes"
                   % (args.still, os.path.getsize(args.still)))
+        arrive(args.barrier, headless or "cast", args.peers, args.slot)
+        arrived = True
         os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
         widths = [args.width]
         if args.max_mb:
@@ -513,6 +597,9 @@ def main():
                 "guicast: still %.1f MB at %d px -- record fewer seconds\n"
                 % (size / 1048576.0, widths[-1]))
     finally:
+        if not arrived:
+            arrive(args.barrier, headless or "cast", args.peers, args.slot,
+                   wait=False)
         if primary:
             headless_stop(primary, headless, args.park)
         if restore:

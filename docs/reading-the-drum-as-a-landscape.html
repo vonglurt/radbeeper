@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The drum spectrogram, read as a landscape — RadBeeper</title>
+<meta name="description" content="← The status line · ↑ Reading the window · The counts →">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/reading-the-drum-as-a-landscape.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="The drum spectrogram, read as a landscape — RadBeeper">
+<meta property="og:description" content="← The status line · ↑ Reading the window · The counts →">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/reading-the-drum-as-a-landscape.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.drum img{display:block;width:100%;height:auto;margin:1.75rem 0 0;
+border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.caption{font-size:.9rem;color:var(--dim);margin:.6rem 0 0;max-width:44rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-drum-spectrogram-read-as-a-landscape">The drum spectrogram, read as a landscape</h1>
+<p><a href="reading-the-status-line.html">← The status line</a> · <a href="reading-the-window.html">↑ Reading the window</a> · <a href="reading-the-counts.html">The counts →</a></p>
+<p><strong>The striped panel is built like a relief map, and reads like one.</strong></p>
+<p><img src="screenshots/gui-drum-dark.gif" alt="the paper filling from empty, twenty-two minutes in fifty seconds" loading="lazy"></p>
+<p>The panel answers one question: is anything reaching the counter on a schedule? Decay has no rhythm, so a healthy counter shows no pattern. A fan, mains noise or a fault shows a stripe. <strong><a href="reading-the-drum-spectrogram.html">Reading the drum spectrogram</a></strong> is the guide to telling chance from something real; this page is about how the picture is built.</p>
+<h2 id="every-line-is-a-profile">Every line is a profile</h2>
+<p>Each line across the panel is one row: a spectrum of the last eight and a half minutes of counts, with the period on the horizontal axis (slow rhythms to the left, fast to the right) and the power at each period as <strong>height above the line</strong>. Think of it as a cross-section through terrain: flat where the counts have no rhythm, a hill where they have one.</p>
+<h2 id="the-rows-stack-into-terrain">The rows stack into terrain</h2>
+<p>A new row is drawn every eight seconds at the bottom, just above the counts, and each older row is two pixels further up. Ninety-six rows are kept, so the top of the paper is about thirteen minutes older than the bottom. They are painted back to front, oldest first, each one hiding what is behind it, so the panel is the terrain seen from in front and slightly above. Something that repeats at one period for a long time raises the same spot in row after row, and that reads as <strong>a ridge running up the paper</strong>. A patch of luck raises a few rows and reads as a knoll that drifts up and off the top.</p>
+<h2 id="height-is-relative-colour-is-not">Height is relative; colour is not</h2>
+<p>The two say different things, and the difference is the point.</p>
+<p><strong>Height</strong> is the power on a logarithmic scale against the loudest thing on the paper, at most twenty-four pixels (twelve rows). The loudest thing is always the top, so nothing is ever cut off, and the vertical exaggeration adjusts itself: when a loud peak scrolls off the top, the rest grows to fill the room it left. Read height for shape and for comparison within the panel.</p>
+<p><strong>Colour</strong> is a <em>hypsometric tint</em>: the elevation bands of a topographic map, where lowland is green, foothills yellow, highland brown and red, and summits white. Here the elevations are powers, fixed against <strong>the luck line</strong>, the power that chance reaches on its own, and they never rescale:</p>
+<table><thead><tr><th>Power</th><th>Terrain</th><th>Tint</th><th>Pen</th></tr></thead><tbody><tr><td>nothing</td><td>sea</td><td>teal, hardly there</td><td>0.6 px</td></tr><tr><td>1, flat</td><td>lowland</td><td>sea green</td><td>1.1 px</td></tr><tr><td>2 to 5</td><td>foothills</td><td>green to lime</td><td>1.5 to 1.9 px</td></tr><tr><td>8, the luck line</td><td>the tree line</td><td>yellow going orange</td><td>2.2 px</td></tr><tr><td>over it</td><td>highland</td><td>orange to red</td><td>2.3 px, glowing</td></tr><tr><td>12 and over</td><td>summit</td><td>white, by way of pink</td><td>2.4 px, glowing</td></tr></tbody></table>
+<p>Yellow is the luck line on every paper, whatever is loudest, so <strong>the colour is the reading</strong>: anything orange or hotter is more than chance manages, anywhere, any time. The pen also widens with the same figure, and above the luck line it glows, a wider stroke of the same colour under the line, so the hot ground is unmistakable at a glance.</p>
+<h2 id="brightness-is-the-weather">Brightness is the weather</h2>
+<p>Each whole row is drawn as bright as the counter was counting while it was made, against the long average: full brightness at twice the usual rate, faint at half. So the paper says when the rate rose as well as at what period. A row that is hot from edge to edge, and bright, is not a rhythm; the counts came in a rush for those minutes.</p>
+<h2 id="summits-are-marked">Summits are marked</h2>
+<p>Where a row stands over both its neighbours and over the luck line, a dot marks the top of the peak, in the pen's colour. The one highest summit on the whole paper wears a white ring, the only pure white on it.</p>
+<h2 id="the-front-row-is-the-contour-of-record">The front row is the contour of record</h2>
+<p>The line the newest row is drawn on carries the spectrum itself: the same profile made from hours of counts rather than eight minutes, in the same pen on the same axis. It is steady where the rows are restless, and a bump in it sits exactly under the same bump in the rows above. For slow rhythms, on the left, trust it over the rows.</p>
+<h2 id="the-axis-under-the-ground">The axis under the ground</h2>
+<p>The caption at the left of each stretch is the period it begins at. The left tenth of the panel is one to nine hours, the next seventh five minutes to an hour, and the rest eight and a half minutes down to a few seconds. The axis grows as the longer windows fill: it reaches 8 minutes first, 1 hour 8 after an hour, 9 hours 6 after nine.</p>
+<h2 id="what-the-clip-shows">What the clip shows</h2>
+<p>The clip at the top is the paper filling from empty after a service restart, one frame per row, played at four rows a second. Nothing is drawn for the first eight and a half minutes: a row needs its full 512 seconds of counts before it can be made, and the window shows the window filling instead. Then a row arrives every eight seconds, and the paper is full end to end after ninety-six of them, twenty-one minutes in. The counter in it is in an ordinary room, and the paper is green from edge to edge with warm patches that come and go: the good answer.</p>
+<p><strong><a href="the-drum-spectrogram.html">The drum spectrogram</a></strong> is the lab report: how a row is computed, the measurements behind the luck line, and why it is drawn the way it is.</p>
+<hr>
+<p><a href="reading-the-status-line.html">← The status line</a> · <a href="reading-the-window.html">↑ Reading the window</a> · <a href="reading-the-counts.html">The counts →</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>

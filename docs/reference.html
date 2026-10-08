@@ -22,6 +22,9 @@ body{margin:0;background:var(--bg);color:var(--fg);
 font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
 header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.drum img{display:block;width:100%;height:auto;margin:1.75rem 0 0;
+border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.caption{font-size:.9rem;color:var(--dim);margin:.6rem 0 0;max-width:44rem}
 .eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
 letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
 h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
@@ -95,12 +98,14 @@ radbeeper -d /dev/pts/N watch</code></pre>
 <pre><code class="language-sh">make promo                 # all of them: needs the counter plugged in, ~7 min
 make promo-fast            # the same, reusing the last monitor recording
 make promo SHOTS=probe     # just one</code></pre>
+<p>The window is recorded the other way, from pixels — see below — and its long clip is <code>make gui-drum</code>: a fresh window per theme, full screen, one frame per row of the drum spectrogram for twenty-two minutes, which is the paper filling end to end from the moment the window opened. The last frame of each is kept as that theme's still, <code>gui-dark.png</code> and <code>gui-antiquity.png</code>, so the stills show a panel with every graph full rather than one opened a minute ago. Long captures are the point of the instrument: a schedule shows up as a stripe, and a stripe takes time. Restart the service first if the record is to start from empty there too.</p>
 <h3 id="the-window-is-pixels-because-it-has-to-be">The window is pixels, because it has to be</h3>
 <p>That whole apparatus records a <strong>terminal</strong>: it keeps the bytes a program writes to a pty, which is exact, tiny, and no use at all for a window. A Wayland surface has no byte stream to keep. So <code>tools/guicast.py</code> grabs frames with <code>grim</code> and assembles them with <code>ffmpeg</code>, and those are the only two outside programs in <code>tools/</code>.</p>
 <pre><code class="language-sh">make gui                                    # the window has to be open
 make gui-gif                                # 24 s of it, real time, maximised
 make gui-gif GIFSECS=180 GIFFPS=1 GIFPLAY=12
-make gui-gif GIFFULL= GIFWS=                # record it where it is</code></pre>
+make gui-gif GIFFULL= GIFWS=                # record it where it is
+make gui-hero                               # the same, from a window it opens itself</code></pre>
 <p>The second is three minutes of counter played in fifteen seconds. <strong>Playing faster than it was captured</strong> is how a long session becomes a short clip: frames a second apart on the wall clock are written a twelfth of a second apart in the file. Nothing is dropped and nothing is interpolated -- every frame is a second that really happened, in order.</p>
 <p>Two frames a second, played back at two frames a second: the instrument updates once a second, so the recording is real time and the clock in it can be read. The window is <em>found</em> rather than guessed -- <code>radbeeper-gui</code> sets an application id, so the compositor can be asked where it is -- and <code>--geometry 'X,Y WxH'</code> covers a compositor <code>guicast</code> does not know how to ask. The palette is built from what changes between frames and only the moved rectangle is rewritten, which is what keeps a 48-frame recording of a maximised window under a megabyte.</p>
 <p><strong>Its own workspace, and maximised.</strong> A screen grab cannot grab what is not being composited, so a window on a workspace nobody is looking at records as whatever was last drawn -- and moving it somewhere empty is also the only way to be sure the clip is of the instrument rather than of the instrument with a terminal over one corner of it. <code>GIFWS</code> is the workspace to borrow and <code>guicast</code> switches back afterwards. <code>GIFFULL</code> maximises it first, because the panel drops the log table, then the verdicts, then the axis as it runs out of height: a clip taken in a quarter of a screen is a recording of the panel with its best parts missing.</p>

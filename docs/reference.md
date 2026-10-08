@@ -120,6 +120,7 @@ make gui                                    # the window has to be open
 make gui-gif                                # 24 s of it, real time, maximised
 make gui-gif GIFSECS=180 GIFFPS=1 GIFPLAY=12
 make gui-gif GIFFULL= GIFWS=                # record it where it is
+make gui-hero                               # the same, from a window it opens itself
 ```
 
 The second is three minutes of counter played in fifteen seconds. **Playing

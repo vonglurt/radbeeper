@@ -75,7 +75,7 @@ DRUMTHEMES ?= dark antiquity
 # clock, and hovering it spawns its overlay into every frame.
 GIFCURSOR ?= 40 12
 
-.PHONY: gui-drum gui-clips all build test check clippy install uninstall package publish-dry \
+.PHONY: gui-drum gui-clips gui-hero all build test check clippy install uninstall package publish-dry \
         release-check release release-media release-verify bump probe watch \
         sim service gui gui-build gui-install gui-gif gui-shots site site-py site-serve \
         py-test py-check py-install promo promo-fast play clean help
@@ -350,15 +350,20 @@ gui-shots: gui-build
 # desktop stays usable for those minutes and a workspace switch cannot put
 # a terminal into the picture. The bar and gaps stay, as in every clip.
 # ALL AT ONCE. Each theme gets a headless output of its own, side by side
-# off the right edge of the display, and its own window on it; the clips
+# off the left edge of the display, and its own window on it; the clips
 # are the same twenty-two minutes whether one records or three, so they
-# all record. A restart of the service just before is what makes the log
-# and the flash read start from empty too: `doas rc-service radbeeper
-# restart`, then this.
+# all record. Slots 1 and 2, next to the display: every output there has
+# come down cleanly (2026-09-30, four times), and the two that took the
+# session with them were both an output far off on its own -- see
+# gui-clips. Their outputs come down one at a time, once every one has its
+# last frame. A restart of the service just before is what makes the log
+# and the flash read start from empty too: DRUMRESTART=1 does it here,
+# through doas.
 gui-drum: gui-build
 	@command -v grim >/dev/null || { echo "no grim -- a Wayland compositor is needed"; exit 1; }
 	@test -n "$$WAYLAND_DISPLAY" || { echo "no WAYLAND_DISPLAY -- this records a window"; exit 1; }
-	@i=0; for t in $(DRUMTHEMES); do i=$$((i+1)); \
+	$(if $(DRUMRESTART),doas rc-service radbeeper restart && sleep 3,@:)
+	@b=$$(mktemp -d /tmp/guicast-barrier.XXXXXX); i=0; for t in $(DRUMTHEMES); do i=$$((i+1)); \
 	  echo "== $$t: $(DRUMSECS)s, a frame every $(DRUMEVERY)s, headless slot $$i"; \
 	  ( ./$(GUIBIN) --theme $$t >/dev/null 2>&1 & pid=$$!; \
 	    sleep 8; \
@@ -366,30 +371,44 @@ gui-drum: gui-build
 	      --every $(DRUMEVERY) --seconds $(DRUMSECS) --play-fps $(DRUMPLAY) \
 	      --width $(GIFWIDTH) --max-mb $(GIFMAXMB) \
 	      --headless drum-$$t --slot $$i --park $(GIFCURSOR) \
+	      --barrier $$b --peers $(words $(DRUMTHEMES)) \
 	      --still docs/screenshots/gui-$$t.png \
 	      || echo "  FAILED $$t"; \
 	    kill $$pid 2>/dev/null ) & \
 	  sleep 4; \
-	done; wait
+	done; wait; rm -rf "$$b"
 
-## gui-clips: every window clip in one go -- gui.gif, then the drum in each theme
-# The README's short clip from a fresh window too, on a slot of its own
-# past the drum's, in whatever theme the desktop wears, so one command
-# after a service restart records everything the pages show of the window.
-# THE HERO FIRST, AND TO THE END. It used to run alongside the drum, and
-# its headless output came down in the same second the drum's were going
-# up; Hyprland 0.54.3 segfaulted on that and took the session, and the
-# drum clips, with it (2026-09-30). The hero is a minute; the drum waits
-# for it, and no output is removed while another is being made.
-gui-clips: gui-build
+## gui-hero: re-record docs/screenshots/gui.gif from a fresh window
+# The README's clip, ON THE DISPLAY: the window is started, moved to an
+# empty workspace, maximised, recorded for GIFSECS seconds and closed, and
+# the desktop is handed back. Twenty-four seconds of not touching anything.
+# NOT ON A HEADLESS OUTPUT. It was recorded that way twice on 2026-09-30,
+# on a slot of its own past the drum's so the two could overlap, and both
+# times Hyprland 0.54.3 segfaulted the moment that output was removed --
+# the crash report is stamped 150 ms after gui.gif was written, with
+# nothing else in flight the second time. Every output at slot 1 or 2 came
+# down cleanly the same day. What differed was the slot, an island at
+# x = -11520 with nothing between it and the display, and the pace, a
+# grab every half second; which of the two it is, nobody knows. The hero
+# is a minute of the screen, so it takes the screen, and no output has to
+# come down at all.
+gui-hero: gui-build
 	@command -v grim >/dev/null || { echo "no grim -- a Wayland compositor is needed"; exit 1; }
 	@test -n "$$WAYLAND_DISPLAY" || { echo "no WAYLAND_DISPLAY -- this records a window"; exit 1; }
 	@./$(GUIBIN) >/dev/null 2>&1 & pid=$$!; sleep 8; \
 	  $(PYTHON) tools/guicast.py --pid $$pid -o $(GIFOUT) --seconds $(GIFSECS) \
 	    --fps $(GIFFPS) --play-fps $(GIFPLAY) --width $(GIFWIDTH) \
-	    --max-mb $(GIFMAXMB) --headless hero --slot 9 --park $(GIFCURSOR) \
+	    --max-mb $(GIFMAXMB) $(if $(GIFFULL),--fullscreen,) --park $(GIFCURSOR) \
+	    $(if $(GIFWS),--workspace $(GIFWS),) \
 	    || echo "  FAILED gui.gif"; \
 	  kill $$pid 2>/dev/null
+
+## gui-clips: every window clip in one go -- gui.gif, then the drum in each theme
+# The hero on the display first, then the drum on its headless outputs, so
+# one command after a service restart records everything the pages show of
+# the window. The hero first because it is a minute and needs the screen;
+# the drum takes twenty-two and does not.
+gui-clips: gui-hero
 	$(MAKE) --no-print-directory gui-drum
 
 ## gui-gif: re-record docs/screenshots/gui.gif from the running window

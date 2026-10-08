@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Archive — RadBeeper</title>
-<meta name="description" content="Past versions of RadBeeper&#x27;s documentation, kept as they stood.">
-<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/archive/index.html">
+<title>The status line — RadBeeper</title>
+<meta name="description" content="← The big number and the five averages · ↑ Reading the window · The drum spectrogram, read as a landscape →">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/reading-the-status-line.html">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Archive — RadBeeper">
-<meta property="og:description" content="Past versions of RadBeeper&#x27;s documentation, kept as they stood.">
-<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/archive/index.html">
+<meta property="og:title" content="The status line — RadBeeper">
+<meta property="og:description" content="← The big number and the five averages · ↑ Reading the window · The drum spectrogram, read as a landscape →">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/reading-the-status-line.html">
 <meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
 <meta name="twitter:card" content="summary_large_image">
 <style>
@@ -70,23 +70,25 @@ footer a{color:var(--dim)}
 .nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
 @media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
 </style>
-<meta name="robots" content="noindex">
 </head>
 <body>
 <div class="wrap"><main>
-<ul class="nav"><li><a href="../../index.html">Overview</a></li><li><a href="../../monitor.html">Live report</a></li><li><a href="../reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="../technical-description.html">How it works</a></li><li><a href="../index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
-<h1 id="archive">Archive</h1>
-<p>Past versions of documents that were rewritten rather than edited, kept so the prose is not only recoverable through <code>git log</code>.</p>
-<table><tbody><tr><td><a href="https://github.com/vonglurt/radbeeper/blob/main/docs/archive/README-0.3.1.md">README-0.3.1.md</a></td><td>the long-form README, as it stood at 0.3.1 — the full guided tour, before the technical material moved into the lab reports beside this folder</td></tr></tbody></table>
-<p>Images are archived the same way, under <a href="https://github.com/vonglurt/radbeeper/blob/main/docs/screenshots/archive/README.md"><code>docs/screenshots/archive/</code></a>, one folder per version.</p>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-status-line">The status line</h1>
+<p><a href="reading-the-averages.html">← The big number and the five averages</a> · <a href="reading-the-window.html">↑ Reading the window</a> · <a href="reading-the-drum-as-a-landscape.html">The drum spectrogram, read as a landscape →</a></p>
+<p><strong>One line under the averages: what this second held, the run so far, and how the counters share the second.</strong></p>
+<pre><code>now 0    run 940 in 956s   2 tubes · interleave 0.50s (99%)</code></pre>
+<p><strong><code>now</code></strong> is what was counted in the last second, across the counters.</p>
+<p><strong><code>run</code></strong> is every count since the service started, and the seconds it took. Divide one by the other for the session's rate so far.</p>
+<p><strong>The note at the end</strong> appears with more than one counter. Each counter answers once a second; two of them can answer at the same moment or half a second apart. <code>interleave 0.50s</code> is the gap between their answers and the percentage is how close that is to ideal. Interleaved, the pair samples the room twice a second. <code>averaged</code> means they are answering together, and <code>1 of 2 tubes averaged</code> means one has stopped and the figures are from the other alone.</p>
 <hr>
-<p><a href="../../index.html">← back to the README</a></p>
+<p><a href="reading-the-averages.html">← The big number and the five averages</a> · <a href="reading-the-window.html">↑ Reading the window</a> · <a href="reading-the-drum-as-a-landscape.html">The drum spectrogram, read as a landscape →</a></p>
 </main></div>
-<footer><div class="wrap"><ul class="nav"><li><a href="../../index.html">Overview</a></li><li><a href="../../monitor.html">Live report</a></li><li><a href="../reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="../technical-description.html">How it works</a></li><li><a href="../index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
 Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
 Alpine Linux, which is also its development environment.
-<a href="../index.html">Lab reports</a> &middot;
+<a href="index.html">Lab reports</a> &middot;
 <a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
 <a href="https://crates.io/crates/radbeeper">crates.io</a></p>
 </div></footer>

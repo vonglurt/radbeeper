@@ -3,13 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Archive — RadBeeper</title>
-<meta name="description" content="Past versions of RadBeeper&#x27;s documentation, kept as they stood.">
-<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/archive/index.html">
+<title>The random line — RadBeeper</title>
+<meta name="description" content="← The counts · ↑ Reading the window · The table →">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/reading-the-random-line.html">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Archive — RadBeeper">
-<meta property="og:description" content="Past versions of RadBeeper&#x27;s documentation, kept as they stood.">
-<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/archive/index.html">
+<meta property="og:title" content="The random line — RadBeeper">
+<meta property="og:description" content="← The counts · ↑ Reading the window · The table →">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/reading-the-random-line.html">
 <meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
 <meta name="twitter:card" content="summary_large_image">
 <style>
@@ -70,23 +70,24 @@ footer a{color:var(--dim)}
 .nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
 @media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
 </style>
-<meta name="robots" content="noindex">
 </head>
 <body>
 <div class="wrap"><main>
-<ul class="nav"><li><a href="../../index.html">Overview</a></li><li><a href="../../monitor.html">Live report</a></li><li><a href="../reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="../technical-description.html">How it works</a></li><li><a href="../index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
-<h1 id="archive">Archive</h1>
-<p>Past versions of documents that were rewritten rather than edited, kept so the prose is not only recoverable through <code>git log</code>.</p>
-<table><tbody><tr><td><a href="https://github.com/vonglurt/radbeeper/blob/main/docs/archive/README-0.3.1.md">README-0.3.1.md</a></td><td>the long-form README, as it stood at 0.3.1 — the full guided tour, before the technical material moved into the lab reports beside this folder</td></tr></tbody></table>
-<p>Images are archived the same way, under <a href="https://github.com/vonglurt/radbeeper/blob/main/docs/screenshots/archive/README.md"><code>docs/screenshots/archive/</code></a>, one folder per version.</p>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-random-line">The random line</h1>
+<p><a href="reading-the-counts.html">← The counts</a> · <a href="reading-the-window.html">↑ Reading the window</a> · <a href="reading-the-table.html">The table →</a></p>
+<p><strong>One line under the counts: the newest random number, and who earned it.</strong></p>
+<pre><code>random · next in 1012s</code></pre>
+<p>The counter's timing is a source of randomness: the interval between one count and the next is decided by nothing. The service gathers those intervals into a pool and, when the pool has measured enough entropy to justify it, draws 256 bits as hex. This line shows the newest draw and, with more than one counter, the letter of the counter whose counts it came from: each earns its own, from its own arrivals. <code>next in</code> is how long the pool needs at the current rate before it can draw again.</p>
+<p><strong><a href="the-random.html">The random</a></strong> is the lab report: how the entropy is measured and why the draw waits for it.</p>
 <hr>
-<p><a href="../../index.html">← back to the README</a></p>
+<p><a href="reading-the-counts.html">← The counts</a> · <a href="reading-the-window.html">↑ Reading the window</a> · <a href="reading-the-table.html">The table →</a></p>
 </main></div>
-<footer><div class="wrap"><ul class="nav"><li><a href="../../index.html">Overview</a></li><li><a href="../../monitor.html">Live report</a></li><li><a href="../reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="../technical-description.html">How it works</a></li><li><a href="../index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
 Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
 Alpine Linux, which is also its development environment.
-<a href="../index.html">Lab reports</a> &middot;
+<a href="index.html">Lab reports</a> &middot;
 <a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
 <a href="https://crates.io/crates/radbeeper">crates.io</a></p>
 </div></footer>

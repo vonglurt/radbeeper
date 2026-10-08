@@ -22,6 +22,9 @@ body{margin:0;background:var(--bg);color:var(--fg);
 font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
 .wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
 header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.drum img{display:block;width:100%;height:auto;margin:1.75rem 0 0;
+border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.caption{font-size:.9rem;color:var(--dim);margin:.6rem 0 0;max-width:44rem}
 .eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
 letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
 h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
@@ -98,6 +101,14 @@ reaching the counter on a schedule, which radiation never does.</p>
 <a href="docs/technical-description.html">How it works</a>
 <a href="https://github.com/vonglurt/radbeeper">Source</a>
 </div>
+<picture class="drum">
+<source srcset="docs/screenshots/gui-drum-dark.gif" media="(prefers-color-scheme: dark)">
+<img src="docs/screenshots/gui-drum-antiquity.gif"
+     alt="radbeeper-gui filling from empty: the dials, the counts strip and the drum spectrogram, a frame per drum row over twenty-two minutes">
+</picture>
+<p class="caption">Twenty-two minutes of two counters, a frame per row of the
+drum, from the moment the window opened. Long captures are the point: a
+schedule shows up as a stripe, and a stripe takes time.</p>
 </div></header>
 
 <div class="wrap"><section class="facts">
@@ -207,7 +218,7 @@ doas adduser $USER dialout               # then log out and back in</code></pre>
 <p><code>radbeeper --help</code> lists every command and option.</p>
 <hr>
 <h2 id="learn-more">Learn more</h2>
-<table><tbody><tr><td><a href="docs/reading-the-drum-spectrogram.html">Reading the drum spectrogram</a></td><td>the striped chart, and how to tell chance from something real</td></tr><tr><td><a href="docs/troubleshooting.html">Troubleshooting</a></td><td>what to do when the counter is not found</td></tr><tr><td><a href="docs/running-it.html">Running it</a></td><td>starting at boot, and publishing</td></tr><tr><td><a href="docs/technical-description.html">Technical description</a></td><td>how it works: the hardware, the arithmetic, every part of the screen, the log and the keys</td></tr><tr><td><a href="docs/the-drum-spectrogram.html">The drum spectrogram</a></td><td>the lab report on the technique: how a line is computed, the thermal pen, and the measurements</td></tr><tr><td><a href="docs/technical-description.html#the-lab-reports">All the lab reports</a></td><td>the reasoning behind each part of the program</td></tr><tr><td><a href="https://github.com/vonglurt/radbeeper/blob/main/SECURITY.md">Security</a></td><td>what is in scope, and how the supply chain is kept small</td></tr></tbody></table>
+<table><tbody><tr><td><a href="docs/reading-the-window.html">Reading the window</a></td><td>every number on the window, what the five averages and their precision mean, and the striped chart read as a landscape</td></tr><tr><td><a href="docs/reading-the-drum-spectrogram.html">Reading the drum spectrogram</a></td><td>the striped chart, and how to tell chance from something real</td></tr><tr><td><a href="docs/troubleshooting.html">Troubleshooting</a></td><td>what to do when the counter is not found</td></tr><tr><td><a href="docs/running-it.html">Running it</a></td><td>starting at boot, and publishing</td></tr><tr><td><a href="docs/technical-description.html">Technical description</a></td><td>how it works: the hardware, the arithmetic, every part of the screen, the log and the keys</td></tr><tr><td><a href="docs/the-drum-spectrogram.html">The drum spectrogram</a></td><td>the lab report on the technique: how a line is computed, the thermal pen, and the measurements</td></tr><tr><td><a href="docs/technical-description.html#the-lab-reports">All the lab reports</a></td><td>the reasoning behind each part of the program</td></tr><tr><td><a href="https://github.com/vonglurt/radbeeper/blob/main/SECURITY.md">Security</a></td><td>what is in scope, and how the supply chain is kept small</td></tr></tbody></table>
 </main></div>
 <footer><div class="wrap"><ul class="nav"><li><strong>Overview</strong></li><li><a href="monitor.html">Live report</a></li><li><a href="docs/reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="docs/technical-description.html">How it works</a></li><li><a href="docs/index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
 <p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
