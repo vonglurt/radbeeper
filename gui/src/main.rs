@@ -1024,6 +1024,8 @@ enum Message {
     Resized(iced::Size),
     /// Where the pointer is on the chart, or that it has left it.
     Hover(Option<iced::Point>),
+    /// `q` was pressed. See `App::subscription`.
+    Quit,
 }
 
 // ------------------------------------------------------------------- state ---
@@ -1066,7 +1068,7 @@ impl App {
         }
     }
 
-    fn update(&mut self, message: Message) {
+    fn update(&mut self, message: Message) -> iced::Task<Message> {
         match message {
             Message::Update(s) => self.shot = Some(*s),
             Message::Moved(m) => self.meters = m,
@@ -1077,7 +1079,12 @@ impl App {
             }
             Message::Resized(size) => self.size = size,
             Message::Hover(at) => self.hover = at,
+            // THE SAME AS CLOSING THE WINDOW, and as cheap: see the top of
+            // the file. Nothing is being written that an exit could cut
+            // short, so there is nothing to flush first.
+            Message::Quit => return iced::exit(),
         }
+        iced::Task::none()
     }
 
     /// A NAMED FUNCTION, NOT A CLOSURE. `|_| Theme::CatppuccinMocha` looks
@@ -1094,9 +1101,23 @@ impl App {
         // tick would have had -- and `iced::time::every` needs a tokio or
         // smol backend this crate deliberately does not carry. The other
         // subscription is not data; it is how much room there is to put it in.
+        // The third is the keyboard, for one key: a plain `q` closes the
+        // window, as it does in every pager and viewer this sits beside.
+        // Plain means without Ctrl, Alt or Super, so that a compositor
+        // binding with `q` in it -- Hyprland's own close-window chord is
+        // Super+q -- is left to the compositor and not answered twice.
         Subscription::batch([
             Subscription::run(feed),
             iced::window::resize_events().map(|(_, size)| Message::Resized(size)),
+            iced::keyboard::listen().filter_map(|event| match event {
+                iced::keyboard::Event::KeyPressed { key, modifiers, .. }
+                    if key.as_ref() == iced::keyboard::Key::Character("q")
+                        && !(modifiers.control() || modifiers.alt() || modifiers.logo()) =>
+                {
+                    Some(Message::Quit)
+                }
+                _ => None,
+            }),
         ])
     }
 
