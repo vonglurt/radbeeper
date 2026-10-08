@@ -3,7 +3,7 @@
 **See what your Geiger counter is counting, keep a record of it, and put it
 on a web page. For the GQ GMC-320 Plus, on Linux.**
 
-MIT · `0.5.0` · `cargo install radbeeper`
+MIT · `0.6.0` · `cargo install radbeeper`
 
 **[vonglurt.github.io/radbeeper](https://vonglurt.github.io/radbeeper/)** — this
 page, the guides, and [a live counter's
