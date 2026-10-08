@@ -993,12 +993,18 @@ class TestTheMonitorLogsWhileItIsOpen(unittest.TestCase):
         logs, screen = self.run_monitor()
         names = sorted(os.listdir(logs))
         tsv = [n for n in names if n.startswith("cpm-")]
-        self.assertEqual(len(tsv), 1, names)
+        # ONE FILE A MONTH, AND THE TWO KINDS OF ROW ARE A MONTH APART. The
+        # fixture's flash is stamped 2026-09-04 and the live rows are
+        # stamped today, so from October on they land in two files; this
+        # asserted exactly one until the calendar turned (2026-10-07).
+        self.assertTrue(tsv, names)
         # Exported after the backfill and again on quit, beside the log.
         self.assertIn("index.html", names)
-        with open(os.path.join(logs, tsv[0])) as f:
-            body = [l.split("\t") for l in f.read().splitlines()
-                    if l and not l.startswith("#")]
+        body = []
+        for name in tsv:
+            with open(os.path.join(logs, name)) as f:
+                body += [l.split("\t") for l in f.read().splitlines()
+                         if l and not l.startswith("#")]
         self.assertTrue([r for r in body if r[-2] == "flash"],
                         "the backfill at connect wrote nothing")
         live = [r for r in body if r[-2] == "live"]
