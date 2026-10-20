@@ -232,6 +232,7 @@ it.
 
 | | |
 |---|---|
+| [Feature guide](docs/FEATURE_GUIDE.md) | a tour in pictures, start to finish: what each part is, why it exists, and how it fits the rest |
 | [Reading the window](docs/reading-the-window.md) | every number on the window, what the five averages and their precision mean, and the striped chart read as a landscape |
 | [Reading the drum spectrogram](docs/reading-the-drum-spectrogram.md) | the striped chart, and how to tell chance from something real |
 | [Troubleshooting](docs/troubleshooting.md) | what to do when the counter is not found |
