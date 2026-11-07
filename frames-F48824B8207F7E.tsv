@@ -1,4 +1,4 @@
-# radbeeper 0.5.0 -- counter F48824B8207F7E
+# radbeeper 0.6.0 -- counter F48824B8207F7E
 # emissions 9
 # counts is clamped at fifteen a second, as the emission log records it; the .bin frames hold it unclamped
 #seq	started	samples	counts	cpm	usvh	bits	flat	band	log_cpm	key	link
