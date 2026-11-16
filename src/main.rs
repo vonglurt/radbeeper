@@ -3087,7 +3087,10 @@ fn watch(feed: &mut Feed, spans: &[f64], cpm_per_usvh: f64,
                 rows: &fall,
                 axis: &axis,
                 luck,
-                slide: trail.age() as f32 / drum::FALL_HOP as f32,
+                // The paper does not creep between rows: a line stays
+                // where it was written and the stack steps once when the
+                // next arrives, as in the window.
+                slide: 0.0,
             });
             paper.render(&mut out, y, 0, depth, Some(ground));
             y += rooms.live;

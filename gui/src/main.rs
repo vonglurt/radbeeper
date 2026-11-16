@@ -3924,7 +3924,15 @@ impl Chart {
         );
         let Some(x_of) = self.axis(width) else { return };
         let luck = self.fall_luck;
-        let slide = (self.fall_age as f32 / FALL_HOP as f32).min(1.0);
+        // THE PAPER DOES NOT CREEP. It used to slide up a little every second
+        // on its way to the next row, so the whole stack was always in
+        // motion; sped up in a recording that read as flames, and at rest it
+        // smeared the one thing a drum recorder does cleanly. A recorder
+        // writes a line, and the line stays where it was written until the
+        // next one is laid down beside it. So the rows stand still for the
+        // eight seconds a row takes, and step once when the new one arrives.
+        let _ = self.fall_age;
+        let slide = 0.0f32;
         // The foot of the ground: the line the spectrum stands on, which
         // is the newest row's.
         let base = top + height;
