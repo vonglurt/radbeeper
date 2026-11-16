@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The thermometer — RadBeeper</title>
+<meta name="description" content="A Geiger counter that also knows how warm it is: reading the GMC-320&#x27;s temperature in the middle of its count stream, without losing a count.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/the-thermometer.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="The thermometer — RadBeeper">
+<meta property="og:description" content="A Geiger counter that also knows how warm it is: reading the GMC-320&#x27;s temperature in the middle of its count stream, without losing a count.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/the-thermometer.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.drum img{display:block;width:100%;height:auto;margin:1.75rem 0 0;
+border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.caption{font-size:.9rem;color:var(--dim);margin:.6rem 0 0;max-width:44rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
+padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
+.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-thermometer">The thermometer</h1>
+<p><strong>A Geiger counter that also knows how warm it is: reading the GMC-320's temperature in the middle of its count stream, without losing a count.</strong></p>
+<p><em>A lab report in the IEEE style, on asking a GQ GMC-320 for its temperature while it is streaming counts, on the one reading it gives that is not a temperature, on where the readings are kept, and on the command another program uses to ask for them. Written against the radbeeper 0.6.0 working tree, 16 November 2026.</em></p>
+<hr>
+<h2 id="abstract">Abstract</h2>
+<p>The GQ GMC-320 has a thermometer, and its serial protocol has a command for it. RadBeeper did not use it: the service holds the counter in heartbeat mode, where the counter sends two bytes every second with no framing, and a question written into that stream looked like a way to corrupt it. This report shows that it is not. A GMC-320 Re 4.26 answers <code>&lt;GETTEMP&gt;&gt;</code> mid-stream in about 55 ms and goes on sending its seconds a second apart; the service now asks once a log interval, in the gap after a sample, and writes the answer to a file of its own beside the count log. One answer is not a temperature: 85.0 °C, which both counters on the bench gave the first time they were asked, and which is discarded. A fake counter that records every count it sends is used to show that the service publishes exactly those counts, in order, while being asked for its temperature every second in the least convenient order the wire can deliver. A new command, <code>radbeeper now</code>, gives another program the counts per minute and the temperature from the running service without opening the port. What the thermometer is, and how far the inside of the case is from the air of the room, were not measured.</p>
+<p><strong>Index terms</strong> -- serial protocols, unframed byte streams, temperature measurement, radiation monitoring, inter-process communication.</p>
+<hr>
+<h2 id="1-the-question">1. The question</h2>
+<p>The counter's display shows a temperature. GQ's protocol document, GQ-RFC1201, gives the command:</p>
+<table><tbody><tr><td>Command</td><td><code>&lt;GETTEMP&gt;&gt;</code></td></tr><tr><td>Reply</td><td>four bytes: whole degrees Celsius, tenths, a sign (non-zero is below zero), and <code>0xAA</code></td></tr><tr><td>Firmware</td><td>"GMC-320 Re.3.01 or later"</td></tr></tbody></table>
+<p>The two counters on the bench are a <code>GMC-320Re 4.26</code> and a <code>GMC-320+V4Re 4.83</code>. Both are named by that line; no other model is.</p>
+<h2 id="2-the-reading-that-is-not-a-temperature">2. The reading that is not a temperature</h2>
+<p>On 15 November both counters were asked once each, with the stream stopped. Both answered <code>55 00 00 AA</code>, which decodes as 85.0 °C. Neither was at 85 °C.</p>
+<p>On 16 November the Re 4.26 was moved to another computer and asked in a loop:</p>
+<table><thead><tr><th>When</th><th>Answer</th></tr></thead><tbody><tr><td>Five readings, two seconds apart</td><td>26.2 °C each</td></tr><tr><td>First reading after being unplugged and plugged in again</td><td>85.0 °C</td></tr><tr><td>The next ten, thirty seconds apart</td><td>26.1 °C each</td></tr></tbody></table>
+<p>Its own screen read 26.1 °C beside the first set. So the command works on this firmware, and 85.0 is what the counter says before its thermometer has a reading to give. 85 °C is the value a common kind of one-wire thermometer holds until its first conversion; whether that is the part inside was not established, and the handling does not depend on it. The exact answer 85.0 is treated as "not yet": it is never logged, and the question is put again two seconds later.</p>
+<p>The +V4 Re 4.83 has been asked once, on 15 November, and answered 85.0. It has not been asked a second time.</p>
+<h2 id="3-asking-in-the-middle-of-the-stream">3. Asking in the middle of the stream</h2>
+<p>In heartbeat mode the counter sends a 16-bit count every second. There is no framing: the reader stays in step only by taking two bytes at a time. A reply to any command arrives in the same stream.</p>
+<p>The test, on the Re 4.26: heartbeat on, and <code>&lt;GETTEMP&gt;&gt;</code> written 0.2 s after every fifth sample, for forty seconds.</p>
+<table><tbody><tr><td>Questions asked</td><td>9</td></tr><tr><td>Answered whole</td><td>9, each <code>1A 01 00 AA</code> (26.1 °C)</td></tr><tr><td>Time from question to answer</td><td>51 to 55 ms</td></tr><tr><td>Seconds of counts in the forty</td><td>every one, a second apart</td></tr></tbody></table>
+<p>The counter answers mid-stream and does not stop counting. Nothing needs to be switched off to ask.</p>
+<h2 id="4-what-the-service-does">4. What the service does</h2>
+<p>The thread that reads a counter's samples is the only reader its port has. It now also asks the temperature:</p>
+<ol><li>A sample is read, stamped and sent on exactly as before.</li><li>If a temperature is due, <code>&lt;GETTEMP&gt;&gt;</code> is written. The input is <strong>not</strong> flushed first, as it is for every other question the program asks: a flush would throw away a second that was in flight.</li><li>Four bytes are waited for, up to 0.3 s. The next sample is a second away and the answer a twentieth of one.</li><li>If the four bytes are not an answer, two more are waited for. If the last four of the six are an answer, the first two were a second of counts that arrived ahead of it; that second is kept and sent on.</li><li>Two bytes and nothing more is a second of counts and no answer. Anything else is discarded and the port left to fall quiet before reading resumes.</li></ol>
+<p>A counter that gives nothing, or nothing sensible, to three questions in a row is not asked again until it is next plugged in. A counter whose firmware the document does not name is never asked. The service asks once a log interval (thirty seconds) by default; <code>--temp-every SECONDS</code> changes that and <code>--no-temp</code> asks nothing.</p>
+<p>A temperature goes nowhere a count goes: not into an average, the spectrum, the entropy pool or a row of the count log.</p>
+<h2 id="5-where-the-readings-are-kept">5. Where the readings are kept</h2>
+<p><code>temp-&lt;serial&gt;-YYYY-MM.tsv</code>, beside the counter's <code>cpm-</code> file:</p>
+<pre><code>#time	temp_c
+2026-11-16T10:06:33	26.1
+2026-11-16T10:06:45	26.0</code></pre>
+<p>The count log's row is not changed. Its characters are compared byte for byte with the Python program's by the differential tests, and every reader of it matches columns by a header that a new column would change in the middle of a month.</p>
+<p>The service also sends each reading to every attached program as a line of its own on the stream (<code>t</code>, the counter's index, the time, the degrees), and gives the newest reading of each counter to a program that attaches later. A monitor built before this ignores the line.</p>
+<h2 id="6-asking-the-service-radbeeper-now">6. Asking the service: <code>radbeeper now</code></h2>
+<p>Another program must not open the port. <code>radbeeper now</code> attaches to the running service, reads what it replays, and prints one line for each counter:</p>
+<pre><code>#serial	cpm	cpm_300	usvh	age	temp_c	temp_age	live	port	version
+F48824B8207F7E	60.0	60.0	0.3960	-0.0	26.0	6.0	yes	/dev/cu.usbserial-230	GMC-320Re 4.26</code></pre>
+<table><thead><tr><th>Column</th><th>Meaning</th></tr></thead><tbody><tr><td><code>cpm</code>, <code>cpm_300</code></td><td>counts a minute over the newest minute and the newest five, from the seconds themselves</td></tr><tr><td><code>usvh</code></td><td>the five-minute rate as a dose rate</td></tr><tr><td><code>age</code></td><td>seconds since that counter's newest second</td></tr><tr><td><code>temp_c</code>, <code>temp_age</code></td><td>the newest temperature and how old it is; empty if there is none</td></tr><tr><td><code>live</code></td><td>whether the counter is still answering</td></tr></tbody></table>
+<p><code>radbeeper now --json</code> gives the same as one JSON object. The command exits 1 when no service is serving the log directory.</p>
+<h2 id="7-the-proof-that-no-count-is-lost">7. The proof that no count is lost</h2>
+<p>The fake counter used by the test suite (<code>tests/fake_gmc.py</code>) now has a thermometer and writes down every count it sends. <code>tests/test_temp.py</code> runs the real service against it and compares what the service published with what the fake sent, second for second:</p>
+<table><thead><tr><th>Case</th><th>Result</th></tr></thead><tbody><tr><td>Temperature asked every second</td><td>counts identical; every answer 26.1</td></tr><tr><td>A second of counts sent ahead of every answer</td><td>counts identical; every answer 26.1</td></tr><tr><td>85.0 for the first two answers</td><td>counts identical; 85.0 never logged</td></tr><tr><td>Below freezing</td><td>the sign is kept</td></tr><tr><td>A firmware that never answers</td><td>asked three times, then left alone; counts identical</td></tr><tr><td>Re 2.10, and a GMC-300</td><td>never asked</td></tr><tr><td><code>--no-temp</code></td><td>never asked; no temperature file</td></tr></tbody></table>
+<p>The whole suite, 272 Python tests and the Rust tests, passes with the change.</p>
+<h2 id="8-what-was-not-measured">8. What was not measured</h2>
+<ul><li><strong>What the thermometer reads.</strong> It is inside the counter's case. It agreed with the counter's own screen, which is the same sensor; it has not been compared with a thermometer in the room's air.</li><li><strong>The +V4 Re 4.83.</strong> Asked once, answered 85.0. That it then gives real readings is expected from the other unit and has not been seen.</li><li><strong>Whether asking moves a count in time.</strong> The seconds kept arriving a second apart and none was lost. Whether a count that would have been reported in one second is reported in the next because the counter was busy answering was not tested, and would matter only to the random numbers drawn from the timing.</li><li><strong>Why 85.0.</strong> See section 2.</li></ul>
+<h2 id="9-running-it-on-a-mac">9. Running it on a Mac</h2>
+<p>The program was Linux only. Two things stood in the way and both are now conditional: the check of whether the system clock is steered (Linux's <code>adjtimex</code>), and the name of the serial port, which on a Mac is <code>/dev/cu.usbserial-*</code>. The service, <code>probe</code>, <code>now</code> and the window build and run there. The service installed by Copal, the hotplug rule and the picture tools remain Linux only.</p>
+<hr>
+<h2 id="see-also">See also</h2>
+<ul><li><a href="the-stream.html">The stream</a> — the socket <code>now</code> reads, and why a second program never opens the port.</li><li><a href="the-log.html">The log</a> — the count log this leaves untouched.</li><li><a href="reference.html">Reference</a> — every command and option.</li></ul>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>
