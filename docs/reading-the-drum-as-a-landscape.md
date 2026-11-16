@@ -6,7 +6,7 @@
 
 **The striped panel is built like a relief map, and reads like one.**
 
-![the paper filling from empty, twenty-two minutes in fifty seconds](screenshots/gui-drum-dark.gif)
+![two counters for a minute, four times as fast as it happened](screenshots/gui-drum-dark.gif)
 
 The panel answers one question: is anything reaching the counter on a
 schedule? Decay has no rhythm, so a healthy counter shows no pattern. A
@@ -97,14 +97,18 @@ The axis grows as the longer windows fill: it reaches 8 minutes first,
 
 ## What the clip shows
 
-The clip at the top is the paper filling from empty after a service
-restart, one frame per row, played at four rows a second. Nothing is drawn
-for the first eight and a half minutes: a row needs its full 512 seconds of
-counts before it can be made, and the window shows the window filling
-instead. Then a row arrives every eight seconds, and the paper is full end
-to end after ninety-six of them, twenty-one minutes in. The counter in it
-is in an ordinary room, and the paper is green from edge to edge with warm
-patches that come and go: the good answer.
+The clip at the top is a minute of two counters in an ordinary room on 16
+November 2026, played four times as fast as it happened. The paper under the
+day lines is the drum this page is about. A row arrives every eight seconds:
+it is written at the foot, and the rows above it step up once to make room
+and then stand still until the next. Until 16 November the paper also crept
+upward between rows, and an earlier clip here, twenty-two minutes played in
+fifty seconds, made that look like flames; a recorder's line stays where it
+was written.
+
+Nothing is drawn for the first eight and a half minutes after the service
+starts: a row needs its full 512 seconds of counts before it can be made.
+The paper is full end to end after ninety-six rows, twenty-one minutes in.
 
 **[The drum spectrogram](the-drum-spectrogram.md)** is the lab report: how a
 row is computed, the measurements behind the luck line, and why it is drawn

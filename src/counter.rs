@@ -73,6 +73,11 @@ pub fn candidate_ports() -> Vec<String> {
 /// into a VM running it can never appear, and dmesg is silent because nothing
 /// ever claims the device.
 fn usb_serial_driver_present() -> bool {
+    // Only Linux keeps its drivers where this looks. Anywhere else the
+    // question has no answer here, and "no driver" would be a guess.
+    if !cfg!(target_os = "linux") {
+        return true;
+    }
     if let Ok(mut d) = fs::read_dir("/sys/bus/usb-serial/drivers") {
         if d.next().is_some() {
             return true;
@@ -565,6 +570,16 @@ pub fn find_all(devices: &[String], baud: Option<u32>) -> (Vec<Counter>, Option<
     }
     if !found.is_empty() {
         return (found, None);
+    }
+    // No port at all is `find`'s to describe: it knows a kernel with no
+    // driver from a desk with nothing plugged in. This used to fall through
+    // to the diagnosis below with an empty list and say "a serial device is
+    // present but is not a GMC counter. Tried ." of a Mac with nothing on it.
+    if ports.is_empty() {
+        return match find(None, baud) {
+            Ok(c) => (vec![c], None),
+            Err(e) => (Vec::new(), Some(e)),
+        };
     }
     // Nothing: say why, in the same words `find` would have used, so one
     // failure does not have two vocabularies.

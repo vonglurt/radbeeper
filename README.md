@@ -130,10 +130,10 @@ radbeeper-gui
 | **The key** | The newest random number, and which counter it came from. |
 | **The table** | The trend line in numbers: for each panel of the counts, where the trend is now, its average over that panel, and its high and low, in CPM. |
 
-The pictures of the window and the monitor on this page were taken on 16
-November 2026 over made-up logs with rhythms put in on purpose, so there is
-something to see; a real room is mostly green. The moving picture at the top
-is older and shows the window before the day and month papers.
+The moving picture at the top is a real room: two counters on 16 November
+2026, half a minute as it happened. The still pictures of the window and the
+monitor below it were taken the same day over made-up logs with rhythms put
+in on purpose, so there is something to see; a real room is mostly green.
 
 The window follows your desktop's light or dark theme, and fits whatever
 space it is given: in a small window the table goes first and the charts

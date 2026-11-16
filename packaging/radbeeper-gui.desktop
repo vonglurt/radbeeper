@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=RadBeeper
+GenericName=Geiger counter monitor
+Comment=What the Geiger counter is counting: dials, counts, drum spectrograms and the temperature
+Exec=radbeeper-gui
+Icon=radbeeper
+Terminal=false
+Categories=Science;Utility;
+Keywords=geiger;radiation;counter;gmc;
+StartupWMClass=radbeeper-gui

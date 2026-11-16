@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+<!-- The dial, as the window draws it: a dark face, the bands round the rim, a needle in the green. -->
+<rect x="8" y="8" width="240" height="240" rx="52" fill="#1e1e2e"/>
+<circle cx="128" cy="136" r="92" fill="#0a0d14" stroke="#4b5066" stroke-width="5"/>
+<g fill="none" stroke-width="13" stroke-linecap="butt">
+<path d="M 68.7 195.3 A 84 84 0 0 1 61.6 92.2" stroke="#5b8fd0"/>
+<path d="M 66.4 85.8 A 84 84 0 0 1 150.5 55.1" stroke="#4fbf73"/>
+<path d="M 158.1 57.6 A 84 84 0 0 1 199.1 91.3" stroke="#d8a23a"/>
+<path d="M 202.9 98.3 A 84 84 0 0 1 187.3 195.3" stroke="#d2413f"/>
+</g>
+<line x1="128" y1="136" x2="92" y2="74" stroke="#66d98c" stroke-width="9" stroke-linecap="round"/>
+<circle cx="128" cy="136" r="11" fill="#9ea3b8"/>
+<circle cx="128" cy="136" r="4.5" fill="#0a0d14"/>
+</svg>

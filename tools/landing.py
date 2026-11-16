@@ -390,11 +390,12 @@ reaching the counter on a schedule, which radiation never does.</p>
 <picture class="drum">
 <source srcset="docs/screenshots/gui-drum-dark.gif" media="(prefers-color-scheme: dark)">
 <img src="docs/screenshots/gui-drum-antiquity.gif"
-     alt="radbeeper-gui filling from empty: the dials, the counts strip and the drum spectrogram, a frame per drum row over twenty-two minutes">
+     alt="radbeeper-gui with two counters: the dials, two thermometers, a line for each of the last days, the drum spectrogram and the counts, a minute played four times as fast">
 </picture>
-<p class="caption">Twenty-two minutes of two counters, a frame per row of the
-drum, from the moment the window opened. Long captures are the point: a
-schedule shows up as a stripe, and a stripe takes time.</p>
+<p class="caption">A minute of two counters, four times as fast as it
+happened: the dials, a thermometer for each, a line for each of the last
+days, and under them the drum, which lays down a new line every eight seconds
+and leaves the others where they were written.</p>
 </div></header>
 
 <div class="wrap"><section class="facts">

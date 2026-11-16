@@ -65,8 +65,14 @@ GIFWIDTH ?= 1100
 # 512 + 96 * 8 = 1280 s is the paper filling end to end; DRUMSECS is that
 # with a little over. One clip per theme, full screen, and the last frame
 # of each is kept as that theme's full-screen still.
-DRUMSECS ?= 1320
-DRUMEVERY ?= 8
+# A MINUTE, NOT TWENTY-TWO, SINCE 2026-11-16. The paper filling from empty
+# was a frame a row played at four rows a second, and at that pace every
+# frame is a step of the whole stack: on the front page it read as flames.
+# A minute at a frame a second, played four times as fast, is seven steps
+# with the paper at rest between them, which is what a drum looks like.
+# DRUMSECS=1320 DRUMEVERY=8 still records the filling, for whoever wants it.
+DRUMSECS ?= 64
+DRUMEVERY ?= 1
 DRUMPLAY ?= 4
 DRUMTHEMES ?= dark antiquity
 # Where the pointer is parked for a recording: on the bar, just right of its
@@ -113,6 +119,10 @@ clippy:
 install:
 	$(CARGO) install --path . --locked --force
 	@printf '  installed the native binary; `which radbeeper` says where\n'
+	@# A menu entry too, where there is a menu: the monitor in a terminal,
+	@# unless the window's own entry is already there. See `menu`.
+	@if [ "$$(uname -s)" != Darwin ] && [ ! -f "$(PREFIX)/share/applications/radbeeper-gui.desktop" ]; then \
+	  $(MAKE) --no-print-directory menu MENU=radbeeper-watch; fi
 
 ## uninstall: remove it again
 uninstall:
@@ -329,11 +339,62 @@ gui-build:
 gui: gui-build
 	./$(GUIBIN)
 
-## gui-install: put the window on PATH beside radbeeper
+## gui-install: put the window on PATH beside radbeeper, and where a desktop looks for it
+# A BINARY ON PATH IS NOT AN APPLICATION. It ran from a terminal and from
+# nowhere else: no entry in Copal's launcher, nothing to double click on a
+# Mac. So this also puts the window where each desktop looks. On Linux that is
+# a desktop entry and an icon under $(PREFIX)/share, which every launcher that
+# follows the XDG rules reads. On a Mac it is RadBeeper.app in $(APPDIR): the
+# window, the program and a few lines that start the service if nothing is
+# serving -- see packaging/RadBeeper.sh.
 gui-install: gui-build
 	@mkdir -p "$(PREFIX)/bin"
 	install -m 0755 $(GUIBIN) "$(PREFIX)/bin/radbeeper-gui"
 	@echo "installed $(PREFIX)/bin/radbeeper-gui"
+	@if [ "$$(uname -s)" = Darwin ]; then $(MAKE) --no-print-directory app; \
+	  else $(MAKE) --no-print-directory menu MENU=radbeeper-gui; fi
+
+## menu: the launcher's entry and the icon, for Copal and any XDG desktop
+# MENU=radbeeper-gui is the window's entry; MENU=radbeeper-watch is the
+# monitor in a terminal, which is what `make install` leaves when the window
+# has not been installed. Attempted, never required: a machine with no
+# desktop has no launcher to tell, and that is not a failed install.
+MENU ?= radbeeper-watch
+menu:
+	@mkdir -p "$(PREFIX)/share/applications" "$(PREFIX)/share/icons/hicolor/scalable/apps" \
+	  && install -m 0644 packaging/$(MENU).desktop "$(PREFIX)/share/applications/$(MENU).desktop" \
+	  && install -m 0644 packaging/radbeeper.svg "$(PREFIX)/share/icons/hicolor/scalable/apps/radbeeper.svg" \
+	  && echo "installed the menu entry $(PREFIX)/share/applications/$(MENU).desktop" \
+	  || echo "  no menu entry written -- $(PREFIX)/share is not writable"
+	@command -v update-desktop-database >/dev/null 2>&1 \
+	  && update-desktop-database -q "$(PREFIX)/share/applications" 2>/dev/null || true
+
+## app: RadBeeper.app, for a Mac: the window, the program, and a double click
+# BUILT FROM WHAT IS ALREADY BUILT, with the tools every Mac has: the icon is
+# the same drawing as the Linux one, turned into an .icns by qlmanage, sips
+# and iconutil. If any of the three is missing the app is made without an
+# icon and says so. Files are written over the ones already there and
+# nothing is taken away, so an app that is open is replaced at its next start.
+APPDIR ?= /Applications
+APP = $(APPDIR)/RadBeeper.app
+ICONTMP = target/icon
+app: build gui-build
+	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources" $(ICONTMP)/radbeeper.iconset
+	@install -m 0755 packaging/RadBeeper.sh "$(APP)/Contents/MacOS/RadBeeper"
+	@install -m 0755 $(GUIBIN) "$(APP)/Contents/MacOS/radbeeper-gui"
+	@# NOT `radbeeper`: a Mac's disk does not tell RadBeeper from radbeeper,
+	@# and the program written under that name replaced the launcher beside it.
+	@install -m 0755 $(BIN) "$(APP)/Contents/MacOS/radbeeper-cli"
+	@sed "s/@VERSION@/$$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)/" \
+	  packaging/Info.plist > "$(APP)/Contents/Info.plist"
+	@qlmanage -t -s 1024 -o $(ICONTMP) packaging/radbeeper.svg >/dev/null 2>&1 \
+	  && for s in 16 32 128 256 512; do \
+	       sips -z $$s $$s $(ICONTMP)/radbeeper.svg.png --out $(ICONTMP)/radbeeper.iconset/icon_$${s}x$${s}.png >/dev/null; \
+	       sips -z $$((s*2)) $$((s*2)) $(ICONTMP)/radbeeper.svg.png --out $(ICONTMP)/radbeeper.iconset/icon_$${s}x$${s}@2x.png >/dev/null; \
+	     done \
+	  && iconutil -c icns $(ICONTMP)/radbeeper.iconset -o "$(APP)/Contents/Resources/radbeeper.icns" \
+	  || echo "  no icon -- qlmanage, sips or iconutil would not make one"
+	@echo "installed $(APP) -- double click it, or: open '$(APP)'"
 
 ## gui-shots: re-take both themes and the squeezed layout
 # Each theme is a fresh window: the panel reads the desktop's theme once, at

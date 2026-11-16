@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=RadBeeper monitor
+GenericName=Geiger counter monitor, in a terminal
+Comment=What the Geiger counter is counting, in a terminal: q quits
+Exec=radbeeper watch
+Icon=radbeeper
+Terminal=true
+Categories=Science;Utility;
+Keywords=geiger;radiation;counter;gmc;
