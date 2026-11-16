@@ -110,6 +110,38 @@ footer a{color:var(--dim)}
 <p><strong>It only sees strong rhythms.</strong> A faint one is invisible here. The bottom line is what finds those, by averaging for a long time.</p>
 <p><strong>It never goes off the scale.</strong> Whatever is strongest on the chart sets the top, and everything else is drawn against it. The colours do not rescale, so yellow always means the same thing.</p>
 <hr>
+<h2 id="days-and-months-the-long-papers">Days and months: the long papers</h2>
+<p><em>Added 16 November 2026.</em></p>
+<p><img src="screenshots/gui-long-drums.png" alt="the day and month papers over the live drum" loading="lazy"></p>
+<p>The drum at the foot holds twelve minutes. A rhythm that comes round once an hour is not in twelve minutes of anything. So there are two more papers above it, drawn with the same pen on the same ground:</p>
+<table><thead><tr><th>Paper</th><th>A line is</th><th>Left to right</th></tr></thead><tbody><tr><td><strong>Days</strong></td><td>one whole day, midnight to midnight; today's is at the foot</td><td>once every 8 hours, to once every 2 minutes</td></tr><tr><td><strong>Months</strong></td><td>one calendar month</td><td>once every 10 days, to once every 20 minutes</td></tr></tbody></table>
+<p>They are read the same way as the drum below them. <strong>A stripe that runs up through line after line, in the same place, is something arriving on that schedule day after day.</strong> In the picture the stripe at <code>20m</code> is on every day, and the month line above stands up at <code>1d</code>: something that rises and falls once a day.</p>
+<p><strong>They are full the moment the window opens.</strong> The lines are worked out from the log the counter has been keeping all along, a row every thirty seconds, so every day and month there is a log for has its line, including the ones from before this was added.</p>
+<p><strong>Today's line is drawn before today is over.</strong> It starts short, reaching only the quick rhythms, and grows to the left as the day goes on. A line is not asked about anything that has not had time to come round three times.</p>
+<p><strong>A break is closed up.</strong> A day when the counter was away has no line, and the next day that has one sits directly above. The small dates down the left edge say which day a line is.</p>
+<p><strong>The live drum gives way to them.</strong> As the papers gain lines they take room from the top of the live drum's history, a line at a time. The counts under the drum keep all their room.</p>
+<h3 id="what-the-same-days-look-like-as-they-arrive">What the same days look like as they arrive</h3>
+<p><img src="screenshots/gui-build-1.png" alt="a few hours" loading="lazy"></p>
+<p><em>A few hours of record: one short line for today.</em></p>
+<p><img src="screenshots/gui-build-2.png" alt="three days" loading="lazy"></p>
+<p><em>Three days.</em></p>
+<p><img src="screenshots/gui-build-3.png" alt="twenty days" loading="lazy"></p>
+<p><em>Twenty days. An hourly rhythm that lasted one week shows on those seven lines and no others.</em></p>
+<p>These three are made-up logs, written by <code>cargo run --release --example sample_logs</code>, with a twenty-minute rhythm, a daily rise and fall and one week of an hourly rhythm put in on purpose. Decay alone leaves every line green.</p>
+<h3 id="tucking-a-paper-away">Tucking a paper away</h3>
+<p><img src="screenshots/gui-drum-tiles.png" alt="the papers as tiles beside the dials" loading="lazy"></p>
+<p>Click a paper, or press <code>d</code> for days and <code>m</code> for months, and it folds into a small tile under the big number, beside the dials. Click the tile to open it again. The live drum then has the room back.</p>
+<hr>
+<h2 id="the-temperature-drum">The temperature drum</h2>
+<p><img src="screenshots/gui-temperature-drum.png" alt="the temperature drum" loading="lazy"></p>
+<p>A GMC-320 has a thermometer, and the service now reads it. The small thermometer at the top right runs from 50 to 100 °F and gives the reading in °F and °C. Click it, or press <code>t</code>, and the last ten days are laid down the way a drum recorder would: <strong>a line a day, today's at the foot, yesterday's one track above.</strong></p>
+<p>Every line is drawn to the same scale about the same temperature, so today can be read against yesterday directly above it. A track is worth an ordinary day's rise and fall, so a day like most days stays inside its own track. A day that went out of the ordinary crosses into its neighbour's, and its pen turns hot where it does. A room held steady to a twentieth of a degree is a flat line.</p>
+<p>The temperature is the inside of the counter's case, not the air of the room. <a href="the-thermometer.html">The thermometer</a> is the report on how it is read.</p>
+<hr>
+<h2 id="in-a-terminal">In a terminal</h2>
+<p><img src="screenshots/watch-drum.png" alt="the terminal monitor with the three papers" loading="lazy"></p>
+<p><code>radbeeper watch</code> draws the same three papers in a terminal, in Braille dots, with the same colours and the same period marks. <code>d</code> and <code>m</code> turn the day and month papers through shown, folded to one row, and off; <code>t</code> swaps the charts for the temperature drum.</p>
+<hr>
 <h2 id="where-it-is">Where it is</h2>
 <p>Run <code>radbeeper-gui</code> with a counter attached. The chart is drawn when the window is at least 640 pixels tall; in a smaller window the counts and the bars keep the space.</p>
 <hr>
