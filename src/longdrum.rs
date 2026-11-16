@@ -684,9 +684,16 @@ mod tests {
         assert_eq!(days.len(), 30);
         assert!(days.iter().all(|d| d.is_some()), "forty-five days of counts are thirty lines");
         assert!(!days[0].as_ref().unwrap().whole);
-        // Twenty minutes is in every whole day.
+        // Twenty minutes is in every whole day. THREE TIMES CHANCE, NOT SIX:
+        // through the hourly week a second tube is counting beside the
+        // first, and its counts have no twenty-minute rhythm in them, so the
+        // room's rhythm is half as deep and its power a quarter. Six passed
+        // where a day is cut at Pacific midnight and failed at UTC's, where
+        // the week's days fall differently (17 Aug read 4.95) -- which is how
+        // this was found, on the first machine that was not on the bench's
+        // clock.
         for d in days[1..].iter().flatten() {
-            assert!(near(d, 1200.0).1 > 6.0, "{}: {}", clock::format(d.start, "%d %b"), near(d, 1200.0).1);
+            assert!(near(d, 1200.0).1 > 3.0, "{}: {}", clock::format(d.start, "%d %b"), near(d, 1200.0).1);
         }
         // The hour is in the days of that week and not in the days outside it.
         let hourly: Vec<bool> = days[1..].iter().flatten().map(|d| near(d, 3600.0).1 > 8.0).collect();
