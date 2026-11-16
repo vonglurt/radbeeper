@@ -1642,6 +1642,10 @@ const SPECTRUM_LEVEL: usize = drum::FALL_LEVEL;
 const TEMP_FIRST: f64 = 2.0;
 /// How soon it is asked again after answering that it has not read yet.
 const TEMP_AGAIN: f64 = 2.0;
+/// How long an answer is waited for, in milliseconds. The question goes out
+/// straight after a second of counts and the next is a second away; the
+/// slowest answer seen is a little over 300 ms (+V4 Re 4.83).
+const TEMP_WAIT_MS: u64 = 700;
 /// How many questions in a row may go unanswered before a tube is left alone.
 const TEMP_MISSES: u32 = 3;
 
@@ -1746,25 +1750,71 @@ impl Bank {
             let mut ask_at = clock::now() + TEMP_FIRST;
             let mut misses = 0u32;
             let mut waits = 0u32;
+            // Whether every second so far carried the stream's mark, and how
+            // many there have been: a counter is asked only once its stream
+            // has shown the mark, because the mark is what tells an answer
+            // from a count. And when a question went out that nothing has
+            // answered yet. See `Counter::temp_in_stream`.
+            let mut marked = true;
+            let mut seen = 0u32;
+            let mut owed: Option<f64> = None;
             loop {
-                match c.next_sample(Duration::from_millis(2500)) {
-                    Some(v) => {
-                        if tx.send(Tube::Sample { who, when: clock::now(), counts: v as u32 })
-                            .is_err()
-                        {
-                            return;
+                let Some(raw) = c.next_raw(Duration::from_millis(2500)) else { break };
+                if raw & counter::STREAM_FLAG == 0 {
+                    // A pair without the mark, from a stream that has always
+                    // had it, while a question is unanswered: the answer,
+                    // late. It is read as one and it is NOT a second of
+                    // counts.
+                    if marked && seen > 0 && owed.map(|at| clock::now() - at < 5.0).unwrap_or(false) {
+                        owed = None;
+                        let now = clock::now();
+                        match c.late_answer(raw) {
+                            counter::TempAnswer::Degrees(celsius) => {
+                                misses = 0;
+                                waits = 0;
+                                if tx.send(Tube::Temp { who, when: now, celsius }).is_err() {
+                                    return;
+                                }
+                            }
+                            counter::TempAnswer::NotYet => {
+                                misses = 0;
+                                waits += 1;
+                                if waits <= 5 {
+                                    ask_at = now + TEMP_AGAIN;
+                                }
+                            }
+                            _ => {}
                         }
+                        continue;
                     }
-                    None => break,
+                    // A stream without the mark is one this cannot ask
+                    // safely, and does not.
+                    if marked && asking.is_some() {
+                        eprintln!(
+                            "radbeeper: {} sends its counts without the mark that tells \
+                             them from an answer -- its temperature is not asked",
+                            c.path
+                        );
+                    }
+                    marked = false;
+                    asking = None;
+                }
+                seen += 1;
+                if tx
+                    .send(Tube::Sample { who, when: clock::now(), counts: (raw & counter::COUNT_MASK) as u32 })
+                    .is_err()
+                {
+                    return;
                 }
                 let Some(every) = asking else { continue };
-                if clock::now() < ask_at {
+                if seen < 2 || clock::now() < ask_at {
                     continue;
                 }
-                let got = c.temp_in_stream();
+                let asked = clock::now();
+                let got = c.temp_in_stream(Duration::from_millis(TEMP_WAIT_MS));
                 let now = clock::now();
-                if let Some(v) = got.sample {
-                    if tx.send(Tube::Sample { who, when: now, counts: v as u32 }).is_err() {
+                for v in &got.samples {
+                    if tx.send(Tube::Sample { who, when: now, counts: *v as u32 }).is_err() {
                         return;
                     }
                 }
@@ -1787,6 +1837,11 @@ impl Bank {
                         }
                     }
                     counter::TempAnswer::Silent | counter::TempAnswer::Garbled => {
+                        // It may still be on its way: the reader above takes
+                        // it when it comes.
+                        if got.answer == counter::TempAnswer::Silent {
+                            owed = Some(asked);
+                        }
                         misses += 1;
                         if misses >= TEMP_MISSES {
                             asking = None;

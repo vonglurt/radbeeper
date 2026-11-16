@@ -122,6 +122,15 @@ class FakeGMC(threading.Thread):
         self.temp = 26.1
         self.temp_cold = 0
         self.temp_known = True
+        # How long it takes to answer <GETTEMP>>, in seconds. The Re 4.26
+        # takes 0.055; the +V4 Re 4.83 from 0.17 to just over 0.3, which was
+        # long enough to outlast the first reader's patience and have its
+        # answer counted. Replies waiting to be sent are held in `later`.
+        self.temp_delay = 0.0
+        self.later = []
+        # Whether a second of counts carries the stream's mark, its top bit.
+        # Both real firmwares set it; one that did not could not be asked.
+        self.flags = True
         # Every count sent down the stream, in order, flags off: what a
         # reader must have seen, no more and no fewer.
         self.sent = []
@@ -152,7 +161,11 @@ class FakeGMC(threading.Thread):
         next_beat = time.monotonic() + self.tick
         while self.running:
             timeout = max(0.02, next_beat - time.monotonic()) if self.heartbeat else 0.1
+            if self.later:
+                timeout = max(0.0, min(timeout, self.later[0][0] - time.monotonic()))
             r, _, _ = select.select([self.master], [], [], timeout)
+            while self.later and time.monotonic() >= self.later[0][0]:
+                self._send(self.later.pop(0)[1])
             if r:
                 try:
                     buf += os.read(self.master, 256)
@@ -168,7 +181,7 @@ class FakeGMC(threading.Thread):
     def _beat(self):
         n = self._draw()
         self.sent.append(n)
-        self._send(struct.pack(">H", (n | 0x8000) & 0xFFFF))
+        self._send(struct.pack(">H", (n | (0x8000 if self.flags else 0)) & 0xFFFF))
 
     def _send(self, data):
         try:
@@ -200,11 +213,15 @@ class FakeGMC(threading.Thread):
                 return
             if self.temp_cold > 0:
                 self.temp_cold -= 1
-                self._send(bytes([85, 0, 0, 0xAA]))
-                return
-            tenths = int(round(abs(self.temp) * 10))
-            self._send(bytes([tenths // 10, tenths % 10,
-                              1 if self.temp < 0 else 0, 0xAA]))
+                reply = bytes([85, 0, 0, 0xAA])
+            else:
+                tenths = int(round(abs(self.temp) * 10))
+                reply = bytes([tenths // 10, tenths % 10,
+                               1 if self.temp < 0 else 0, 0xAA])
+            if self.temp_delay > 0:
+                self.later.append((time.monotonic() + self.temp_delay, reply))
+            else:
+                self._send(reply)
         elif body == b"GETSERIAL":
             self._send(self.serial)
         elif body == b"GETCPM":

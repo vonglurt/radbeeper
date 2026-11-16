@@ -70,8 +70,8 @@ established, and the handling does not depend on it. The exact answer 85.0 is
 treated as "not yet": it is never logged, and the question is put again two
 seconds later.
 
-The +V4 Re 4.83 has been asked once, on 15 November, and answered 85.0. It has
-not been asked a second time.
+The +V4 Re 4.83 answered 85.0 once on 15 November. Asked again on 16 November
+it gave 25.7 °C, idle and mid-stream, every time.
 
 ## 3. Asking in the middle of the stream
 
@@ -92,6 +92,17 @@ every fifth sample, for forty seconds.
 The counter answers mid-stream and does not stop counting. Nothing needs to be
 switched off to ask.
 
+The same test on the +V4 Re 4.83, the same day:
+
+| | |
+|---|---|
+| Questions asked, idle and mid-stream | 11 |
+| Answered whole | 11, each `19 07 00 AA` (25.7 °C) |
+| Time from question to answer | 170 to 302 ms |
+| Seconds of counts | every one, a second apart |
+
+It answers as well, and three to six times more slowly.
+
 ## 4. What the service does
 
 The thread that reads a counter's samples is the only reader its port has. It
@@ -101,13 +112,17 @@ now also asks the temperature:
 2. If a temperature is due, `<GETTEMP>>` is written. The input is **not**
    flushed first, as it is for every other question the program asks: a flush
    would throw away a second that was in flight.
-3. Four bytes are waited for, up to 0.3 s. The next sample is a second away
-   and the answer a twentieth of one.
-4. If the four bytes are not an answer, two more are waited for. If the last
-   four of the six are an answer, the first two were a second of counts that
-   arrived ahead of it; that second is kept and sent on.
-5. Two bytes and nothing more is a second of counts and no answer. Anything
-   else is discarded and the port left to fall quiet before reading resumes.
+3. Bytes are read two at a time for up to 0.7 s. **A pair with its top bit
+   set is a second of counts**, and is kept and sent on as one. The first
+   pair without it is the head of the answer, and the next pair its tail.
+4. If the answer has not come in 0.7 s the question is left open. When a pair
+   without the top bit then turns up where a second of counts was expected,
+   it is that answer, late: it is read as a temperature and not counted.
+
+The top bit is what makes this safe. Both firmwares set it on every second
+they send (`80 00` is a second with no counts), and the first byte of an
+answer is whole degrees, which never has it. A counter whose stream does not
+carry the bit is not asked at all.
 
 A counter that gives nothing, or nothing sensible, to three questions in a row
 is not asked again until it is next plugged in. A counter whose firmware the
@@ -117,6 +132,24 @@ document does not name is never asked. The service asks once a log interval
 
 A temperature goes nowhere a count goes: not into an average, the spectrum,
 the entropy pool or a row of the count log.
+
+### The first version counted an answer, once
+
+The first version of step 3 waited 0.3 s for four bytes and took any two
+bytes that came instead for a second of counts. That was written against the
+Re 4.26, which answers in 55 ms. On 16 November the service on the machine
+with the +V4 was restarted with it. Three of the +V4's answers arrived as the
+wait ran out, stayed in the buffer, and were read as counts: `19 07` is 6,407
+and `00 AA` is 170. Three rows of that counter's log, at 13:21:55, 13:22:26
+and 13:22:57, say about 6,600 counts in half a minute where there were about
+ten. The service gave up asking after the third, as it is built to, and was
+stopped. No random number was drawn in those minutes and no other file was
+written from them.
+
+The fault was deciding what bytes were by when they arrived. Steps 3 and 4
+above decide by what they are. The fake counter can now answer after any
+delay, and the tests run it at 0.31 s, 0.55 s, 0.85 s and 1.3 s, the last
+two later than the wait and later than the next second.
 
 ## 5. Where the readings are kept
 
@@ -173,6 +206,8 @@ the fake sent, second for second:
 | 85.0 for the first two answers | counts identical; 85.0 never logged |
 | Below freezing | the sign is kept |
 | A firmware that never answers | asked three times, then left alone; counts identical |
+| An answer 0.31, 0.55, 0.85 and 1.3 s late | counts identical; every answer read |
+| A stream without the top bit | never asked |
 | Re 2.10, and a GMC-300 | never asked |
 | `--no-temp` | never asked; no temperature file |
 
@@ -183,8 +218,9 @@ The whole suite, 272 Python tests and the Rust tests, passes with the change.
 - **What the thermometer reads.** It is inside the counter's case. It agreed
   with the counter's own screen, which is the same sensor; it has not been
   compared with a thermometer in the room's air.
-- **The +V4 Re 4.83.** Asked once, answered 85.0. That it then gives real
-  readings is expected from the other unit and has not been seen.
+- **Other firmwares.** Two units have been asked. That every GMC-320 from Re
+  3.01 sets the top bit on its seconds, and answers within a second, is
+  assumed from those two.
 - **Whether asking moves a count in time.** The seconds kept arriving a second
   apart and none was lost. Whether a count that would have been reported in
   one second is reported in the next because the counter was busy answering

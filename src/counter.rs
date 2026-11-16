@@ -96,13 +96,20 @@ pub enum TempAnswer {
     Garbled,
 }
 
-/// A temperature question's whole result: the answer, and a second of counts
-/// if one arrived on the wire in front of it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A temperature question's whole result: the answer, and every second of
+/// counts that arrived on the wire in front of it, in order.
+#[derive(Clone, Debug, PartialEq)]
 pub struct StreamTemp {
     pub answer: TempAnswer,
-    pub sample: Option<u16>,
+    pub samples: Vec<u16>,
 }
+
+/// The mark a second of counts carries in the stream: its top bit.
+///
+/// Both counters on the bench set it on every second they send (`80 00` is
+/// a second with no counts). It is what lets an answer to a question be
+/// told from a count: see `Counter::temp_in_stream`.
+pub const STREAM_FLAG: u16 = 0x8000;
 
 /// Whether this firmware answers <GETTEMP>>.
 ///
@@ -342,66 +349,92 @@ impl Counter {
     /// The top two bits of the 16-bit value are status flags on current
     /// firmware, not count, which is why the mask is here and not optional.
     pub fn next_sample(&self, timeout: Duration) -> Option<u16> {
+        self.next_raw(timeout).map(|raw| raw & COUNT_MASK)
+    }
+
+    /// One second of the stream as the counter sent it, flag bits and all.
+    pub fn next_raw(&self, timeout: Duration) -> Option<u16> {
         let r = self.port.read_exact_or_timeout(2, timeout);
-        (r.len() == 2).then(|| u16::from_be_bytes([r[0], r[1]]) & COUNT_MASK)
+        (r.len() == 2).then(|| u16::from_be_bytes([r[0], r[1]]))
     }
 
     /// Ask the temperature WITHOUT STOPPING THE STREAM, and without losing a
-    /// second of it.
+    /// second of it or inventing one.
     ///
     /// THE COUNTER ANSWERS MID-STREAM, AND GOES ON COUNTING. Measured on the
     /// Re 4.26 on 2026-11-16: with <HEARTBEAT1>> on, nine questions in forty
-    /// seconds each came back whole 55 ms after they were sent, and every one
-    /// of the forty seconds arrived, a second apart, as though nothing had
-    /// been asked. So there is no handover here, no <HEARTBEAT0>>, and above
-    /// all NO FLUSH: `ask` empties the input first, which is right for a
-    /// conversation and here would throw away whatever second was in flight.
+    /// seconds each came back whole and every one of the forty seconds
+    /// arrived, a second apart. So there is no handover here, no
+    /// <HEARTBEAT0>>, and above all NO FLUSH: `ask` empties the input first,
+    /// which is right for a conversation and here would throw away whatever
+    /// second was in flight.
     ///
-    /// CALL IT STRAIGHT AFTER A SAMPLE. The next one is then a second away and
-    /// the answer a twentieth of one, so the four bytes that arrive are the
-    /// answer. But the stream has no framing, and "almost always" is how a
-    /// log gets a second of 170 counts in it, so the other order is handled
-    /// too: if the first four bytes are not an answer, two more are waited
-    /// for, and if the last four of the six ARE one, the first two were a
-    /// second of counts that got in ahead of it. That second is handed back
-    /// with the answer, not dropped.
+    /// HOW LONG AN ANSWER TAKES IS THE COUNTER'S BUSINESS, AND AN ANSWER IS
+    /// TOLD FROM A COUNT BY WHAT IT IS, NEVER BY WHEN IT CAME. The Re 4.26
+    /// answered in 55 ms and this waited 300 for four bytes. The +V4 Re 4.83
+    /// takes from 170 to just over 300: on the afternoon it was first asked
+    /// in service its answers arrived as the wait ran out, were left in the
+    /// buffer, and were read as two seconds of counts -- 19 07 is 6,407 of
+    /// them -- and three rows of the log said six and a half thousand counts
+    /// in half a minute (2026-11-16, 13:21 to 13:23). A longer wait alone
+    /// would only move the edge. What tells the two apart is the stream's
+    /// own mark: a second of counts has its top bit set (`STREAM_FLAG`), on
+    /// both firmwares, and the first byte of an answer is whole degrees,
+    /// which never has. So the bytes that arrive are read a pair at a time:
+    /// a pair with the mark is a second of counts and is handed back as one;
+    /// the first pair without it is the head of the answer, and the next
+    /// pair is its tail. An answer that comes after the wait is caught the
+    /// same way by the reader: see `late_answer`.
     ///
-    /// Anything else is garbage, and the port is left to fall quiet before the
-    /// reader goes back to taking two bytes at a time: half an answer left in
-    /// the buffer would be read as counts.
-    pub fn temp_in_stream(&self) -> StreamTemp {
+    /// ONLY A STREAM THAT CARRIES THE MARK MAY BE ASKED. The caller checks
+    /// that every second so far had it before it asks at all.
+    pub fn temp_in_stream(&self, wait: Duration) -> StreamTemp {
+        let mut samples = Vec::new();
         if self.port.write_all(b"<GETTEMP>>").is_err() {
-            return StreamTemp { answer: TempAnswer::Silent, sample: None };
+            return StreamTemp { answer: TempAnswer::Silent, samples };
         }
-        let mut r = self.port.read_exact_or_timeout(4, Duration::from_millis(300));
-        let sample_of = |b: &[u8]| u16::from_be_bytes([b[0], b[1]]) & COUNT_MASK;
-        match r.len() {
-            0 => StreamTemp { answer: TempAnswer::Silent, sample: None },
-            // Two bytes and then nothing: a second of counts, and no answer
-            // behind it.
-            2 => StreamTemp { answer: TempAnswer::Silent, sample: Some(sample_of(&r)) },
-            4 => {
-                let first = decode_temp(&r);
-                if first != TempAnswer::Garbled {
-                    return StreamTemp { answer: first, sample: None };
-                }
-                r.extend_from_slice(
-                    &self.port.read_exact_or_timeout(2, Duration::from_millis(150)),
-                );
-                if r.len() == 6 {
-                    let late = decode_temp(&r[2..]);
-                    if late != TempAnswer::Garbled {
-                        return StreamTemp { answer: late, sample: Some(sample_of(&r)) };
-                    }
-                }
-                self.port.drain(Duration::from_millis(20));
-                StreamTemp { answer: TempAnswer::Garbled, sample: None }
+        let deadline = std::time::Instant::now() + wait;
+        loop {
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            if left.is_zero() {
+                return StreamTemp { answer: TempAnswer::Silent, samples };
             }
-            _ => {
-                self.port.drain(Duration::from_millis(20));
-                StreamTemp { answer: TempAnswer::Garbled, sample: None }
+            let head = self.port.read_exact_or_timeout(2, left);
+            match head.len() {
+                0 => return StreamTemp { answer: TempAnswer::Silent, samples },
+                2 => {}
+                _ => {
+                    self.port.drain(Duration::from_millis(20));
+                    return StreamTemp { answer: TempAnswer::Garbled, samples };
+                }
             }
+            let raw = u16::from_be_bytes([head[0], head[1]]);
+            if raw & STREAM_FLAG != 0 {
+                samples.push(raw & COUNT_MASK);
+                continue;
+            }
+            return StreamTemp { answer: self.late_answer(raw), samples };
         }
+    }
+
+    /// The rest of an answer whose first two bytes have already been read,
+    /// as `head`: the two that follow, and what the four say.
+    ///
+    /// For the reader, when a pair without the stream's mark turns up where
+    /// a second of counts was expected and a question is still unanswered:
+    /// it is that question's answer, late, and must not be counted.
+    pub fn late_answer(&self, head: u16) -> TempAnswer {
+        let tail = self.port.read_exact_or_timeout(2, Duration::from_millis(400));
+        if tail.len() != 2 {
+            self.port.drain(Duration::from_millis(20));
+            return TempAnswer::Garbled;
+        }
+        let [a, b] = head.to_be_bytes();
+        let answer = decode_temp(&[a, b, tail[0], tail[1]]);
+        if answer == TempAnswer::Garbled {
+            self.port.drain(Duration::from_millis(20));
+        }
+        answer
     }
 }
 

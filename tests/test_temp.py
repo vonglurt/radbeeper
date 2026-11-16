@@ -205,6 +205,52 @@ class TestACounterThatDoesNotAnswer(TempCase):
         self.assertIn("not asking it again", said)
 
 
+class TestACounterThatAnswersSlowly(TempCase):
+    """The +V4 Re 4.83 takes up to a third of a second to answer, and on
+    2026-11-16 its answers were counted: 19 07 00 AA read as 6,407 counts and
+    then 170. Every case here is that afternoon with a different delay, and
+    the test is the same as everywhere else in this file: what the service
+    published is what the counter sent, and nothing else."""
+    tick = 1.0
+    seconds = 14.0
+
+    def slow(self, delay):
+        self.dev.temp = 25.7
+        self.dev.temp_delay = delay
+        counts, temps, said = self.serve("--temp-every", "2")
+        sent = list(self.dev.sent)
+        self.assertGreaterEqual(len(counts), 8, said)
+        self.assertEqual(counts, sent[:len(counts)],
+                         "an answer %.2f s late was counted" % delay)
+        self.assertLess(max(counts), 100)
+        self.assertGreaterEqual(len(temps), 2, said)
+        self.assertEqual(set(temps), {25.7})
+        return said
+
+    def test_as_slow_as_the_plus_v4_was_seen_to_be(self):
+        self.slow(0.31)
+
+    def test_slower_than_that(self):
+        self.slow(0.55)
+
+    def test_after_the_wait_has_run_out(self):
+        self.slow(0.85)
+
+    def test_after_the_next_second_has_already_come(self):
+        said = self.slow(1.3)
+        self.assertNotIn("not asking it again", said)
+
+
+class TestAStreamWithoutTheMark(TempCase):
+    def test_it_is_not_asked_because_an_answer_could_not_be_told_from_a_count(self):
+        self.dev.flags = False
+        counts, temps, said = self.serve("--temp-every", "1")
+        self.assert_every_second_is_the_counters(counts)
+        self.assertEqual(temps, [])
+        self.assertNotIn(b"<GETTEMP>>", self.dev.commands)
+        self.assertIn("without the mark", said)
+
+
 class TestNow(TempCase):
     seconds = 9.0
 
