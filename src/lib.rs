@@ -22,6 +22,7 @@ pub mod frames;
 pub mod history;
 pub mod log;
 pub mod longdrum;
+pub mod longpage;
 pub mod sample;
 pub mod serve;
 pub mod sha256;

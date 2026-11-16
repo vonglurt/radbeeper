@@ -5774,6 +5774,8 @@ fn usage() {
     println!("      --frame-budget SIZE    export: raw frame bytes carried in the page (default 2M, 0 for none)");
     println!("      --frames-page          export: also write frames.html, the frame browser (Rust only)");
     println!("      --frames-output FILE   export: where the frame browser goes (default frames.html beside it)");
+    println!("      --drums-page           export: also write drums.html, the day and month drums and the temperature (Rust only)");
+    println!("      --drums-output FILE    export: where the drums page goes (default drums.html beside it)");
     println!("      --month YYYY-MM        frames: one month rather than all of them");
     println!("      --seq N                frames show: which frame (default the newest)");
     println!("      --json | --tsv | --bin frames export: which form (default json)");
@@ -5831,6 +5833,8 @@ fn main() {
     let mut frames_in: Option<PathBuf> = None;
     let mut frames_page = false;
     let mut frames_output: Option<PathBuf> = None;
+    let mut drums_page = false;
+    let mut drums_output: Option<PathBuf> = None;
     let mut serial: Option<String> = None;
     let mut title = radbeeper::export::DEFAULT_TITLE.to_string();
     let mut random_output: Option<PathBuf> = None;
@@ -5951,6 +5955,8 @@ fn main() {
             "--bin" => frames_form = "bin".to_string(),
             "--frames-page" => frames_page = true,
             "--frames-output" => frames_output = next(&mut i).map(PathBuf::from),
+            "--drums-page" => drums_page = true,
+            "--drums-output" => drums_output = next(&mut i).map(PathBuf::from),
             _ if command == "frames"
                 && frames_action == "import"
                 && frames_in.is_none()
@@ -6030,6 +6036,25 @@ fn main() {
                 }
                 Err(e) => {
                     eprintln!("radbeeper: frames page: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        // THE DRUMS PAGE IS ASKED FOR TOO, for the frame page's reason: the
+        // long drums have no Python half, so the page they are drawn on is
+        // one more thing this command writes only when told to. See the
+        // head of src/longpage.rs.
+        if code == 0 && drums_page {
+            match radbeeper::longpage::write_page(&dir, &out, &title, drums_output.as_deref()) {
+                Ok(p) => {
+                    println!("radbeeper: {} -- {} day line{}, {} month line{}, {} temperature drum{}",
+                             p.path.display(),
+                             p.days, if p.days == 1 { "" } else { "s" },
+                             p.months, if p.months == 1 { "" } else { "s" },
+                             p.temps, if p.temps == 1 { "" } else { "s" });
+                }
+                Err(e) => {
+                    eprintln!("radbeeper: drums page: {}", e);
                     std::process::exit(1);
                 }
             }

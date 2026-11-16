@@ -585,6 +585,59 @@ pub fn hour_series(c: &Counter) -> Vec<(f64, f64, Option<f64>)> {
 
 // ------------------------------------------------------------- the charts ---
 
+/// How many midnights apart the dates under a chart are written.
+///
+/// A DATE IS FORTY PIXELS WIDE AND TWO MONTHS OF DAYS ARE SEVENTEEN APART.
+/// With a name at every midnight the foot of the chart was one unbroken smear
+/// of overlapping letters, and a line up the paper at each of them was a comb
+/// in front of the trace. So at most a dozen dates are written, each with its
+/// line; every other midnight keeps a tick on the axis, which is enough to
+/// count days by. Every day, every second day, then by weeks, because those
+/// are the strides somebody reading dates expects.
+pub fn label_every(days: usize) -> usize {
+    const STEPS: [usize; 9] = [1, 2, 7, 14, 28, 56, 112, 224, 448];
+    STEPS.iter().copied().find(|every| days <= 12 * every).unwrap_or(448)
+}
+
+/// The midnights between two times, a day apart, as the Python's loop adds
+/// them up: by repeated addition, so the last of sixty is the same double.
+fn midnights(t0: f64, t1: f64) -> Vec<f64> {
+    let day = 86400.0;
+    let mut ticks = Vec::new();
+    let mut t = t0 - t0.rem_euclid(day) + day;
+    while t < t1 {
+        ticks.push(t);
+        t += day;
+    }
+    ticks
+}
+
+/// The marks along the foot of a chart: a date and a line up the paper at
+/// the midnights `label_every` picks, and a tick on the axis at the rest.
+fn day_marks(out: &mut Vec<String>, ticks: &[f64], x_of: impl Fn(f64) -> f64, top: i64, foot: i64, height: i64) {
+    let every = label_every(ticks.len());
+    for (i, t) in ticks.iter().enumerate() {
+        let x = f(1, x_of(*t));
+        if i % every != 0 {
+            out.push(format!(
+                "<line class=\"tick\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
+                x, foot, x, foot + 5
+            ));
+            continue;
+        }
+        out.push(format!(
+            "<line class=\"grid\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
+            x, top, x, foot
+        ));
+        out.push(format!(
+            "<text class=\"xlab\" x=\"{}\" y=\"{}\">{}</text>",
+            x,
+            height - 8,
+            clock::format(*t, "%b %-d")
+        ));
+    }
+}
+
 /// An inline SVG line chart of CPM by the hour, on a log axis.
 ///
 /// THE LINE BREAKS OVER A GAP rather than running across it: an hour the
@@ -592,7 +645,7 @@ pub fn hour_series(c: &Counter) -> Vec<(f64, f64, Option<f64>)> {
 /// because the data is -- background near 40 CPM, peaks two hundred times
 /// that.
 pub fn svg_plot(series: &[(f64, f64, Option<f64>)]) -> String {
-    let (width, height, pad_l, pad_b, pad_t, pad_r) = (1120i64, 1200i64, 52i64, 26i64, 12i64, 10i64);
+    let (width, height, pad_l, pad_b, pad_t, pad_r) = (1120i64, 1216i64, 52i64, 26i64, 28i64, 24i64);
     if series.len() < 2 {
         return String::new();
     }
@@ -674,23 +727,9 @@ pub fn svg_plot(series: &[(f64, f64, Option<f64>)]) -> String {
         }
         decade *= 10.0;
     }
-    // x ticks at midnight
-    let day = 86400.0;
-    let mut t = t0 - t0.rem_euclid(day) + day;
-    while t < t1 {
-        let x = f(1, x_of(t));
-        out.push(format!(
-            "<line class=\"grid\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
-            x, pad_t, x, pad_t + ih
-        ));
-        out.push(format!(
-            "<text class=\"xlab\" x=\"{}\" y=\"{}\">{}</text>",
-            x,
-            height - 8,
-            clock::format(t, "%b %-d")
-        ));
-        t += day;
-    }
+    // x ticks a day apart; label_every says which of them carry a date and a
+    // line up the paper, and the rest are a tick on the axis.
+    day_marks(&mut out, &midnights(t0, t1), x_of, pad_t, pad_t + ih, height);
     let peaks: Vec<(f64, Option<f64>)> = series.iter().map(|s| (s.0, s.2)).collect();
     let means: Vec<(f64, Option<f64>)> = series.iter().map(|s| (s.0, Some(s.1))).collect();
     out.push(format!("<path class=\"peak\" d=\"{}\"/>", path(&peaks)));
@@ -698,7 +737,7 @@ pub fn svg_plot(series: &[(f64, f64, Option<f64>)]) -> String {
     out.push(format!(
         "<text class=\"ycap\" x=\"{}\" y=\"{}\">CPM, log</text>",
         pad_l - 44,
-        pad_t + 10
+        pad_t - 14
     ));
     out.push("</svg>".to_string());
     out.concat()
@@ -711,8 +750,12 @@ pub fn svg_plot(series: &[(f64, f64, Option<f64>)]) -> String {
 /// should draw the same shape; where they part company is where something is
 /// wrong with a tube, a cable or a pass-through, and no table of averages
 /// shows that as fast as two lines that stop being parallel.
+///
+/// THE CAPTION STANDS ABOVE THE PAPER, in the sixteen pixels pad_t grew by.
+/// It used to sit ten below the top, on the same line as the top decade's
+/// label, and the two were printed through each other.
 pub fn svg_overlay(series: &[(String, Vec<(f64, f64, Option<f64>)>)]) -> String {
-    let (width, height, pad_l, pad_b, pad_t, pad_r) = (1120i64, 560i64, 52i64, 26i64, 12i64, 10i64);
+    let (width, height, pad_l, pad_b, pad_t, pad_r) = (1120i64, 576i64, 52i64, 26i64, 28i64, 24i64);
     let live: Vec<&(String, Vec<(f64, f64, Option<f64>)>)> =
         series.iter().filter(|(_, s)| s.len() >= 2).collect();
     if live.len() < 2 {
@@ -769,22 +812,7 @@ pub fn svg_overlay(series: &[(String, Vec<(f64, f64, Option<f64>)>)]) -> String 
         ));
         decade *= 10.0;
     }
-    let day = 86400.0;
-    let mut t = t0 - t0.rem_euclid(day) + day;
-    while t < t1 {
-        let x = f(1, x_of(t));
-        out.push(format!(
-            "<line class=\"grid\" x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>",
-            x, pad_t, x, pad_t + ih
-        ));
-        out.push(format!(
-            "<text class=\"xlab\" x=\"{}\" y=\"{}\">{}</text>",
-            x,
-            height - 8,
-            clock::format(t, "%b %-d")
-        ));
-        t += day;
-    }
+    day_marks(&mut out, &midnights(t0, t1), x_of, pad_t, pad_t + ih, height);
     for (i, (serial, points)) in live.iter().enumerate() {
         let mut d: Vec<String> = Vec::new();
         let mut last: Option<f64> = None;
@@ -809,7 +837,7 @@ pub fn svg_overlay(series: &[(String, Vec<(f64, f64, Option<f64>)>)]) -> String 
     out.push(format!(
         "<text class=\"ycap\" x=\"{}\" y=\"{}\">CPM, log</text>",
         pad_l - 44,
-        pad_t + 10
+        pad_t - 14
     ));
     out.push("</svg>".to_string());
     out.concat()
@@ -846,12 +874,20 @@ pub fn page_head(title: &str, extra: &[&str]) -> Vec<String> {
 }
 
 const STYLE: &[&str] = &[
+    // THE WINDOW'S COLOURS, BY ITS OWN NAMES FOR THEM. radbeeper-gui's Skin
+    // is where these come from: on the page, the green and the warm of its
+    // paper skin by day and of its dark skin by night, and the dark skin's
+    // ground. The charts are another matter. The window's drum paper is dark
+    // in both of its skins, so --face, --ink, --trace and --raised are said
+    // once and no colour scheme changes them: a chart on this page is the
+    // same instrument at noon and at midnight, as the window's is.
     ":root{color-scheme:light dark;--fg:#181818;--bg:#faf9f7;\
-     --dim:#6b6b6b;--line:#e0ddd8;--card:#fff;--accent:#2f6f4f;\
-     --warn:#b0642a}",
-    "@media (prefers-color-scheme:dark){:root{--fg:#e8e6e3;--bg:#16161a;\
-     --dim:#9a9a9a;--line:#2e2e35;--card:#1e1e24;--accent:#6cc08c;\
-     --warn:#e0a06a}}",
+     --dim:#6b6b6b;--line:#e0ddd8;--card:#fff;--accent:#3d7a2e;\
+     --warn:#a33b20;--face:#0a0d14;--ink:#9ea3b8;--trace:#66d98c;\
+     --raised:#fa9e40}",
+    "@media (prefers-color-scheme:dark){:root{--fg:#ccd6eb;--bg:#1e1e2e;\
+     --dim:#9ea3b8;--line:#34374d;--card:#26273a;--accent:#66d98c;\
+     --warn:#fa9e40}}",
     "body{margin:0;padding:2rem 1rem;background:var(--bg);color:var(--fg);\
      font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif}",
     "main{max-width:1100px;margin:0 auto}",
@@ -879,24 +915,39 @@ const STYLE: &[&str] = &[
     ".card .v{font-size:1.5rem;font-variant-numeric:tabular-nums;\
      margin-top:.15rem}",
     ".card .n{color:var(--dim);font-size:.8rem}",
-    ".plotwrap{background:var(--card);border:1px solid var(--line);\
+    ".plotwrap{background:var(--face);border:1px solid var(--line);\
      border-radius:10px;padding:.9rem 1rem 0;margin-top:.9rem}",
     ".plot{display:block;height:auto}",
-    ".plot .grid{stroke:var(--line);stroke-width:1}",
-    ".plot .minor{opacity:.45}",
-    ".plot .mean{fill:none;stroke:var(--accent);stroke-width:1.6;\
+    // FEW LINES AND FAINT ONES. The grid is the ink of the labels at a sixth
+    // of its strength, and the halfway marks at less than half of that: there
+    // to be found by an eye that goes looking, and not seen by one reading
+    // the trace.
+    ".plot .grid{stroke:var(--ink);stroke-width:1;stroke-opacity:.16}",
+    ".plot .minor{stroke-opacity:.07}",
+    ".plot .tick{stroke:var(--ink);stroke-width:1;stroke-opacity:.55}",
+    // GREEN IS WHAT THE ROOM DOES AND WARM IS WHAT WAS RAISED, as on the
+    // window's drums. The mean is the line somebody is here to read, so it is
+    // the heavier of the two; the peaks are a hair of orange behind it.
+    ".plot .mean{fill:none;stroke:var(--trace);stroke-width:1.8;\
      stroke-linejoin:round;stroke-linecap:round}",
-    ".plot .peak{fill:none;stroke:var(--warn);stroke-width:1;opacity:.55}",
+    ".plot .peak{fill:none;stroke:var(--raised);stroke-width:.9;\
+     stroke-linejoin:round;stroke-linecap:round;opacity:.6}",
     // One colour per tube, shared by its line and its key, so the overlay is
-    // read by colour and needs no legend anywhere else.
-    ".plot .tube{fill:none;stroke-width:1.6;stroke-linejoin:round;\
-      stroke-linecap:round;opacity:.9}",
-    ".plot .key{font-size:12px;text-anchor:start}",
-    ".plot .t0{stroke:#6cc6ff;fill:#6cc6ff}",
-    ".plot .t1{stroke:#c9a0ff;fill:#c9a0ff}",
-    ".plot .t2{stroke:#7ee787;fill:#7ee787}",
-    ".plot .t3{stroke:#ffa657;fill:#ffa657}",
-    ".plot text{fill:var(--dim);font-size:11px;\
+    // read by colour and needs no legend anywhere else. They are the first
+    // four of the window's needles.
+    //
+    // THE COLOUR IS SAID ONCE AND EACH TAKES IT ITS OWN WAY: the line as its
+    // stroke and the name as its fill. When .t0 set both, it set them after
+    // .tube's fill:none and won, and every tube's line was drawn as a filled
+    // shape closed across its own gaps.
+    ".plot .tube{fill:none;stroke:currentColor;stroke-width:1.6;\
+     stroke-linejoin:round;stroke-linecap:round;opacity:.9}",
+    ".plot .key{fill:currentColor;font-size:12px;text-anchor:start}",
+    ".plot .t0{color:#8ccbfa}",
+    ".plot .t1{color:#d9b3ff}",
+    ".plot .t2{color:#8ceda6}",
+    ".plot .t3{color:#fcbf73}",
+    ".plot text{fill:var(--ink);font-size:11px;\
      font-family:system-ui,sans-serif}",
     ".plot .ylab{text-anchor:end}",
     ".plot .xlab{text-anchor:middle}",
@@ -904,9 +955,14 @@ const STYLE: &[&str] = &[
      text-transform:uppercase}",
     ".legend{display:flex;gap:1.2rem;color:var(--dim);font-size:.8rem;\
      padding:.1rem 0 .8rem}",
+    ".plotwrap .legend{color:var(--ink)}",
     ".legend i{display:inline-block;width:18px;height:0;\
      border-top-width:2px;border-top-style:solid;vertical-align:middle;\
      margin-right:.4rem}",
+    // HERE AND NOT IN random.html's OWN RULES, where it was: this page has
+    // notes under its charts too, and with no rule they were set as body
+    // text, as loud as the paragraph they are a footnote to.
+    ".note{color:var(--dim);font-size:.85rem;max-width:68ch}",
     ".about{background:var(--card);border:1px solid var(--line);\
      border-radius:10px;padding:1.2rem 1.4rem;margin-top:2.6rem}",
     ".about h3{margin:0 0 .4rem;font-size:1.05rem}",
@@ -1224,9 +1280,9 @@ pub fn render_html(
             a!("<h2>Counts per minute, by the hour</h2>");
             a!("<div class=\"plotwrap\">{}", chart);
             a!("<div class=\"legend\">\
-                <span><i style=\"border-top-color:var(--accent)\"></i>\
+                <span><i style=\"border-top-color:var(--trace)\"></i>\
                 hourly mean</span>\
-                <span><i style=\"border-top-color:var(--warn)\"></i>\
+                <span><i style=\"border-top-color:var(--raised)\"></i>\
                 highest 3-second peak in the hour</span>\
                 <span>a break in the line is an hour with no recording</span>\
                 </div></div>");
@@ -1581,7 +1637,7 @@ pub fn entropy_budget(samples: &[u32]) -> Option<Budget> {
 /// Observed counts against the Poisson the model assumed, side by side, on a
 /// log axis -- the interesting disagreement is in the tail.
 pub fn svg_hist(freq: &Freq, lam: f64) -> String {
-    let (width, height, pad_l, pad_b, pad_t, pad_r) = (1120i64, 340i64, 54i64, 34i64, 14i64, 12i64);
+    let (width, height, pad_l, pad_b, pad_t, pad_r) = (1120i64, 364i64, 54i64, 44i64, 28i64, 12i64);
     let n: usize = freq.counts.values().sum();
     if n == 0 {
         return String::new();
@@ -1640,19 +1696,22 @@ pub fn svg_hist(freq: &Freq, lam: f64) -> String {
         out.push(format!(
             "<text class=\"xlab\" x=\"{}\" y=\"{}\">{}</text>",
             f(1, x),
-            height - 12,
+            height - 26,
             k
         ));
     }
+    // EACH CAPTION IN A LINE OF ITS OWN, clear of the numbers. They were two
+    // pixels above the top label and eleven below the bottom ones, which at
+    // this size of letter is on top of both.
     out.push(format!(
         "<text class=\"xcap\" x=\"{}\" y=\"{}\">counts in one second</text>",
         pad_l,
-        height - 1
+        height - 8
     ));
     out.push(format!(
         "<text class=\"ycap\" x=\"{}\" y=\"{}\">share of seconds</text>",
         pad_l - 46,
-        pad_t - 2
+        pad_t - 14
     ));
     out.push("</svg>".to_string());
     out.concat()
@@ -1662,7 +1721,7 @@ pub fn svg_hist(freq: &Freq, lam: f64) -> String {
 /// the measured line crosses the target is when a line is emitted.
 pub fn svg_bits(samples: &[u32]) -> String {
     let want = ENTROPY_BITS;
-    let (width, height, pad_l, pad_b, pad_t, pad_r) = (1120i64, 320i64, 54i64, 34i64, 14i64, 12i64);
+    let (width, height, pad_l, pad_b, pad_t, pad_r) = (1120i64, 334i64, 54i64, 34i64, 28i64, 24i64);
     let n = samples.len();
     if n < 30 {
         return String::new();
@@ -1748,7 +1807,7 @@ pub fn svg_bits(samples: &[u32]) -> String {
     out.push(format!(
         "<text class=\"ycap\" x=\"{}\" y=\"{}\">bits</text>",
         pad_l - 46,
-        pad_t - 2
+        pad_t - 14
     ));
     out.push("</svg>".to_string());
     out.concat()
@@ -1805,15 +1864,14 @@ pub(crate) fn json_str(s: &str) -> String {
 }
 
 const RANDOM_CSS: &[&str] = &[
-    ".hist .seen{fill:var(--accent)}",
-    ".hist .modelled{fill:var(--dim);opacity:.45}",
-    ".bits .target{stroke:var(--warn);stroke-width:1;stroke-dasharray:4 3}",
+    ".hist .seen{fill:var(--trace)}",
+    ".hist .modelled{fill:var(--ink);opacity:.45}",
+    ".bits .target{stroke:var(--raised);stroke-width:1;stroke-dasharray:4 3}",
     ".plot .xcap{text-anchor:start;font-size:10px;letter-spacing:.05em;\
      text-transform:uppercase}",
     ".ledger{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;\
      font-size:.78rem;word-break:break-all}",
     ".budget td:first-child{width:52%}",
-    ".note{color:var(--dim);font-size:.85rem;max-width:68ch}",
 ];
 
 /// The audit page: what the source is, what it is worth, and every line.
@@ -2028,10 +2086,12 @@ pub fn render_random_html(serial: &str, pools: &[entropy::Emission], title: &str
     a!("<h2>The counts, against the model that was assumed</h2>");
     a!("<div class=\"plotwrap\">");
     out.push(svg_hist(&b.freq, b.mean));
-    a!("</div>");
-    a!("<div class=\"legend\"><span><i style=\"border-color:var(--accent)\"></i>\
-        observed</span><span><i style=\"border-color:var(--dim)\"></i>\
+    // THE KEY IS INSIDE THE PANEL, as the monitor page's is: its swatches are
+    // the chart's own colours, and those are chosen for the dark paper.
+    a!("<div class=\"legend\"><span><i style=\"border-color:var(--trace)\"></i>\
+        observed</span><span><i style=\"border-color:var(--ink)\"></i>\
         Poisson at the same mean</span></div>");
+    a!("</div>");
     // Only bins the model expected to see AT ALL. The ratio at k=10 is six
     // figures, which is arithmetic on a denominator of nothing.
     let mut worst: Option<(u32, f64)> = None;
@@ -2072,10 +2132,10 @@ pub fn render_random_html(serial: &str, pools: &[entropy::Emission], title: &str
     let chart = svg_bits(&samples);
     if !chart.is_empty() {
         a!("<h2>How the bits accumulate</h2>");
-        a!("<div class=\"plotwrap\">{}</div>", chart);
-        a!("<div class=\"legend\"><span><i style=\"border-color:var(--accent)\">\
-            </i>measured</span><span><i style=\"border-color:var(--warn)\">\
-            </i>Poisson model</span></div>");
+        a!("<div class=\"plotwrap\">{}", chart);
+        a!("<div class=\"legend\"><span><i style=\"border-color:var(--trace)\">\
+            </i>measured</span><span><i style=\"border-color:var(--raised)\">\
+            </i>Poisson model</span></div></div>");
         a!("<p class=\"note\">Every second recorded here, run as one pool. The \
             measured line is flat at first because the confidence bound has \
             nothing to say until there are about a dozen samples; it then \
@@ -2716,6 +2776,25 @@ mod tests {
         assert_eq!(nice_ceiling(37.0), 40.0);
         assert_eq!(nice_ceiling(100.0), 100.0);
         assert_eq!(nice_ceiling(101.0), 150.0);
+    }
+
+    /// Two months of midnights are sixty-odd marks in a thousand pixels, and
+    /// a date at each was a smear. A dozen dates at most, a week apart on a
+    /// record that long, and every other midnight still on the axis.
+    #[test]
+    fn a_long_record_names_a_dozen_dates_and_ticks_the_rest() {
+        assert_eq!(label_every(0), 1);
+        assert_eq!(label_every(12), 1);
+        assert_eq!(label_every(13), 2);
+        assert_eq!(label_every(66), 7);
+        assert_eq!(label_every(85), 14);
+        let series: Vec<(f64, f64, Option<f64>)> =
+            (0..66 * 24).map(|h| (h as f64 * 3600.0, 40.0, Some(80.0))).collect();
+        let svg = svg_plot(&series);
+        let dates = svg.matches("class=\"xlab\"").count();
+        let ticks = svg.matches("class=\"tick\"").count();
+        assert_eq!(dates, 10, "a date a week");
+        assert_eq!(dates + ticks, 65, "and no midnight left out");
     }
 
     #[test]

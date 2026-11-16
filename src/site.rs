@@ -673,6 +673,7 @@ reaching the counter on a schedule, which radiation never does.</p>
 <div class="cta">
 <a class="primary" href="#get-started">Get started</a>
 <a href="monitor.html">See a live counter's report</a>
+<a href="drums.html">Days and months</a>
 <a href="docs/reading-the-drum-spectrogram.html">The drum spectrogram</a>
 <a href="docs/technical-description.html">How it works</a>
 <a href="{}">Source</a>

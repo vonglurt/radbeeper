@@ -37,6 +37,18 @@
 # without building the crate first, which is the property this workflow has
 # always had and is worth keeping.
 #
+# EXCEPT drums.html, WHICH ONLY THE RUST WRITES, SO THIS BUILDS THE CRATE AFTER
+# ALL. The day drum, the month drum and the temperature drum are a transform
+# the Python has never had (src/longdrum.rs), and a page of them that waited
+# for somebody to run `make site` would be a page of last month's days. So one
+# step here builds the Rust program -- one dependency, libc, and the runner
+# has cargo -- and asks it for that page alone. Its copy of the report goes to
+# the runner's temporary directory and is thrown away: monitor.html is still
+# the Python's, and a push that only touches logs/ still needs nothing from
+# the crate to rebuild the two pages that existed before this one. If the
+# crate does not build, this run fails and says so, which is the truth: the
+# drums on the site would otherwise be stale with nothing to show for it.
+#
 # No pip install, no requirements.txt, no lockfile: both generators here are
 # stdlib Python, which is the same reason one of them runs on a Pi Zero.
 name: build the page
@@ -57,6 +69,8 @@ on:
       - 'README.md'
       - 'docs/**.md'
       - 'tools/landing.py'
+      - 'src/longpage.rs'
+      - 'src/longdrum.rs'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -76,6 +90,16 @@ jobs:
       - name: Build the counter's report from logs/
         run: python3 radbeeper export --logs logs -o monitor.html
 
+      # AFTER THE PYTHON'S REPORT AND NEVER OVER IT: `-o` points at the runner's
+      # temporary directory, so the only file this step leaves in the checkout
+      # is drums.html. It is written even for a fork with no logs yet, saying
+      # there is no record, because the landing page links to it either way.
+      - name: Build the day and month drums and the temperature from logs/
+        run: |
+          cargo run --release --locked -- export --logs logs \
+            -o "$RUNNER_TEMP/monitor.html" \
+            --drums-page --drums-output drums.html
+
       - name: Build the landing page and the lab reports from the documents
         run: python3 tools/landing.py
 
@@ -83,7 +107,7 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add index.html monitor.html docs/*.html docs/archive/*.html \
+          git add index.html monitor.html drums.html docs/*.html docs/archive/*.html \
                   sitemap.xml robots.txt .nojekyll
           # Only when there were emissions to account for: a fork with no
           # random-*.tsv has no random.html, and `git add` on a missing file
