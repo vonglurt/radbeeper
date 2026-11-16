@@ -183,16 +183,36 @@ impl Counts {
     pub fn binned(&self, start: f64, end: f64, bin: f64) -> Vec<Option<f64>> {
         let n = ((end - start) / bin).ceil().max(0.0) as usize;
         let mut sums = vec![(0.0f64, 0.0f64); n];
-        let from = self.rows.partition_point(|r| r.0 < start);
+        // A ROW IS DEALT OUT OVER THE BINS IT LIES ACROSS, by how much of it
+        // lies in each. A row is thirty of the counter's seconds, and the
+        // counter's second is a little over one of ours: the rows of a real
+        // log come every thirty-one seconds or so, and dropped whole into
+        // thirty-second bins by their middles they leave a bin with nothing
+        // in it every quarter of an hour. That read as a break in the record
+        // where there was none -- the window filled its long averages from
+        // the log back to the first such hole and stopped (2026-11-16).
+        // Rows longer than this are not looked for before `start`.
+        let from = self.rows.partition_point(|r| r.0 < start - 3600.0);
         for &(mid, counts, seconds) in &self.rows[from..] {
-            if mid >= end {
+            let (a, b) = (mid - seconds / 2.0, mid + seconds / 2.0);
+            if a >= end {
                 break;
             }
-            let k = (((mid - start) / bin) as usize).min(n.saturating_sub(1));
-            sums[k].0 += counts;
-            sums[k].1 += seconds;
+            if b <= start {
+                continue;
+            }
+            let first = (((a - start) / bin).floor().max(0.0)) as usize;
+            let last = ((((b - start) / bin).ceil()) as usize).min(n);
+            for (k, cell) in sums.iter_mut().enumerate().take(last).skip(first) {
+                let (lo, hi) = (start + k as f64 * bin, start + (k + 1) as f64 * bin);
+                let share = (b.min(hi) - a.max(lo)).max(0.0);
+                cell.0 += counts * share / seconds;
+                cell.1 += share;
+            }
         }
-        sums.iter().map(|(c, s)| (*s > 0.0).then(|| c / s)).collect()
+        // A bin is counted when most of it was: a sliver of a row's edge is
+        // not a measurement of the bin.
+        sums.iter().map(|(c, s)| (*s >= bin / 2.0).then(|| c / s)).collect()
     }
 }
 
@@ -612,6 +632,20 @@ mod tests {
         assert!(today.covered < 0.05, "and it says how little of the day it is");
         assert!(today.bands.iter().all(|b| b.0 <= 900.0 + 1.0));
         assert!((loudest(&today).0 / 300.0).ln().abs() < 0.12, "{:?}", loudest(&today));
+    }
+
+    #[test]
+    fn rows_a_little_over_thirty_seconds_apart_leave_no_holes() {
+        // What a real counter writes: a row every 30.6 seconds, each of 30.6.
+        let rows: Vec<(f64, f64, f64)> = (0..600)
+            .map(|k| (1_000_000.0 + 15.3 + k as f64 * 30.6, 21.0, 30.6))
+            .collect();
+        let end = 1_000_000.0 + 600.0 * 30.6;
+        let bins = Counts::from_rows(rows).binned(1_000_000.0, end, 30.0);
+        assert!(bins.iter().all(|b| b.is_some()), "a hole where the record has none");
+        let total: f64 = bins.iter().flatten().map(|cps| cps * 30.0).sum();
+        assert!((total - 600.0 * 21.0).abs() < 25.0, "and the counts are all still there: {}", total);
+        assert!(bins.iter().flatten().all(|cps| (cps - 21.0 / 30.6).abs() < 1e-9));
     }
 
     #[test]
