@@ -132,6 +132,16 @@ seconds. The counter's own memory is read back to fill in the time nothing
 was listening, and the whole record becomes a web page with one
 command.</p></div>
 
+<div class="fact"><h2>Days, weeks and months back</h2><p>Above the live
+chart, the same paper with <strong>a line for every day and every
+month</strong> the counter has logged, there the moment the window opens.
+What comes round once an hour shows as a stripe through the days.</p></div>
+
+<div class="fact"><h2>The temperature too</h2><p>A GMC-320 has a thermometer.
+It is read between two counts, logged beside them, and drawn
+<strong>a line a day</strong>, today against yesterday, in &deg;F and
+&deg;C.</p></div>
+
 <div class="fact"><h2>One counter or several</h2><p>Plug in a second and both
 are read, with nothing to set. The reading gets more precise, each keeps its
 own log, and one that stops answering is left out until it
@@ -178,12 +188,15 @@ doas adduser $USER dialout               # then log out and back in</code></pre>
 <h2 id="the-monitor">The monitor</h2>
 <pre><code class="language-sh">radbeeper watch</code></pre>
 <p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch.png" alt="the monitor" loading="lazy"></p>
-<p>Everything on one screen of a terminal: the reading in large digits, the five averages, the strip of counts, the check for rhythms, and the rows as they are written to the log.</p>
+<p>Everything on one screen of a terminal: the reading in large digits, the five averages, a small thermometer, the drum spectrogram with a line for each day and each month above it, the strip of counts, and the rows as they are written to the log.</p>
+<table><thead><tr><th>Key</th><th></th></tr></thead><tbody><tr><td><code>d</code></td><td>the day paper: shown, folded to one row, off</td></tr><tr><td><code>m</code></td><td>the month paper, the same</td></tr><tr><td><code>t</code></td><td>the temperature, ten days of it, a line a day</td></tr><tr><td><code>q</code></td><td>quit</td></tr></tbody></table>
+<p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-temperature.png" alt="the temperature in a terminal" loading="lazy"></p>
 <hr>
 <h2 id="the-window">The window</h2>
 <pre><code class="language-sh">radbeeper-gui</code></pre>
 <p><img src="https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-drum-window.png" alt="the window" loading="lazy"></p>
-<table><thead><tr><th>From the top</th><th>What it tells you</th></tr></thead><tbody><tr><td><strong>The counters</strong></td><td>Which counters are connected, and what each counted in the last second. An empty space means that counter has stopped answering.</td></tr><tr><td><strong>The dials</strong></td><td>The reading as a needle. The coloured bands are <em>nominal</em>, <em>advisory</em>, <em>warning</em> and <em>deadly</em>.</td></tr><tr><td><strong>The big number</strong></td><td>Counts per minute over the last half minute, how precise that is, and the dose rate.</td></tr><tr><td><strong>The averages</strong></td><td>The same reading over 3 seconds, 30 seconds, 5 minutes, 50 minutes and a working day.</td></tr><tr><td><strong>The striped chart</strong></td><td>The check for rhythms. Mostly green is the good answer. See <a href="docs/reading-the-drum-spectrogram.html">Reading the drum spectrogram</a>.</td></tr><tr><td><strong>The counts</strong></td><td>A bar for each second on the right, with older counts packed closer together to the left. The line over the bars is the trend. <strong>Point at a bar</strong> to see when it was and what it read.</td></tr><tr><td><strong>The key</strong></td><td>The newest random number, and which counter it came from.</td></tr><tr><td><strong>The table</strong></td><td>The trend line in numbers: for each panel of the counts, where the trend is now, its average over that panel, and its high and low, in CPM.</td></tr></tbody></table>
+<table><thead><tr><th>From the top</th><th>What it tells you</th></tr></thead><tbody><tr><td><strong>The counters</strong></td><td>Which counters are connected, and what each counted in the last second. An empty space means that counter has stopped answering.</td></tr><tr><td><strong>The dials</strong></td><td>The reading as a needle. The coloured bands are <em>nominal</em>, <em>advisory</em>, <em>warning</em> and <em>deadly</em>.</td></tr><tr><td><strong>The thermometer</strong></td><td>The counter's own temperature, top right, in °F and °C. Click it for ten days of it.</td></tr><tr><td><strong>The tiles</strong></td><td>A chart you have folded away, small, under the big number. Click one to open it.</td></tr><tr><td><strong>The big number</strong></td><td>Counts per minute over the last half minute, how precise that is, and the dose rate.</td></tr><tr><td><strong>The averages</strong></td><td>The same reading over 3 seconds, 30 seconds, 5 minutes, 50 minutes and a working day.</td></tr><tr><td><strong>The striped chart</strong></td><td>The check for rhythms. Mostly green is the good answer. The lines at its top are whole days, and above them whole months. See <a href="docs/reading-the-drum-spectrogram.html">Reading the drum spectrogram</a>.</td></tr><tr><td><strong>The counts</strong></td><td>A bar for each second on the right, with older counts packed closer together to the left. The line over the bars is the trend. <strong>Point at a bar</strong> to see when it was and what it read.</td></tr><tr><td><strong>The key</strong></td><td>The newest random number, and which counter it came from.</td></tr><tr><td><strong>The table</strong></td><td>The trend line in numbers: for each panel of the counts, where the trend is now, its average over that panel, and its high and low, in CPM.</td></tr></tbody></table>
+<p>The pictures of the window and the monitor on this page were taken on 16 November 2026 over made-up logs with rhythms put in on purpose, so there is something to see; a real room is mostly green. The moving picture at the top is older and shows the window before the day and month papers.</p>
 <p>The window follows your desktop's light or dark theme, and fits whatever space it is given: in a small window the table goes first and the charts last.</p>
 <hr>
 <h2 id="the-drum-spectrogram">The drum spectrogram</h2>
