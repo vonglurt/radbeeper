@@ -134,6 +134,10 @@ pub enum Event {
     /// about once a second for as long as it lasts, so a client whose read
     /// times out on silence stays attached through it.
     Note { text: String },
+    /// A counter's own thermometer, in degrees Celsius, and when it was
+    /// read. Only from a counter whose firmware has one and a server that
+    /// asks; about one every log interval. See `Server::publish_temp`.
+    Temp { who: usize, when: f64, celsius: f64 },
 }
 
 fn tab(fields: &[&str]) -> String {
@@ -182,6 +186,8 @@ pub struct Server {
     id: Identity,
     greeting: String,
     note: String,
+    /// The newest temperature of each counter that has given one, by index.
+    temps: Vec<Option<(f64, f64)>>,
 }
 
 impl Server {
@@ -217,6 +223,7 @@ impl Server {
             id: id.clone(),
             greeting,
             note: String::new(),
+            temps: Vec::new(),
         })
     }
 
@@ -284,6 +291,14 @@ impl Server {
         for (who, r) in &self.rows {
             out.push_str(&tab(&["row", &who.to_string(), r]));
         }
+        // The newest temperature of each counter, so a client that attaches,
+        // reads to `live` and leaves -- `radbeeper now` -- has it without
+        // waiting half a minute for the next.
+        for (who, at) in self.temps.iter().enumerate() {
+            if let Some((when, celsius)) = at {
+                out.push_str(&tab(&["t", &who.to_string(), &t(*when), &format!("{:.1}", celsius)]));
+            }
+        }
         out.push_str("live\n");
         w.write_all(out.as_bytes()).ok()?;
         w.flush().ok()?;
@@ -333,6 +348,20 @@ impl Server {
         }
         self.ring.push_back((who, when, counts));
         self.publish(&tab(&["s", &who.to_string(), &t(when), &counts.to_string()]));
+    }
+
+    /// A counter's temperature, to everyone attached, and kept for whoever
+    /// attaches next.
+    ///
+    /// A LINE OF ITS OWN, AND AN OLDER CLIENT NEVER SEES IT. `t` is a verb a
+    /// monitor built before this does not know, and an unknown verb is
+    /// skipped: see PROTOCOL, which this does not bump.
+    pub fn publish_temp(&mut self, who: usize, when: f64, celsius: f64) {
+        if self.temps.len() <= who {
+            self.temps.resize(who + 1, None);
+        }
+        self.temps[who] = Some((when, celsius));
+        self.publish(&tab(&["t", &who.to_string(), &t(when), &format!("{:.1}", celsius)]));
     }
 
     /// A row that has just gone into a counter's log.
@@ -590,6 +619,11 @@ fn parse(line: &str) -> Option<Event> {
         "gone" if f.len() >= 2 => Some(Event::Gone { who: f[1].parse().ok()? }),
         "live" => Some(Event::Live),
         "note" => Some(Event::Note { text: f.get(1).copied().unwrap_or("").to_string() }),
+        "t" if f.len() >= 4 => Some(Event::Temp {
+            who: f[1].parse().ok()?,
+            when: f[2].parse().ok()?,
+            celsius: f[3].parse().ok()?,
+        }),
         _ => None,
     }
 }
@@ -829,6 +863,28 @@ mod tests {
                 who: 0, hex: "abcd".into(), at: "11:00:30".into(), suspect: true
             })
         );
+    }
+
+    /// A temperature reaches a client that is attached, and one that attaches
+    /// afterwards is handed the newest before it is told the history is over.
+    #[test]
+    fn a_temperature_is_told_live_and_again_to_whoever_attaches_later() {
+        let dir = tmp("temp");
+        let mut s = Server::start(&dir, &pair()).unwrap();
+        let mut c = attached(&dir, &mut s);
+        assert_eq!(c.next(Duration::from_secs(2)), Some(Event::Live));
+        s.publish_temp(1, 1_700_000_000.25, 26.1);
+        assert_eq!(
+            c.next(Duration::from_secs(2)),
+            Some(Event::Temp { who: 1, when: 1_700_000_000.25, celsius: 26.1 })
+        );
+        s.publish_temp(1, 1_700_000_030.25, 26.2);
+        let mut late = attached(&dir, &mut s);
+        assert_eq!(
+            late.next(Duration::from_secs(2)),
+            Some(Event::Temp { who: 1, when: 1_700_000_030.25, celsius: 26.2 })
+        );
+        assert_eq!(late.next(Duration::from_secs(2)), Some(Event::Live));
     }
 
     /// A window that was closed costs the counter nothing: the write fails,

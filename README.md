@@ -30,11 +30,13 @@ radbeeper probe                    # it should name your counter
 | **A reading you can trust at a glance** | One big number, with dials beside it, and five averages from three seconds to a working day. |
 | **Half a day on one line** | A strip of counts that shows this second in detail and the past twelve hours in outline. |
 | **A check for anything that is not radiation** | The [drum spectrogram](docs/reading-the-drum-spectrogram.md) shows whether counts are arriving on a schedule, which decay never does. |
+| **Days, weeks and months back** | A line of the same chart for every day and every month the counter has logged, there the moment the window opens. |
 | **A record** | A row to disk every thirty seconds, whether or not a window is open. |
 | **No gaps** | The counter's own memory is read back to fill in the time nothing was listening. |
 | **A web page** | One self-contained page you can publish, with no scripts and nothing to host but the file. |
 | **Two counters at once** | Plug in a second and both are read, with no setting to change. |
 | **Random numbers** | 256-bit keys made from the timing of decay, with the evidence kept beside each one. |
+| **The temperature** | The counter's own thermometer, in °F and °C, logged beside the counts and drawn a line a day. |
 
 ---
 
@@ -57,10 +59,10 @@ logging carries on underneath and does not miss a second.
 
 | | |
 |---|---|
-| **The counter** | A **GQ GMC-320 Plus**. A GMC-300, 500 or 600 will be found and read too. |
+| **The counter** | A **GQ GMC-320 Plus**. A GMC-300, 500 or 600 will be found and read too. The temperature needs a GMC-320. |
 | **Its own USB cable** | The one that came with it. A charge-only cable carries no data, and the computer will see nothing. |
 | **The counter switched on** | It does not show up while it is off or flat. |
-| **Linux** | Alpine Linux, or [Copal](https://github.com/vonglurt/copal), which is built on it. |
+| **Linux** | Alpine Linux, or [Copal](https://github.com/vonglurt/copal), which is built on it. Since 16 November 2026 the program and the window also build and run on a Mac, from a copy of this repository; the boot service and plug-in rule are Linux only. |
 | **Permission to use the port** | The `adduser … dialout` line above, once. |
 
 If `radbeeper probe` finds nothing, it says which of four things is wrong.
@@ -141,6 +143,25 @@ background, yellow is as much as chance manages, red and white are more.**
 - **A hot stripe from top to bottom that stays put** — something real is
   arriving at that interval.
 
+### Days and months
+
+![the day and month papers](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-long-drums.png)
+
+Twelve minutes of paper cannot show what happens once an hour. Above the live
+drum are two more: **a line for each day and a line for each month**, made
+from the log the counter was already keeping, so they are full when the
+window opens. A stripe running up through the days is something that arrived
+on that schedule day after day. Click a paper, or press `d` or `m`, to fold
+it into a small tile beside the dials.
+
+### The temperature
+
+![the temperature drum](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/gui-temperature-drum.png)
+
+The small thermometer at the top right is the counter's own, in °F and °C.
+Click it, or press `t`, for the last ten days: a line a day, today's at the
+foot and yesterday's one track above.
+
 **[Reading the drum spectrogram](docs/reading-the-drum-spectrogram.md)** is
 the guide, with pictures. **[The drum
 spectrogram](docs/the-drum-spectrogram.md)** is the lab report on the
@@ -215,6 +236,7 @@ it.
 | `watch` | the monitor, logging while it is open; `--no-log` to only watch |
 | `clock` | how far the counter's clock is out; `--set` corrects it, as every start of `service` and `watch` does |
 | `cpm` | one 30-second average, for a script |
+| `now` | what the running service reads this minute, for another program: counts a minute, dose rate and temperature for each counter; `--json` for one object |
 | `service` | log every counter found |
 | `hotplug` | open the monitor when a counter is plugged in |
 | `backfill` | fill the log's gaps from the counter's memory |
@@ -239,5 +261,6 @@ it.
 | [Running it](docs/running-it.md) | starting at boot, and publishing |
 | [Technical description](docs/technical-description.md) | how it works: the hardware, the arithmetic, every part of the screen, the log and the keys |
 | [The drum spectrogram](docs/the-drum-spectrogram.md) | the lab report on the technique: how a line is computed, the thermal pen, and the measurements |
+| [The thermometer](docs/the-thermometer.md) | the lab report on reading the counter's temperature in the middle of its count stream |
 | [All the lab reports](docs/technical-description.md#the-lab-reports) | the reasoning behind each part of the program |
 | [Security](SECURITY.md) | what is in scope, and how the supply chain is kept small |

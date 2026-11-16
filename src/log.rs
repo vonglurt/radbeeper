@@ -268,6 +268,231 @@ pub fn path(when: f64, directory: &Path, serial: Option<&str>) -> PathBuf {
     ))
 }
 
+/// Where a counter's temperatures go: `temp-<serial>-YYYY-MM.tsv`, beside its
+/// counts and never among them.
+pub fn temp_path(when: f64, directory: &Path, serial: &str) -> PathBuf {
+    directory.join(format!("temp-{}-{}.tsv", serial, clock::format(when, "%Y-%m")))
+}
+
+/// One temperature, appended to that counter's temperature log.
+///
+/// A FILE OF ITS OWN, AND THE COUNT LOG IS NOT TOUCHED. The obvious place for
+/// a temperature is a column in the row beside the counts it was read with.
+/// That row's characters are pinned against the Python, byte for byte, by
+/// tests/test_differential.py, and every reader of it -- the report, the
+/// backfill's merge, the recompute -- matches columns by a header this would
+/// change in the middle of a month. A thermometer is not worth a second
+/// dialect of the format of record. So: the same stamp, the same month in the
+/// name, the same directory, and a name that starts `temp-`, which `files()`
+/// does not take for a counter because it only takes `cpm-`.
+///
+/// Opened, appended and closed each time: two rows a minute, and nothing held
+/// open for a backfill or a month's end to pull out from under it.
+pub fn write_temp(directory: &Path, serial: &str, when: f64, celsius: f64)
+    -> std::io::Result<()>
+{
+    let path = temp_path(when, directory, serial);
+    let fresh = fs::metadata(&path).map(|m| m.len() == 0).unwrap_or(true);
+    let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
+    if fresh {
+        writeln!(f, "#time\ttemp_c")?;
+    }
+    writeln!(f, "{}\t{:.1}", clock::stamp(when), celsius)
+}
+
+/// Every temperature a counter has logged since `since`, oldest first, as
+/// (when, degrees Celsius).
+///
+/// Read by whoever draws them. A window or a monitor attached to the service
+/// writes nothing and may read anything: the file is appended to a whole
+/// line at a time, and a last line caught half written fails to parse and
+/// is left out until the next look.
+pub fn read_temps(directory: &Path, serial: &str, since: f64) -> Vec<(f64, f64)> {
+    let head = format!("temp-{}-", serial);
+    let mut names: Vec<String> = match fs::read_dir(directory) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| n.starts_with(&head) && n.ends_with(".tsv"))
+            .collect(),
+        Err(_) => return Vec::new(),
+    };
+    names.sort();
+    // A month's file is skipped whole when the month after it began before
+    // `since`: its name says so, and ten days of drum must not cost a year
+    // of reading.
+    let first_month = clock::format(since - 32.0 * 86400.0, "%Y-%m");
+    let mut out = Vec::new();
+    for name in names {
+        let month = &name[head.len()..name.len() - 4];
+        if month < first_month.as_str() {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(directory.join(&name)) else { continue };
+        for line in text.lines() {
+            let mut cells = line.split('\t');
+            let (Some(stamp), Some(value)) = (cells.next(), cells.next()) else { continue };
+            let (Some(when), Ok(c)) = (clock::parse_stamp(stamp), value.parse::<f64>()) else {
+                continue;
+            };
+            if when >= since {
+                out.push((when, c));
+            }
+        }
+    }
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out
+}
+
+/// The serials that have a temperature log here, sorted.
+pub fn temp_serials(directory: &Path) -> Vec<String> {
+    let mut out: Vec<String> = match fs::read_dir(directory) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| n.starts_with("temp-") && n.ends_with(".tsv"))
+            .filter_map(|n| {
+                let stem = &n[5..n.len() - 4];
+                let mut parts = stem.rsplitn(3, '-');
+                parts.next()?;
+                parts.next()?;
+                parts.next().map(str::to_string)
+            })
+            .collect(),
+        Err(_) => return Vec::new(),
+    };
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Where the room's spectrum goes: `spectrum-YYYY-MM.tsv`.
+pub fn spectrum_path(when: f64, directory: &Path) -> PathBuf {
+    directory.join(format!("spectrum-{}.tsv", clock::format(when, "%Y-%m")))
+}
+
+/// The spectrum log's header for rows whose bins stand at these periods.
+///
+/// A COLUMN IS NAMED BY ITS PERIOD, in seconds, so a row can be read by
+/// somebody who has never seen this program: `p512` is how much of the
+/// counting came round once every 512 seconds, `p8` once every eight.
+pub fn spectrum_header(periods: &[f32]) -> String {
+    let mut head: Vec<String> =
+        ["time", "seconds", "tubes", "cps", "level"].iter().map(|s| s.to_string()).collect();
+    head.extend(periods.iter().map(|p| format!("p{}", g(*p as f64))));
+    format!("#{}", head.join("\t"))
+}
+
+/// One row of the room's spectrum, appended.
+///
+/// WHAT A ROW IS. One line of the drum spectrogram, kept: `seconds` of
+/// whole-second counts, summed across the tubes, ending at `time`; their
+/// mean, `cps`, which is the average count; `level`, that mean against the
+/// long average the drum holds a row to; and then a power for each period,
+/// longest first, as the drum draws them -- 1.0 is what chance alone puts
+/// in a bin, and a figure that stays well over it, row after row in the
+/// same column, is counts arriving on a schedule.
+///
+/// ONE ROW A WINDOW, NOT ONE A HOP. The drum on the screen takes a row every
+/// eight seconds, each sharing all but eight of its seconds with the last;
+/// written out, that is the same measurement sixty-four times over and
+/// sixteen megabytes a day. A row for each window end to end shares nothing
+/// with its neighbours, so each is news, and a day of them is a third of a
+/// megabyte.
+///
+/// A new header is written when the periods are not the last header's, so a
+/// row is always read under the columns it was written with.
+pub fn write_spectrum(
+    directory: &Path,
+    when: f64,
+    seconds: usize,
+    tubes: usize,
+    cps: f64,
+    level: f32,
+    bins: &[(f32, f32)],
+) -> std::io::Result<()> {
+    let path = spectrum_path(when, directory);
+    let periods: Vec<f32> = bins.iter().map(|b| b.0).collect();
+    let head = spectrum_header(&periods);
+    let mut f = fs::OpenOptions::new().create(true).append(true).open(&path)?;
+    if last_header(&path).as_deref() != Some(head.as_str()) {
+        writeln!(f, "{}", head)?;
+    }
+    let mut cells = vec![
+        clock::stamp(when),
+        seconds.to_string(),
+        tubes.to_string(),
+        format!("{:.4}", cps),
+        format!("{:.3}", level),
+    ];
+    cells.extend(bins.iter().map(|b| format!("{:.2}", b.1)));
+    writeln!(f, "{}", cells.join("\t"))
+}
+
+/// A row of the spectrum log, read back.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpectrumRow {
+    pub when: f64,
+    pub seconds: usize,
+    pub tubes: usize,
+    pub cps: f64,
+    pub level: f32,
+    /// (period, power), in the order written: the longest period first.
+    pub bins: Vec<(f32, f32)>,
+}
+
+/// Every row of the spectrum log since `since`, oldest first.
+pub fn read_spectrum(directory: &Path, since: f64) -> Vec<SpectrumRow> {
+    let mut names: Vec<String> = match fs::read_dir(directory) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter(|n| n.starts_with("spectrum-") && n.ends_with(".tsv"))
+            .collect(),
+        Err(_) => return Vec::new(),
+    };
+    names.sort();
+    let first_month = clock::format(since - 32.0 * 86400.0, "%Y-%m");
+    let mut out = Vec::new();
+    for name in names {
+        if &name[9..name.len() - 4] < first_month.as_str() {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(directory.join(&name)) else { continue };
+        let mut periods: Vec<f32> = Vec::new();
+        for line in text.lines() {
+            if let Some(head) = line.strip_prefix('#') {
+                periods = head
+                    .split('\t')
+                    .skip(5)
+                    .filter_map(|c| c.strip_prefix('p')?.parse().ok())
+                    .collect();
+                continue;
+            }
+            let cells: Vec<&str> = line.split('\t').collect();
+            if cells.len() != 5 + periods.len() {
+                continue;
+            }
+            let Some(when) = clock::parse_stamp(cells[0]) else { continue };
+            if when < since {
+                continue;
+            }
+            let (Ok(seconds), Ok(tubes), Ok(cps), Ok(level)) = (
+                cells[1].parse(), cells[2].parse(), cells[3].parse(), cells[4].parse(),
+            ) else { continue };
+            let powers: Vec<f32> = cells[5..].iter().filter_map(|c| c.parse().ok()).collect();
+            if powers.len() != periods.len() {
+                continue;
+            }
+            out.push(SpectrumRow {
+                when, seconds, tubes, cps, level,
+                bins: periods.iter().copied().zip(powers).collect(),
+            });
+        }
+    }
+    out
+}
+
 /// [(serial, path)] for every dated log in a directory, oldest name first.
 pub fn files(directory: &Path) -> Vec<(String, PathBuf)> {
     let mut names: Vec<String> = match fs::read_dir(directory) {
@@ -590,6 +815,69 @@ mod tests {
         (999999.4, "999999"),
         (0.00009999999, "0.0001"),
     ];
+
+    #[test]
+    fn a_temperature_goes_in_a_file_of_its_own_that_is_not_a_counter() {
+        let dir = std::env::temp_dir().join(format!("radbeeper-temp-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let when = clock::now();
+        write_temp(&dir, "F48824B8207F7E", when, 26.1).unwrap();
+        write_temp(&dir, "F48824B8207F7E", when + 30.0, -3.5).unwrap();
+        let text = fs::read_to_string(temp_path(when, &dir, "F48824B8207F7E")).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "#time\ttemp_c", "one header, at the top");
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[1], format!("{}\t26.1", clock::stamp(when)));
+        assert!(lines[2].ends_with("\t-3.5"));
+        assert!(row_time(lines[1]).is_some(), "the stamp reads back as a row's does");
+        assert!(files(&dir).is_empty(), "and it is not taken for a count log");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn temperatures_read_back_in_order_from_the_months_that_matter() {
+        let dir = std::env::temp_dir().join(format!("radbeeper-rtemp-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let now = clock::now().floor();
+        for k in 0..5 {
+            write_temp(&dir, "AAAA", now - 86400.0 * (4 - k) as f64, 20.0 + k as f64).unwrap();
+        }
+        write_temp(&dir, "BBBB", now, 31.5).unwrap();
+        let all = read_temps(&dir, "AAAA", 0.0);
+        assert_eq!(all.iter().map(|t| t.1).collect::<Vec<_>>(), vec![20.0, 21.0, 22.0, 23.0, 24.0]);
+        assert!(all.windows(2).all(|w| w[0].0 < w[1].0));
+        let late = read_temps(&dir, "AAAA", now - 86400.0 * 1.5);
+        assert_eq!(late.iter().map(|t| t.1).collect::<Vec<_>>(), vec![23.0, 24.0]);
+        assert_eq!(temp_serials(&dir), vec!["AAAA".to_string(), "BBBB".to_string()]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_spectrum_row_reads_back_under_the_header_it_was_written_with() {
+        let dir = std::env::temp_dir().join(format!("radbeeper-spec-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let now = clock::now().floor();
+        let a = [(512.0f32, 1.25f32), (256.0, 0.5), (170.667, 7.75)];
+        write_spectrum(&dir, now - 512.0, 512, 2, 0.6543, 1.02, &a).unwrap();
+        write_spectrum(&dir, now, 512, 2, 0.7, 0.98, &a).unwrap();
+        // Other periods: a new header, and the rows above it keep theirs.
+        let b = [(1024.0f32, 2.0f32), (512.0, 1.0)];
+        write_spectrum(&dir, now + 512.0, 1024, 1, 0.3, 1.0, &b).unwrap();
+        let text = fs::read_to_string(spectrum_path(now, &dir)).unwrap();
+        assert_eq!(text.lines().filter(|l| l.starts_with('#')).count(), 2);
+        assert!(text.starts_with("#time\tseconds\ttubes\tcps\tlevel\tp512\tp256\tp170.667\n"));
+        let rows = read_spectrum(&dir, 0.0);
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].bins, a.to_vec());
+        assert_eq!((rows[1].tubes, rows[1].cps, rows[1].level), (2, 0.7, 0.98));
+        assert_eq!(rows[2].bins, b.to_vec());
+        assert_eq!(read_spectrum(&dir, now + 1.0).len(), 1);
+        assert!(files(&dir).is_empty(), "and it is not taken for a count log");
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn g_agrees_with_python() {

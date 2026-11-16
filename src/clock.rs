@@ -58,6 +58,17 @@ pub fn format(t: f64, fmt: &str) -> String {
     String::from_utf8_lossy(&buf[..n]).into_owned()
 }
 
+/// The local midnight a moment's day began at, as seconds since the epoch.
+///
+/// From the broken-down time and not from dividing by 86,400: a day is cut
+/// where the clock on the wall says midnight, and the wall's clock is not
+/// UTC's. On the two days a year the clocks change the day is an hour long
+/// or short, and this is still where it began.
+pub fn day_start(t: f64) -> f64 {
+    let tm = broken_down(t.floor() as i64);
+    t.floor() - (tm.tm_hour as f64 * 3600.0 + tm.tm_min as f64 * 60.0 + tm.tm_sec as f64)
+}
+
 /// The log's timestamp column, and the only shape written anywhere.
 pub fn stamp(t: f64) -> String {
     format(t, "%Y-%m-%dT%H:%M:%S")

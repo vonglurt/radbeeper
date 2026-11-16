@@ -26,10 +26,19 @@ asks for an exact count and times out rather than blocking.
 | `<GETCPS>>` | 2 bytes, mask `0x3FFF` |
 | `<HEARTBEAT1>>` | then 2 bytes every second until `<HEARTBEAT0>>` |
 | `<GETVOLT>>` | 1 byte, tenths of a volt |
+| `<GETTEMP>>` | 4 bytes: degrees Celsius, tenths, a sign, `0xAA`. GMC-320 Re 3.01 or later. Answered in the middle of a heartbeat stream; `55 00 00 AA` (85.0) is the thermometer not having read yet |
 | `<GETDATETIME>>` | 7 bytes |
 | `<SPIR[addr][len]>>` | `len` bytes of history flash |
 
 Baud is 115200 on the 320 and 57600 on the 300; RadBeeper tries both.
+
+**Asking the running service, not the counter.** `radbeeper now` prints each
+counter's counts a minute, dose rate and temperature from the service's stream,
+and `radbeeper now --json` gives the same as one object. It never opens the
+port. `--temp-every SECONDS` sets how often the service asks a counter its
+temperature (the row spacing by default), `--no-temp` asks nothing, and
+`--no-spectrum` keeps no spectrum log. [The thermometer](the-thermometer.md) is
+the report.
 
 There is no `pyserial`. Alpine packages it, but this runs on a Pi Zero with 512 MB
 and on a fresh install with no network, and a serial port is thirty lines of

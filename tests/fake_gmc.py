@@ -112,6 +112,19 @@ class FakeGMC(threading.Thread):
         # How many <SPIR>> replies to cut short before answering whole: a
         # link that drops bytes now and then, which the reader must survive.
         self.short_spir = 0
+        # What <GETVER>> says. A firmware older than Re 3.01, or another
+        # model, is one the protocol document does not promise <GETTEMP>> to.
+        self.version = VERSION
+        # The thermometer: degrees Celsius, to the tenth. `temp_cold` is how
+        # many times it answers 85.0 first -- what the real one says before
+        # it has read -- and `temp_known` False is a firmware that ignores
+        # the command altogether and sends nothing back.
+        self.temp = 26.1
+        self.temp_cold = 0
+        self.temp_known = True
+        # Every count sent down the stream, in order, flags off: what a
+        # reader must have seen, no more and no fewer.
+        self.sent = []
         self.running = True
         self.commands = []
 
@@ -149,9 +162,13 @@ class FakeGMC(threading.Thread):
             if self.heartbeat and time.monotonic() >= next_beat:
                 # The real device sets flag bits in the top two; masking them
                 # off is the receiver's job and this makes sure it does it.
-                value = self._draw() | 0x8000
-                self._send(struct.pack(">H", value & 0xFFFF))
+                self._beat()
                 next_beat += self.tick
+
+    def _beat(self):
+        n = self._draw()
+        self.sent.append(n)
+        self._send(struct.pack(">H", (n | 0x8000) & 0xFFFF))
 
     def _send(self, data):
         try:
@@ -175,9 +192,19 @@ class FakeGMC(threading.Thread):
         self.commands.append(cmd)
         body = cmd[1:-2]
         if self.heartbeat and self.interleave:
-            self._send(struct.pack(">H", self._draw() | 0x8000))
+            self._beat()
         if body == b"GETVER":
-            self._send(VERSION)
+            self._send(self.version)
+        elif body == b"GETTEMP":
+            if not self.temp_known:
+                return
+            if self.temp_cold > 0:
+                self.temp_cold -= 1
+                self._send(bytes([85, 0, 0, 0xAA]))
+                return
+            tenths = int(round(abs(self.temp) * 10))
+            self._send(bytes([tenths // 10, tenths % 10,
+                              1 if self.temp < 0 else 0, 0xAA]))
         elif body == b"GETSERIAL":
             self._send(self.serial)
         elif body == b"GETCPM":

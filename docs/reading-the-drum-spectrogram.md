@@ -120,6 +120,106 @@ yellow always means the same thing.
 
 ---
 
+## Days and months: the long papers
+
+*Added 16 November 2026.*
+
+![the day and month papers over the live drum](screenshots/gui-long-drums.png)
+
+The drum at the foot holds twelve minutes. A rhythm that comes round once an
+hour is not in twelve minutes of anything. So there are two more papers above
+it, drawn with the same pen on the same ground:
+
+| Paper | A line is | Left to right |
+|---|---|---|
+| **Days** | one whole day, midnight to midnight; today's is at the foot | once every 8 hours, to once every 2 minutes |
+| **Months** | one calendar month | once every 10 days, to once every 20 minutes |
+
+They are read the same way as the drum below them. **A stripe that runs up
+through line after line, in the same place, is something arriving on that
+schedule day after day.** In the picture the stripe at `20m` is on every day,
+and the month line above stands up at `1d`: something that rises and falls
+once a day.
+
+**They are full the moment the window opens.** The lines are worked out from
+the log the counter has been keeping all along, a row every thirty seconds,
+so every day and month there is a log for has its line, including the ones
+from before this was added.
+
+**Today's line is drawn before today is over.** It starts short, reaching only
+the quick rhythms, and grows to the left as the day goes on. A line is not
+asked about anything that has not had time to come round three times.
+
+**A break is closed up.** A day when the counter was away has no line, and
+the next day that has one sits directly above. The small dates down the left
+edge say which day a line is.
+
+**The live drum gives way to them.** As the papers gain lines they take room
+from the top of the live drum's history, a line at a time. The counts under
+the drum keep all their room.
+
+### What the same days look like as they arrive
+
+![a few hours](screenshots/gui-build-1.png)
+
+*A few hours of record: one short line for today.*
+
+![three days](screenshots/gui-build-2.png)
+
+*Three days.*
+
+![twenty days](screenshots/gui-build-3.png)
+
+*Twenty days. An hourly rhythm that lasted one week shows on those seven
+lines and no others.*
+
+These three are made-up logs, written by `cargo run --release --example
+sample_logs`, with a twenty-minute rhythm, a daily rise and fall and one week
+of an hourly rhythm put in on purpose. Decay alone leaves every line green.
+
+### Tucking a paper away
+
+![the papers as tiles beside the dials](screenshots/gui-drum-tiles.png)
+
+Click a paper, or press `d` for days and `m` for months, and it folds into a
+small tile under the big number, beside the dials. Click the tile to open it
+again. The live drum then has the room back.
+
+---
+
+## The temperature drum
+
+![the temperature drum](screenshots/gui-temperature-drum.png)
+
+A GMC-320 has a thermometer, and the service now reads it. The small
+thermometer at the top right runs from 50 to 100 °F and gives the reading in
+°F and °C. Click it, or press `t`, and the last ten days are laid down the
+way a drum recorder would: **a line a day, today's at the foot, yesterday's
+one track above.**
+
+Every line is drawn to the same scale about the same temperature, so today
+can be read against yesterday directly above it. A track is worth an ordinary
+day's rise and fall, so a day like most days stays inside its own track. A
+day that went out of the ordinary crosses into its neighbour's, and its pen
+turns hot where it does. A room held steady to a twentieth of a degree is a
+flat line.
+
+The temperature is the inside of the counter's case, not the air of the room.
+[The thermometer](the-thermometer.md) is the report on how it is read.
+
+---
+
+## In a terminal
+
+![the terminal monitor with the three papers](screenshots/watch-drum.png)
+
+`radbeeper watch` draws the same three papers in a terminal, in Braille dots,
+with the same colours and the same period marks. `d` and `m` turn the day and
+month papers through shown, folded to one row, and off; `t` swaps the charts
+for the temperature drum.
+
+---
+
 ## Where it is
 
 Run `radbeeper-gui` with a counter attached. The chart is drawn when the

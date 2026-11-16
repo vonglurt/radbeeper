@@ -52,7 +52,14 @@ pub fn candidate_ports() -> Vec<String> {
         let mut names: Vec<String> = entries
             .filter_map(|e| e.ok())
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with("ttyUSB") || n.starts_with("ttyACM"))
+            // `cu.usbserial-*` is the same adapter on a Mac: the calling-out
+            // node, which opens without waiting for a carrier the counter
+            // never raises. Linux has no node of that name, so the one list
+            // serves both.
+            .filter(|n| {
+                n.starts_with("ttyUSB") || n.starts_with("ttyACM")
+                    || n.starts_with("cu.usbserial")
+            })
             .collect();
         names.sort();
         out.extend(names.into_iter().map(|n| format!("/dev/{}", n)));
@@ -72,6 +79,76 @@ fn usb_serial_driver_present() -> bool {
         }
     }
     false
+}
+
+/// What came back from a temperature question asked in the middle of the
+/// stream.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TempAnswer {
+    /// Degrees Celsius, to the tenth the counter gives.
+    Degrees(f64),
+    /// The counter answered, with the reading its thermometer holds before
+    /// it has taken one. Ask again in a moment. See `decode_temp`.
+    NotYet,
+    /// Nothing came back at all: this firmware does not know the command.
+    Silent,
+    /// Bytes came back and they were not an answer.
+    Garbled,
+}
+
+/// A temperature question's whole result: the answer, and a second of counts
+/// if one arrived on the wire in front of it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StreamTemp {
+    pub answer: TempAnswer,
+    pub sample: Option<u16>,
+}
+
+/// Whether this firmware answers <GETTEMP>>.
+///
+/// GQ's protocol document (GQ-RFC1201) gives it to "GMC-320 Re.3.01 or
+/// later" and to nothing else, and both units this was written against are
+/// GMC-320s: "GMC-320Re 4.26" and "GMC-320+V4Re 4.83". A model the document
+/// does not name is not asked. A wrong guess would cost nothing but the
+/// question -- see `temp_in_stream`, which gives up on a counter that stays
+/// silent -- but a question the maker never promised an answer to is not one
+/// to put to an instrument every half minute.
+pub fn temp_supported(version: &str) -> bool {
+    if model_of(version) != "GMC-320" {
+        return false;
+    }
+    let Some(at) = version.rfind("Re") else { return false };
+    let digits: String = version[at + 2..]
+        .trim()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    digits.parse::<f64>().map(|v| v >= 3.01).unwrap_or(false)
+}
+
+/// Four bytes of <GETTEMP>> as degrees, or what else they are.
+///
+/// WHOLE DEGREES, TENTHS, A SIGN, AND 0xAA. 1A 01 00 AA is 26.1 C, which is
+/// what the counter's own screen said beside it (2026-11-16, Re 4.26).
+///
+/// 85.0 IS NOT A TEMPERATURE. It is what both counters answered the first
+/// time each was asked on 2026-11-15, and what the Re 4.26 answered first
+/// after being plugged in the next morning, half a minute before it said
+/// 26.1 and went on saying it. 85 C is the value a one-wire thermometer of
+/// the usual kind holds until it has made its first conversion; whether that
+/// is the part inside is not known, and it does not need to be: a handheld
+/// counter at 85 C has other problems, and the reading that follows is real.
+pub fn decode_temp(r: &[u8]) -> TempAnswer {
+    if r.len() != 4 || r[3] != 0xAA || r[1] > 9 {
+        return TempAnswer::Garbled;
+    }
+    if r[0] == 85 && r[1] == 0 && r[2] == 0 {
+        return TempAnswer::NotYet;
+    }
+    // Tenths as a whole number and ONE division, so 1A 01 is the double
+    // nearest 26.1 and not a sum that lands one bit beside it.
+    let v = (r[0] as f64 * 10.0 + r[1] as f64) / 10.0;
+    TempAnswer::Degrees(if r[2] != 0 { -v } else { v })
 }
 
 impl Counter {
@@ -267,6 +344,64 @@ impl Counter {
     pub fn next_sample(&self, timeout: Duration) -> Option<u16> {
         let r = self.port.read_exact_or_timeout(2, timeout);
         (r.len() == 2).then(|| u16::from_be_bytes([r[0], r[1]]) & COUNT_MASK)
+    }
+
+    /// Ask the temperature WITHOUT STOPPING THE STREAM, and without losing a
+    /// second of it.
+    ///
+    /// THE COUNTER ANSWERS MID-STREAM, AND GOES ON COUNTING. Measured on the
+    /// Re 4.26 on 2026-11-16: with <HEARTBEAT1>> on, nine questions in forty
+    /// seconds each came back whole 55 ms after they were sent, and every one
+    /// of the forty seconds arrived, a second apart, as though nothing had
+    /// been asked. So there is no handover here, no <HEARTBEAT0>>, and above
+    /// all NO FLUSH: `ask` empties the input first, which is right for a
+    /// conversation and here would throw away whatever second was in flight.
+    ///
+    /// CALL IT STRAIGHT AFTER A SAMPLE. The next one is then a second away and
+    /// the answer a twentieth of one, so the four bytes that arrive are the
+    /// answer. But the stream has no framing, and "almost always" is how a
+    /// log gets a second of 170 counts in it, so the other order is handled
+    /// too: if the first four bytes are not an answer, two more are waited
+    /// for, and if the last four of the six ARE one, the first two were a
+    /// second of counts that got in ahead of it. That second is handed back
+    /// with the answer, not dropped.
+    ///
+    /// Anything else is garbage, and the port is left to fall quiet before the
+    /// reader goes back to taking two bytes at a time: half an answer left in
+    /// the buffer would be read as counts.
+    pub fn temp_in_stream(&self) -> StreamTemp {
+        if self.port.write_all(b"<GETTEMP>>").is_err() {
+            return StreamTemp { answer: TempAnswer::Silent, sample: None };
+        }
+        let mut r = self.port.read_exact_or_timeout(4, Duration::from_millis(300));
+        let sample_of = |b: &[u8]| u16::from_be_bytes([b[0], b[1]]) & COUNT_MASK;
+        match r.len() {
+            0 => StreamTemp { answer: TempAnswer::Silent, sample: None },
+            // Two bytes and then nothing: a second of counts, and no answer
+            // behind it.
+            2 => StreamTemp { answer: TempAnswer::Silent, sample: Some(sample_of(&r)) },
+            4 => {
+                let first = decode_temp(&r);
+                if first != TempAnswer::Garbled {
+                    return StreamTemp { answer: first, sample: None };
+                }
+                r.extend_from_slice(
+                    &self.port.read_exact_or_timeout(2, Duration::from_millis(150)),
+                );
+                if r.len() == 6 {
+                    let late = decode_temp(&r[2..]);
+                    if late != TempAnswer::Garbled {
+                        return StreamTemp { answer: late, sample: Some(sample_of(&r)) };
+                    }
+                }
+                self.port.drain(Duration::from_millis(20));
+                StreamTemp { answer: TempAnswer::Garbled, sample: None }
+            }
+            _ => {
+                self.port.drain(Duration::from_millis(20));
+                StreamTemp { answer: TempAnswer::Garbled, sample: None }
+            }
+        }
     }
 }
 
@@ -466,4 +601,43 @@ fn find_in(ports: &[String], baud: Option<u32>, mut busy: Vec<String>) -> Result
         detail: format!("Tried {}. None answered <GETVER>> with a GMC version.", ports.join(", ")),
         busy: false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn four_bytes_are_degrees_tenths_a_sign_and_an_end() {
+        assert_eq!(decode_temp(&[0x1A, 0x01, 0x00, 0xAA]), TempAnswer::Degrees(26.1));
+        assert_eq!(decode_temp(&[0x03, 0x05, 0x01, 0xAA]), TempAnswer::Degrees(-3.5));
+        assert_eq!(decode_temp(&[0x00, 0x00, 0x00, 0xAA]), TempAnswer::Degrees(0.0));
+    }
+
+    #[test]
+    fn eighty_five_is_the_thermometer_not_having_read_yet() {
+        assert_eq!(decode_temp(&[0x55, 0x00, 0x00, 0xAA]), TempAnswer::NotYet);
+        // 85.1 would be a reading, absurd as it is: only the exact resting
+        // value is refused.
+        assert_eq!(decode_temp(&[0x55, 0x01, 0x00, 0xAA]), TempAnswer::Degrees(85.1));
+    }
+
+    #[test]
+    fn two_seconds_of_counts_are_not_a_temperature() {
+        // What two heartbeat samples look like, back to back.
+        assert_eq!(decode_temp(&[0x80, 0x00, 0x80, 0x03]), TempAnswer::Garbled);
+        assert_eq!(decode_temp(&[0x1A, 0x0B, 0x00, 0xAA]), TempAnswer::Garbled);
+        assert_eq!(decode_temp(&[0x1A, 0x01, 0x00]), TempAnswer::Garbled);
+    }
+
+    #[test]
+    fn only_the_firmware_the_document_names_is_asked() {
+        assert!(temp_supported("GMC-320Re 4.26"));
+        assert!(temp_supported("GMC-320+V4Re 4.83"));
+        assert!(temp_supported("GMC-320Re 3.01"));
+        assert!(!temp_supported("GMC-320Re 2.10"));
+        assert!(!temp_supported("GMC-300Re 4.26"));
+        assert!(!temp_supported("GMC-500+Re 2.24"));
+        assert!(!temp_supported("GMC-320"));
+    }
 }

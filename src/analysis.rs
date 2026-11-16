@@ -841,6 +841,143 @@ impl Trail {
     }
 }
 
+/// Degrees Fahrenheit for degrees Celsius.
+pub fn fahrenheit(celsius: f64) -> f64 {
+    celsius * 9.0 / 5.0 + 32.0
+}
+
+/// The thermometer's scale, in Fahrenheit: a room, from cold to hot.
+pub const THERMO_LOW_F: f64 = 50.0;
+pub const THERMO_HIGH_F: f64 = 100.0;
+
+/// How far up a thermometer from 50 F to 100 F a temperature stands: 0.0 at
+/// the bottom, 1.0 at the top, and held at the ends beyond them.
+pub fn thermo_fraction(celsius: f64) -> f64 {
+    ((fahrenheit(celsius) - THERMO_LOW_F) / (THERMO_HIGH_F - THERMO_LOW_F)).clamp(0.0, 1.0)
+}
+
+/// The least a track of the temperature drum is worth, in degrees Celsius.
+///
+/// A ROOM THAT HOLDS TO A TWENTIETH OF A DEGREE EITHER WAY MUST READ AS A
+/// LINE INSIDE ITS TRACK. The counter gives tenths, so a steady room is two
+/// neighbouring readings and nothing else; with a track worth less than the
+/// step between them the line would be a square wave across its neighbours.
+pub const TEMP_TRACK_MIN: f64 = 0.1;
+
+/// One day of the temperature drum.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TempLine {
+    /// The local midnight the day began at.
+    pub day: f64,
+    /// A cell for each column of the day, midnight on the left: how far the
+    /// temperature stood from the drum's reference, IN TRACKS -- 0.5 is the
+    /// top edge of this line's own track, -0.5 its bottom, and beyond them
+    /// is the next line's ground. None where nothing was read.
+    pub cells: Vec<Option<f32>>,
+    /// The day's own mean, lowest and highest, in degrees Celsius; None for
+    /// a day with no readings.
+    pub mean: Option<f64>,
+    pub low: Option<f64>,
+    pub high: Option<f64>,
+}
+
+/// The temperature as a drum recorder would lay it down: a line a day,
+/// today's at the bottom and yesterday's one track above it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TempDrum {
+    /// The temperature every line's own baseline stands for.
+    pub reference: f64,
+    /// What one track is worth, in degrees Celsius.
+    pub span: f64,
+    /// Newest day first; always `days` of them, the empty ones included, so
+    /// the paper is the same size on the first day as on the tenth.
+    pub lines: Vec<TempLine>,
+}
+
+/// Lay `samples` -- (when, degrees Celsius), in any order -- down as a drum
+/// of `days` lines of `columns` cells, ending with the day `now` is in.
+///
+/// ONE PEN, ONE SCALE, ONE REFERENCE. Every line is the same temperature at
+/// its baseline and the same degrees to a track, so today's line can be
+/// read against yesterday's directly above it: where they run a track apart
+/// the room was as it was, and where they close up or cross it was not.
+///
+/// A TRACK IS WORTH AN ORDINARY DAY. The span is the middle one of the days'
+/// own ranges -- each day's from its twentieth warmest cell to its
+/// twentieth coldest, so one open window does not set the scale -- and a
+/// quarter more for margin. A day like most days therefore stays inside its
+/// track, and only a day that went out of the ordinary reaches into its
+/// neighbour's, which is the thing the paper is for seeing. Never less than
+/// `TEMP_TRACK_MIN`.
+///
+/// The reference is the middle of everything on the paper, so the lines sit
+/// about their baselines and not all above or all below them.
+pub fn temp_drum(samples: &[(f64, f64)], now: f64, columns: usize, days: usize) -> TempDrum {
+    let columns = columns.max(1);
+    let days = days.max(1);
+    // The days on the paper, newest first, by the midnights they began at.
+    // Stepping back from a midnight by half a day and asking again lands in
+    // the day before whatever the clocks did that night.
+    let mut starts = Vec::with_capacity(days);
+    let mut at = crate::clock::day_start(now);
+    for _ in 0..days {
+        starts.push(at);
+        at = crate::clock::day_start(at - 43200.0);
+    }
+    let mut sums = vec![vec![(0.0f64, 0u32); columns]; days];
+    for &(when, c) in samples {
+        let Some(k) = starts.iter().position(|s| when >= *s) else { continue };
+        if k > 0 && when >= starts[k - 1] {
+            continue;
+        }
+        let length = if k == 0 { 86400.0 } else { starts[k - 1] - starts[k] };
+        let col = (((when - starts[k]) / length) * columns as f64) as usize;
+        let cell = &mut sums[k][col.min(columns - 1)];
+        cell.0 += c;
+        cell.1 += 1;
+    }
+    let means: Vec<Vec<Option<f64>>> = sums
+        .iter()
+        .map(|d| d.iter().map(|(s, n)| (*n > 0).then(|| s / *n as f64)).collect())
+        .collect();
+    let middle = |mut v: Vec<f64>| -> Option<f64> {
+        if v.is_empty() {
+            return None;
+        }
+        v.sort_by(|a, b| a.total_cmp(b));
+        Some(v[v.len() / 2])
+    };
+    let ranges: Vec<f64> = means
+        .iter()
+        .filter_map(|d| {
+            let mut v: Vec<f64> = d.iter().flatten().copied().collect();
+            if v.len() < 2 {
+                return None;
+            }
+            v.sort_by(|a, b| a.total_cmp(b));
+            let cut = v.len() / 20;
+            Some(v[v.len() - 1 - cut] - v[cut])
+        })
+        .collect();
+    let span = (middle(ranges).unwrap_or(0.0) * 1.25).max(TEMP_TRACK_MIN);
+    let reference = middle(means.iter().flatten().flatten().copied().collect()).unwrap_or(0.0);
+    let lines = starts
+        .iter()
+        .zip(&means)
+        .map(|(day, cells)| {
+            let have: Vec<f64> = cells.iter().flatten().copied().collect();
+            TempLine {
+                day: *day,
+                cells: cells.iter().map(|c| c.map(|v| ((v - reference) / span) as f32)).collect(),
+                mean: (!have.is_empty()).then(|| have.iter().sum::<f64>() / have.len() as f64),
+                low: have.iter().copied().reduce(f64::min),
+                high: have.iter().copied().reduce(f64::max),
+            }
+        })
+        .collect();
+    TempDrum { reference, span, lines }
+}
+
 /// A running average of periodograms over a fixed window.
 ///
 /// Radioactive decay is Poisson and the power spectrum of a Poisson process is
@@ -1718,6 +1855,90 @@ pub fn bar_rows_to(values: &[Option<f64>], height: usize, peak: f64) -> Vec<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Readings every `step` seconds over the `back`-th day before `now`'s,
+    /// from a function of the hour of the day.
+    fn day_of(now: f64, back: usize, step: f64, f: impl Fn(f64) -> f64) -> Vec<(f64, f64)> {
+        let mut start = crate::clock::day_start(now);
+        for _ in 0..back {
+            start = crate::clock::day_start(start - 43200.0);
+        }
+        let mut out = Vec::new();
+        let mut t = 0.0;
+        while t < 86400.0 && start + t <= now {
+            out.push((start + t, f(t / 3600.0)));
+            t += step;
+        }
+        out
+    }
+
+    #[test]
+    fn a_thermometer_runs_from_fifty_to_a_hundred_fahrenheit() {
+        assert_eq!(fahrenheit(0.0), 32.0);
+        assert!((fahrenheit(26.1) - 78.98).abs() < 1e-9);
+        assert_eq!(thermo_fraction(10.0), 0.0);
+        assert!((thermo_fraction(23.888_888_888_888_89) - 0.5).abs() < 1e-9);
+        assert_eq!(thermo_fraction(60.0), 1.0);
+        assert_eq!(thermo_fraction(-5.0), 0.0);
+    }
+
+    #[test]
+    fn a_steady_room_stays_inside_its_track() {
+        // Two neighbouring readings and nothing else: 26.0 and 26.1, which
+        // is a room held to a twentieth of a degree either way.
+        let now = crate::clock::day_start(1_800_000_000.0) + 86399.0;
+        let mut samples = Vec::new();
+        for back in 0..3 {
+            samples.extend(day_of(now, back, 30.0, |h| if (h * 7.0) as i64 % 2 == 0 { 26.0 } else { 26.1 }));
+        }
+        let drum = temp_drum(&samples, now, 96, 10);
+        assert_eq!(drum.lines.len(), 10, "the paper is ten lines from the first day");
+        assert_eq!(drum.span, TEMP_TRACK_MIN);
+        for line in &drum.lines[..3] {
+            assert!(line.cells.iter().flatten().all(|c| c.abs() <= 0.5 + 1e-6),
+                    "a steady day left its track: {:?}", line.cells);
+        }
+        assert!(drum.lines[3].cells.iter().all(|c| c.is_none()));
+        assert_eq!(drum.lines[3].mean, None);
+    }
+
+    #[test]
+    fn an_ordinary_day_fits_and_an_odd_one_reaches_into_its_neighbour() {
+        let now = crate::clock::day_start(1_800_000_000.0) + 86399.0;
+        let swing = |h: f64| 22.0 + 1.5 * (std::f64::consts::PI * (h - 9.0) / 12.0).sin();
+        let mut samples = Vec::new();
+        for back in 1..6 {
+            samples.extend(day_of(now, back, 60.0, swing));
+        }
+        // Today the same, with six degrees more for two hours in the afternoon.
+        samples.extend(day_of(now, 0, 60.0, |h| swing(h) + if (14.0..16.0).contains(&h) { 6.0 } else { 0.0 }));
+        let drum = temp_drum(&samples, now, 144, 10);
+        assert!(drum.span > 3.0 && drum.span < 4.2, "a track is an ordinary day and a quarter: {}", drum.span);
+        assert!((drum.reference - 22.0).abs() < 0.6, "{}", drum.reference);
+        for line in &drum.lines[1..6] {
+            assert!(line.cells.iter().flatten().all(|c| c.abs() <= 0.5), "an ordinary day left its track");
+            assert!((line.mean.unwrap() - 22.0).abs() < 0.05);
+        }
+        let top = drum.lines[0].cells.iter().flatten().fold(f32::MIN, |a, b| a.max(*b));
+        assert!(top > 1.0, "the odd afternoon should stand a track over its own: {}", top);
+        assert!((drum.lines[0].high.unwrap() - drum.lines[1].high.unwrap()) > 5.0);
+    }
+
+    #[test]
+    fn a_reading_lands_in_the_column_of_its_hour_on_the_line_of_its_day() {
+        let now = crate::clock::day_start(1_800_000_000.0) + 3600.0 * 18.0;
+        let today = crate::clock::day_start(now);
+        let yesterday = crate::clock::day_start(today - 43200.0);
+        let samples = vec![(today + 3600.0 * 6.0 + 5.0, 20.0), (yesterday + 3600.0 * 12.0 + 5.0, 21.0),
+                           (yesterday - 10.0 * 86400.0, 99.0)];
+        let drum = temp_drum(&samples, now, 24, 2);
+        let at = |k: usize| drum.lines[k].cells.iter().position(|c| c.is_some());
+        assert_eq!(at(0), Some(6));
+        assert_eq!(at(1), Some(12));
+        assert_eq!(drum.lines[0].day, today);
+        assert_eq!(drum.lines[1].day, yesterday);
+        assert_eq!(drum.lines[0].high, Some(20.0), "a reading from before the paper is not on it");
+    }
 
     /// Samples a second apart, as the heartbeat delivers them.
     fn fill(w: &mut Windows, counts: &[u32]) {

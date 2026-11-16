@@ -83,6 +83,66 @@ the page side by side, under **The merged record**.
 
 ---
 
+## Two more files: the temperature and the spectrum
+
+Neither is a column in the count log. That file's characters are fixed, and a
+new column would change its header in the middle of a month.
+
+**`temp-<serial>-YYYY-MM.tsv`** is a counter's own thermometer, where its
+firmware has one (a GMC-320, Re 3.01 or later):
+
+```
+#time	temp_c
+2026-11-16T10:06:33	26.1
+```
+
+A row every log interval, in degrees Celsius to the tenth. It is asked between
+two seconds of counts and costs none of them; [The thermometer](the-thermometer.md)
+is the report. `--no-temp` writes no such file.
+
+**`spectrum-YYYY-MM.tsv`** is the room's spectrum, one row for every 512
+seconds: a line of the [drum spectrogram](reading-the-drum-spectrogram.md),
+kept.
+
+| Column | Meaning |
+|---|---|
+| `time` | the second the row's window ended |
+| `seconds` | how many seconds it is made of |
+| `tubes` | how many counters were answering |
+| `cps` | the average count: counts a second over the window, all tubes together |
+| `level` | that average against the fifty minutes before, where 1.0 is "as it has been" |
+| `p32768` … `p2.00784` | the power at each period, in seconds, longest first. 1.0 is what chance puts there |
+
+A figure that stays well above 1.0 in the same column, row after row, is counts
+arriving on a schedule. The drum on the screen takes a row every eight seconds
+and each shares all but eight of its seconds with the last; this file takes one
+for each window end to end, so no two rows share a second. That is about a
+third of a megabyte a day. `--no-spectrum` writes no such file.
+
+**`drum-day.tsv` and `drum-month.tsv`** are the long drums' finished lines: the
+spectrum of one whole day, and of one whole calendar month, a row each.
+
+| Column | Meaning |
+|---|---|
+| `time` | when the day or month began |
+| `seconds` | how much of it the line is made from |
+| `covered` | the share of the whole span that had a row in the count log |
+| `cps` | the average count over it, for one tube |
+| `p` and a number, many times | the power at that period in seconds, longest first; 1.0 is what chance puts there |
+
+A day's line reaches periods from eight hours down to two minutes; a month's
+from about ten days down to twenty minutes. Both are worked out from the count
+log, thirty seconds at a time, so they exist for every day and month there is
+a count log for, including those from before these files were written: the
+service writes any that are missing when it starts, and one more as each day
+ends. They are copies. Delete them and the next start writes them again.
+
+A day with a break in it is a line made from what was counted. A day with
+less than a quarter of itself is left out. `cargo run --release --example
+long_drum -- /var/lib/radbeeper` prints both papers as plain text.
+
+---
+
 ## Where the bytes live
 
 State lives in `/var/lib/radbeeper` when that is writable, `/var/log/radbeeper`

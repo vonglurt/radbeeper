@@ -29,10 +29,16 @@ use std::time::{Duration, Instant};
 use iced::widget::{canvas, column, container, row, stack, text, Space};
 use iced::{Color, Element, Fill, Font, Length, Rectangle, Renderer, Subscription, Theme};
 use radbeeper::analysis::{
-    self, answering, band, bar_seconds, interleave_quality, span_words, tiers_arrivals,
-    tiers_with, Arrival, Band, Spectrum, Tier, Trail, Windows, TIERS,
+    self, answering, band, bar_seconds, fahrenheit, interleave_quality, span_words,
+    temp_drum, thermo_fraction, tiers_arrivals, tiers_with, Arrival, Band, Spectrum,
+    TempDrum, Tier, Trail, Windows, THERMO_HIGH_F, THERMO_LOW_F, TIERS,
 };
 use radbeeper::broker::{self, Client, CounterId, Event, Poll};
+use radbeeper::drum::{
+    pen, place, shade_of, stretches, FALL_DEPTH, FALL_HOP, FALL_LEVEL, FALL_WINDOW,
+    LADDER, SHADES,
+};
+use radbeeper::longdrum::{self, LongRow, Paper};
 use radbeeper::{clock, entropy, log};
 
 /// A NAMED MONOSPACE, NOT `Font::MONOSPACE`. The generic family resolves
@@ -102,24 +108,6 @@ fn cluster_h(tubes: usize, scale: f32) -> f32 {
     CLUSTER_H * scale + rows as f32 * 12.0
 }
 
-/// The trail: seconds in a row, seconds between rows, rows kept.
-///
-/// THE SPECTRUM'S OWN SHORTEST WINDOW, 512 seconds, so that a row is that
-/// window taken once, the joins to the longer windows are the spectrum's
-/// own ladder, and the axis is cut where the spectrum's windows are and
-/// nowhere else. It was 300, five minutes, for an afternoon, and the
-/// spectrum's line and the rows' were cut to different grids. A row every
-/// eight seconds -- on the same grid of twos -- is sixty-three in
-/// sixty-four of its seconds shared with the row before, so a ridge is a
-/// line and not a row of dots; ninety-six of them are the same twelve
-/// minutes of paper that forty-eight rows every sixteen seconds were, at
-/// twice the resolution in time.
-const FALL_WINDOW: usize = 512;
-const FALL_HOP: usize = 8;
-const FALL_DEPTH: usize = 96;
-/// The seconds of the average a row is held against: the fourth of the
-/// panel's five averages. See `Waterfall::leveled`.
-const FALL_LEVEL: usize = 3000;
 /// The shortest window the trail is drawn in. Under it the counts and the
 /// spectrum have the panel to themselves, as they had.
 const FALL_ROOM: f32 = 640.0;
@@ -138,6 +126,10 @@ const GROUND_ALONE: u16 = 38;
 /// Where each chart is on the canvas: its top and its height.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Regions {
+    /// The temperature drum, when it is open: under the dials, with a line
+    /// of words over its paper and the hours under it. Nothing high when
+    /// it is shut.
+    temp: (f32, f32),
     /// The spectrum, and the trail over it when there is one.
     ground: (f32, f32),
     /// The counts, under it.
@@ -165,136 +157,531 @@ fn ground_parts(trail: bool) -> u16 {
 /// share what is left as `ground_parts` to the rest. So the axis is under
 /// the ground at exactly the height worked out here, and the counts begin
 /// under it with their captions over their head, as they always were.
-fn regions(height: f32, cluster: f32, trail: bool) -> Regions {
-    let shared = (height - cluster - 2.0 * ROW_H).max(40.0);
+///
+/// THE TEMPERATURE DRUM IS TAKEN OFF THE TOP FIRST, `temp` high, and the
+/// two charts share what is left as they did. It is a height the window
+/// worked out and the canvas was told -- `temp_room` -- because the column
+/// of widgets has to be given the same number and cannot ask the canvas.
+fn regions(height: f32, cluster: f32, trail: bool, temp: f32) -> Regions {
+    let shared = (height - cluster - temp - 2.0 * ROW_H).max(40.0);
     let ground = shared * ground_parts(trail) as f32 / 100.0;
-    let counts = cluster + ground + ROW_H;
+    let counts = cluster + temp + ground + ROW_H;
     Regions {
-        ground: (cluster, ground),
+        temp: (cluster, temp),
+        ground: (cluster + temp, ground),
         // A margin at the foot, where the readouts sit under the canvas.
         cascade: (counts, (height - counts - 2.0).max(1.0)),
     }
 }
 
-/// How much of the panel's width each stretch of long periods has.
-///
-/// THE LEFT OF THE AXIS IS COMPRESSED, because there is next to nothing in
-/// it. On an axis that gave every doubling of the period the same width,
-/// the periods over a row's length had the left two fifths of the panel and
-/// fourteen bins to put there -- a window holds one bin at its own length,
-/// one at half, one at a third -- while the right-hand fifth held a
-/// hundred. So the axis is cut where the spectrum's windows are, as the
-/// counts' strip is cut into tiers, and each stretch is a logarithm of its
-/// own: 512 seconds and under has most of the width, and what is longer
-/// has these.
-const STRETCH_LONG: f32 = 0.10;
-const STRETCH_MIDDLE: f32 = 0.14;
 
-/// A stretch of the period axis: the periods at its two ends, and where it
-/// begins and ends across the panel, from nought to one.
-#[derive(Debug, Clone, Copy, PartialEq)]
-struct Stretch {
-    long: f64,
-    short: f64,
-    left: f32,
-    right: f32,
+/// One thermometer in the dial band: the glass, and the reading beside it.
+///
+/// SMALL, AND FIXED. The temperature is the counter's own, asked twice a
+/// minute; it is not what the instrument is for, so it has a corner of the
+/// band and does not grow with the window as the dials do. Tall enough to
+/// stand beside the big number and the five averages, and no taller, so
+/// the line under those has the width to itself.
+const THERMO_W: f32 = 54.0;
+const THERMO_H: f32 = 108.0;
+/// Where the glass is in its slot: the scale's top and its foot, from the
+/// slot's top, and the middle of the tube from the slot's left.
+const THERMO_TOP: f32 = 7.0;
+const THERMO_FOOT: f32 = 90.0;
+const THERMO_X: f32 = 9.0;
+
+/// The slot of the `k`th thermometer of `n`, from the left, in a panel
+/// `width` wide: they stand in a row against the panel's right edge.
+fn thermo_slot(width: f32, k: usize, n: usize) -> Rectangle {
+    Rectangle {
+        x: width - (n - k.min(n)) as f32 * THERMO_W,
+        y: 2.0,
+        width: THERMO_W,
+        height: THERMO_H,
+    }
 }
 
-/// The axis the spectrum and its trail are both drawn on, from the longest
-/// window that has answered down to `floor`.
-fn stretches(floor: f64, longest: usize) -> Vec<Stretch> {
-    let base = FALL_WINDOW as f64;
-    // The cuts: each of the spectrum's windows longer than a row, that has
-    // answered, with its share -- the longest of the ladder's, or the
-    // middle's.
-    let cuts: Vec<(f64, f32)> = LADDER
-        .iter()
-        .rev()
-        .filter(|w| **w <= longest && **w as f64 > base)
-        .map(|w| {
-            let share = if *w == LADDER[LADDER.len() - 1] { STRETCH_LONG } else { STRETCH_MIDDLE };
-            (*w as f64, share)
-        })
-        .collect();
-    let mut out = Vec::new();
-    let mut left = 0.0f32;
-    for (k, (long, share)) in cuts.iter().enumerate() {
-        let short = cuts.get(k + 1).map(|c| c.0).unwrap_or(base);
-        out.push(Stretch { long: *long, short, left, right: left + share });
-        left += share;
+/// How far down its slot a thermometer's column stands for a temperature:
+/// the foot of the scale at 50 F, the top at 100 F, and held at the ends.
+fn thermo_level(celsius: f64) -> f32 {
+    THERMO_FOOT - thermo_fraction(celsius) as f32 * (THERMO_FOOT - THERMO_TOP)
+}
+
+/// The days on the temperature drum, and the cells a day is cut into: six
+/// minutes each, which is twelve of the counter's readings.
+const TEMP_DAYS: usize = 10;
+const TEMP_COLS: usize = 240;
+/// The margins of the drum's paper: the date on the left, and on the right
+/// the day's mean, both ways.
+const TEMP_LEFT: f32 = 40.0;
+const TEMP_RIGHT: f32 = 88.0;
+/// The tallest the temperature drum is: see `temp_room`.
+const TEMP_ROOM_MAX: f32 = 236.0;
+/// How often the temperatures' ten days are read from the log again. What
+/// arrives between is added as it arrives.
+const LOG_REREAD: Duration = Duration::from_secs(300);
+
+/// How high the temperature drum is, open, in a window `height` high whose
+/// dials have `cluster` of it.
+///
+/// A LITTLE OVER A THIRD OF WHAT THE CHARTS HAVE, and never the larger part
+/// of it: the drum is a thing somebody asked to see, and the counts and
+/// the spectrum are still what the window is for. Worked out from the
+/// window's own height, less what the lines over and under the panel take,
+/// because the widgets and the canvas must both be given it. See `regions`.
+fn temp_room(height: f32, cluster: f32) -> f32 {
+    (chart_room(height, cluster) * 0.38).min(TEMP_ROOM_MAX)
+}
+
+/// What the two charts have between them in a window `height` high, as
+/// near as the window can say without asking the canvas: its height less
+/// the dials, the two lines of captions, and what is not the panel -- the
+/// counters' line, the line under the charts, the trend's table and the
+/// padding.
+fn chart_room(height: f32, cluster: f32) -> f32 {
+    let rest = if height >= 560.0 { 110.0 } else { 50.0 };
+    (height - cluster - rest - 2.0 * ROW_H).max(0.0)
+}
+
+/// The long papers: a line a day and a line a month, over the live drum.
+///
+/// HOW MANY LINES EACH MAY HAVE, how far apart they are, how far the
+/// loudest thing on a paper rises from its own line, and the strip at a
+/// paper's head its name and its axis are written in. A LINE OF THESE IS
+/// THREE OF THE LIVE DRUM'S. The live rows are two pixels apart because
+/// each shares all but eight of its seconds with the last, and they read
+/// as a surface; a day shares nothing with the day before, and thirty of
+/// them two pixels apart are a tangle.
+const DAY_LINES: usize = 30;
+const MONTH_LINES: usize = 12;
+const LONG_STEP: f32 = 6.0;
+const LONG_REACH: f32 = 16.0;
+const LONG_HEAD: f32 = 12.0;
+/// The clear ground between a paper's head and its oldest line: as much as
+/// the loudest thing on the paper rises, so the oldest line has the room
+/// over it that every other line has, and its ink stops short of the
+/// words in the head.
+const LONG_CLEAR: f32 = LONG_REACH;
+/// Of how many lines one has its date written at the left: a date is
+/// higher than a line, and a paper with one on every line is a column of
+/// dates with a drum behind it. Every third day; and every second month,
+/// of which there are fewer.
+fn long_dated(paper: Paper) -> usize {
+    match paper {
+        Paper::Day => 3,
+        Paper::Month => 2,
     }
-    out.push(Stretch { long: base.min(longest as f64), short: floor.min(base), left, right: 1.0 });
+}
+/// The fewest rows of room the live drum is left when it has fewer than
+/// that, or none yet: a drum just attached still has its place, and the
+/// papers do not jump when its first rows come.
+const LIVE_LEAST: usize = 16;
+/// What chance reaches on a long paper, against the 1.0 it puts in a band:
+/// the pen is green under this and hot over it, as the live drum's is
+/// about its own luck line. A band is a mean of the periods that share it,
+/// so it scatters less than one bin of the live drum does.
+const LONG_LUCK: f32 = 5.0;
+
+/// The two ends of a paper's period axis, in seconds, longest first.
+///
+/// THE LONG END IS THE DATA'S OWN: the longest period a finished line of
+/// the paper has. A line begins at a third of its own length -- something
+/// has to come round three times before it is called a period, see
+/// `longdrum::SLOWEST` -- so that is eight hours on the day paper and ten
+/// days, give or take the month, on the month paper; and it is asked of
+/// the lines and not written here, so the head of the paper cannot name
+/// an end the lines do not reach. With no finished line yet it is the
+/// third of a day, or of thirty-one. The short end is four of the
+/// paper's bins: two minutes, and twenty.
+fn long_ends(paper: Paper, rows: &[Option<LongRow>]) -> (f64, f64) {
+    let (whole, short) = match paper {
+        Paper::Day => (86400.0, 4.0 * longdrum::DAY_BIN),
+        Paper::Month => (31.0 * 86400.0, 4.0 * longdrum::MONTH_BIN),
+    };
+    let long = rows
+        .iter()
+        .flatten()
+        .filter(|r| r.whole)
+        .filter_map(|r| r.bands.first())
+        .map(|b| b.0 as f64)
+        .fold(0.0f64, f64::max);
+    (if long > short { long } else { whole / longdrum::SLOWEST as f64 }, short)
+}
+
+/// Where a period stands across a long paper, from nought at its longest
+/// to one at its shortest, by its logarithm; None where it is off either
+/// end.
+fn long_place(ends: (f64, f64), period: f64) -> Option<f32> {
+    let (long, short) = ends;
+    // A hair over the ends, so a band that stands on one is not lost to
+    // the last bit of a float.
+    if !(period > 0.0) || period > long * 1.02 || period < short * 0.98 {
+        return None;
+    }
+    Some((((long / period).ln() / (long / short).ln()) as f32).clamp(0.0, 1.0))
+}
+
+/// A period in the fewest letters: `8h`, `10d`, `20m`, to the nearest whole
+/// one of the largest unit it is at least one of.
+fn period_name(seconds: f64) -> String {
+    for (unit, letter) in [(86400.0, "d"), (3600.0, "h"), (60.0, "m")] {
+        if seconds >= unit * 0.95 {
+            return format!("{:.0}{}", seconds / unit, letter);
+        }
+    }
+    format!("{:.0}s", seconds)
+}
+
+/// The periods named along a paper's head, longest first: its two ends,
+/// and between them the round ones that stand clear of both.
+fn long_ticks(paper: Paper, ends: (f64, f64)) -> Vec<(f64, String)> {
+    let between: &[f64] = match paper {
+        Paper::Day => &[10800.0, 3600.0, 1200.0, 300.0],
+        Paper::Month => &[3.0 * 86400.0, 86400.0, 21600.0, 3600.0],
+    };
+    let mut out = vec![(ends.0, period_name(ends.0))];
+    out.extend(
+        between
+            .iter()
+            .filter(|p| **p < ends.0 * 0.7 && **p > ends.1 * 1.4)
+            .map(|p| (*p, period_name(*p))),
+    );
+    out.push((ends.1, period_name(ends.1)));
     out
 }
 
-/// Where a period is across the panel, from nought to one; None where it
-/// is longer than the axis goes, or shorter.
-fn place(axis: &[Stretch], period: f64) -> Option<f32> {
-    let s = axis.iter().find(|s| period <= s.long && period >= s.short)?;
-    let span = (s.long / s.short).ln();
-    let t = if span > 0.0 { ((s.long / period).ln() / span) as f32 } else { 0.0 };
-    Some(s.left + t.clamp(0.0, 1.0) * (s.right - s.left))
+/// How many lines a paper has to show: as far back as its oldest line,
+/// the empty tracks between counted, the empty ones beyond it not.
+fn long_have(rows: &[Option<LongRow>]) -> usize {
+    rows.iter().rposition(Option::is_some).map_or(0, |k| k + 1)
 }
 
-/// How many shades a trace is drawn in: enough that the eye sees one
-/// gradient and not bands. Sixteen was bands, at the hot end above all,
-/// where yellow, orange, red and white were four steps apart.
-const SHADES: usize = 64;
-
-/// Which shade a power is: the first for nothing, and the last for half
-/// as much again as luck reaches, and over.
+/// How many lines the day paper and the month paper are given in a ground
+/// `ground` pixels high, of the `days` and `months` they have to show,
+/// over a live drum that has `live` rows.
 ///
-/// BY ITS LOGARITHM, as the heights are. In proportion, everything under
-/// three times the mean -- which is nearly everything -- was the first
-/// two shades of ten, and the pen had one colour for the floor and nine
-/// for what is hardly ever there. By `analysis::gain` what is flat is a
-/// quarter of the way up the shades and what luck reaches is six sevenths.
-fn shade_of(power: f32, luck: f32) -> usize {
-    let t = analysis::gain(power as f64, 1.5 * luck.max(1e-6) as f64) as f32;
-    ((t * SHADES as f32) as usize).min(SHADES - 1)
+/// `longdrum::share` DOES THE SHARING, in lines of the long papers: the
+/// live drum's ninety-six rows are thirty-two of those. The two heads are
+/// taken off the room first, so what it shares out is lines and not the
+/// strips over them.
+///
+/// AND THEN WHAT THE LIVE DRUM IS NOT USING IS GIVEN TO THEM, before any
+/// of the ground is left black. The live drum never has more than its
+/// ninety-six rows, and for its first quarter of an hour it has fewer; a
+/// tall ground, or a young drum, has height over it that the share kept
+/// for rows that are not there. That goes to the day paper first, a line
+/// at a time up to what it has, and then to the month paper. As the live
+/// drum's rows come, the papers give the lines back.
+fn long_lines(ground: f32, live: usize, days: usize, months: usize) -> (usize, usize) {
+    let (days, months) = (days.min(DAY_LINES), months.min(MONTH_LINES));
+    let head = LONG_HEAD + LONG_CLEAR;
+    let heads = (days.min(1) + months.min(1)) as f32 * head;
+    let room = ((ground - heads).max(0.0) / LONG_STEP) as usize;
+    let whole = (FALL_DEPTH as f32 * TRAIL_STEP / LONG_STEP) as usize;
+    let (_, mut day, mut month) = longdrum::share(room, whole, days, months);
+    // What the live drum wants: its rows, and the reach over the oldest.
+    let wants = live.clamp(LIVE_LEAST, FALL_DEPTH) as f32 * TRAIL_STEP + TRAIL_REACH;
+    let mut spare = ground - wants - long_height(day) - long_height(month);
+    for (lines, have) in [(&mut day, days), (&mut month, months)] {
+        // A paper that was given no line has its head to pay for first.
+        let first = if *lines == 0 { head } else { 0.0 };
+        if have > *lines && spare >= first + LONG_STEP {
+            let more = (((spare - first) / LONG_STEP) as usize).min(have - *lines);
+            *lines += more;
+            spare -= first + more as f32 * LONG_STEP;
+        }
+    }
+    (day, month)
 }
 
-/// The colour of a shade: the pen's temperature.
+/// How high a long paper of `lines` lines is: its head, the clear ground
+/// under that, and its lines; and nothing when it has none.
+fn long_height(lines: usize) -> f32 {
+    if lines == 0 { 0.0 } else { LONG_HEAD + LONG_CLEAR + lines as f32 * LONG_STEP }
+}
+
+/// The ground cut into its papers, each as its top and its height: the
+/// month paper at the head, the day paper under it, and the live drum at
+/// the foot with whatever is left.
 ///
-/// MOST OF IT IS GREEN, because most of what is drawn is the floor and the
-/// eye tells more greens apart than it does any other colour. From a teal
-/// that is hardly there, through sea green and green to lime, is the run
-/// from nothing up to what luck reaches: eleven shades of the sixteen, for
-/// the part of the paper where the detail is. Then it is hot. Yellow is
-/// just under the luck line; over it orange and red, which no floor ever
-/// is; and the last is white, for what is half as much again as luck could
-/// do. Between any two of these it is a mixture, and with sixty-four shades
-/// the mixtures are a gradient.
-///
-/// The same in both skins, because the ground is: see `shaded`.
-fn heat(shade: usize) -> Color {
-    const STOPS: [(f32, [f32; 3]); 9] = [
-        (0.00, [0.16, 0.40, 0.37]),
-        (0.22, [0.14, 0.60, 0.46]),
-        (0.45, [0.27, 0.82, 0.38]),
-        (0.62, [0.66, 0.93, 0.30]),
-        (0.76, [1.00, 0.86, 0.24]),
-        (0.84, [1.00, 0.58, 0.16]),
-        (0.90, [1.00, 0.30, 0.20]),
-        (0.96, [1.00, 0.72, 0.60]),
-        (1.00, [1.00, 0.96, 0.90]),
+/// TIGHT, WITH NOTHING BETWEEN THEM but the hairline each long paper has
+/// along its head. THE LIVE DRUM GIVES UP HISTORY AND NOT ITS PLACE: it is
+/// at the foot of the ground, on the line the spectrum stands on, as it
+/// was when it had the ground to itself.
+fn papers(ground: (f32, f32), day: usize, month: usize) -> [(f32, f32); 3] {
+    let (top, height) = ground;
+    let m = long_height(month).min(height);
+    let d = long_height(day).min(height - m);
+    [(top, m), (top + m, d), (top + m + d, height - m - d)]
+}
+
+/// A paper's name, at the left of its head after the period its axis
+/// begins at: what a line is, how many are shown and how far back they
+/// go, in as many words as `width` has room for.
+fn long_words(paper: Paper, rows: &[Option<LongRow>], lines: usize, width: f32) -> String {
+    let long = period_name(long_ends(paper, rows).0);
+    let (what, a_line, stamp) = match paper {
+        Paper::Day => ("days", "a line a day", "%d %b"),
+        Paper::Month => ("months", "a line a month", "%b %Y"),
+    };
+    // The oldest line shown that has anything on it.
+    let back = rows
+        .iter()
+        .take(lines)
+        .rev()
+        .flatten()
+        .next()
+        .map(|r| clock::format(r.start + 43200.0, stamp))
+        .unwrap_or_default();
+    let forms = [
+        format!("{} \u{b7} {} \u{b7} {}, newest at the foot \u{b7} {} back to {}", long, what, a_line, lines, back),
+        format!("{} \u{b7} {} \u{b7} {} \u{b7} to {}", long, what, a_line, back),
+        format!("{} \u{b7} {} \u{b7} {}", long, what, a_line),
+        format!("{} \u{b7} {}", long, what),
     ];
-    let t = shade.min(SHADES - 1) as f32 / (SHADES - 1) as f32;
-    let k = STOPS.iter().rposition(|s| s.0 <= t).unwrap_or(0).min(STOPS.len() - 2);
-    let ((t0, a), (t1, b)) = (STOPS[k], STOPS[k + 1]);
-    let f = ((t - t0) / (t1 - t0)).clamp(0.0, 1.0);
-    Color {
-        r: a[0] + (b[0] - a[0]) * f,
-        g: a[1] + (b[1] - a[1]) * f,
-        b: a[2] + (b[2] - a[2]) * f,
-        a: 1.0,
+    let fits = |text: &String| text.chars().count() as f32 * 8.0 * ADVANCE <= width;
+    forms.iter().find(|f| fits(f)).unwrap_or(&forms[3]).clone()
+}
+
+/// How far back the count log is read to fill what the service's replay
+/// does not reach: the strip's own reach, which is longer than the longest
+/// average. And how much of a break is closed up where the log's last row
+/// meets the replay's first second: two minutes, which is a service
+/// stopped and started again.
+const FILL_REACH: f64 = 45056.0;
+const FILL_JOIN: usize = 4;
+/// The finest bar of the counts that a row of the log can honestly fill.
+const FILL_BAR: f64 = 32.0;
+
+/// Seconds made from the count log's thirty-second rows, for the stretch
+/// before the replay begins: for each, the rate the row gives it, in counts
+/// a second, and a whole count.
+///
+/// `bins` is the log in bins of `bin` seconds ending where the replay
+/// begins, None where nobody counted. WHAT IS TRUE OF A ROW IS ITS SUM, and
+/// that is all these seconds claim: the counts of a bin are dealt out over
+/// its seconds as evenly as whole numbers go, so every window and every
+/// bar of a bin or longer holds exactly what was counted, and nothing here
+/// says in which second a count came. The bars shorter than a row are left
+/// empty over this stretch: see `blank_fine`.
+///
+/// A BREAK IS WHERE IT STOPS. The run is the unbroken one that ends at the
+/// replay -- give or take `join` bins, for a service that was stopped and
+/// started -- and what is before a break is not joined on over it. With
+/// more than `join` empty bins at the end there is no run at all.
+fn seconds_from_log(bins: &[Option<f64>], bin: usize, join: usize) -> Vec<(f64, u32)> {
+    let Some(last) = bins.iter().rposition(Option::is_some) else { return Vec::new() };
+    if bins.len() - 1 - last > join {
+        return Vec::new();
+    }
+    let first = bins[..=last].iter().rposition(Option::is_none).map_or(0, |k| k + 1);
+    let mut out = Vec::with_capacity((last + 1 - first) * bin);
+    for rate in bins[first..=last].iter().flatten() {
+        let total = (rate * bin as f64).round().max(0.0) as usize;
+        for j in 0..bin {
+            let dealt = (j + 1) * total / bin - j * total / bin;
+            out.push((*rate, dealt as u32));
+        }
+    }
+    out
+}
+
+/// Empty the bars finer than a row of the log over the stretch the log
+/// filled: every bar of under `FILL_BAR` seconds that begins before
+/// `upto`, in the strip's own count of seconds, of which `end` is the
+/// second after the newest. See `seconds_from_log`.
+fn blank_fine(strip: &mut [Tier], end: i64, upto: i64) {
+    let spans = analysis::bar_spans(strip, end);
+    for (tier, spans) in strip.iter_mut().zip(spans) {
+        if tier.seconds >= FILL_BAR {
+            continue;
+        }
+        for (value, (from, _)) in tier.values.iter_mut().zip(spans) {
+            if from < upto {
+                *value = None;
+            }
+        }
     }
 }
 
-/// How wide the pen is for a shade, in pixels: under one for the floor, and
-/// three for the hottest. The shade is a logarithm, so the width is.
-fn pen(shade: usize) -> f32 {
-    0.6 + 1.8 * shade.min(SHADES - 1) as f32 / (SHADES - 1) as f32
+/// The three things that can be tucked into the dial band as a tile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Fold {
+    Days,
+    Months,
+    Temp,
+}
+
+impl Fold {
+    /// The two words on its tile.
+    fn name(self) -> &'static str {
+        match self {
+            Fold::Days => "day drum",
+            Fold::Months => "month drum",
+            Fold::Temp => "room temp",
+        }
+    }
+}
+
+/// Whether a long paper is open: as it was last asked to be, or, never
+/// having been asked, as it is by default.
+///
+/// THE DAY PAPER OPENS BY ITSELF WHEN IT HAS TWO LINES, because a line
+/// with a neighbour is the first thing on it that can be read; with one
+/// it is a tile. THE MONTH PAPER AND THE TEMPERATURE STAY TILES until
+/// somebody opens them: a month's line is news once a month, and the
+/// temperature is not what the instrument is for.
+fn fold_open(what: Fold, asked: Option<bool>, have: usize) -> bool {
+    have > 0
+        && asked.unwrap_or(match what {
+            Fold::Days => have >= 2,
+            Fold::Months | Fold::Temp => false,
+        })
+}
+
+/// What the readout beside the dials takes of the band's height: the big
+/// number, the five averages and the line under them. The tiles go under
+/// it.
+const READOUT_H: f32 = 140.0;
+/// A tile: the widest and the highest it is, the narrowest and the lowest
+/// it is worth drawing, and the gap between two.
+const TILE_W: f32 = 104.0;
+const TILE_H: f32 = 84.0;
+const TILE_MIN_W: f32 = 56.0;
+const TILE_MIN_H: f32 = 30.0;
+const TILE_GAP: f32 = 6.0;
+
+/// Where `n` tiles go in the dial band: in a row under the readout, from
+/// the right of the dials, in what the band has left there.
+///
+/// THE DIALS DO NOT GIVE WAY TO A TILE. A band with no room under its
+/// readout -- a small window's, where the dials are at their smallest --
+/// has no tiles; a narrow one has as many as fit at their narrowest, and
+/// the rest are left out, the last first. What is left out is still a key
+/// away.
+fn tile_slots(width: f32, dials: f32, band: f32, grid: f32, n: usize) -> Vec<Rectangle> {
+    let (left, top) = (dials + 6.0, READOUT_H + grid);
+    let (room_w, room_h) = (width - left, band - top - 4.0);
+    if n == 0 || room_h < TILE_MIN_H || room_w < TILE_MIN_W {
+        return Vec::new();
+    }
+    let fit = (((room_w + TILE_GAP) / (TILE_MIN_W + TILE_GAP)) as usize).min(n);
+    let wide = ((room_w + TILE_GAP) / fit as f32 - TILE_GAP).min(TILE_W);
+    (0..fit)
+        .map(|k| Rectangle {
+            x: left + k as f32 * (wide + TILE_GAP),
+            y: top,
+            width: wide,
+            height: room_h.min(TILE_H),
+        })
+        .collect()
+}
+
+/// What `--show` asked of one of the three: nothing, open, or a tile.
+fn show_asked(what: &str, name: &str) -> Option<bool> {
+    what.split(',').map(str::trim).find_map(|w| {
+        if w == name {
+            Some(true)
+        } else if w.strip_suffix(":tile") == Some(name) {
+            Some(false)
+        } else {
+            None
+        }
+    })
+}
+
+
+/// How far apart the drum's lines are on a paper `paper` high: the ten
+/// tracks, and half a track of margin over the first and under the last.
+fn temp_pitch(paper: f32) -> f32 {
+    paper / (TEMP_DAYS as f32 + 1.0)
+}
+
+/// Where a line's own baseline is down the paper: today's, line 0, is the
+/// lowest, a track over the foot, and yesterday's is a track over that.
+fn temp_line(paper: f32, k: usize) -> f32 {
+    paper - (k as f32 + 1.0) * temp_pitch(paper)
+}
+
+/// Of how many lines one has its date and its mean written: every one
+/// while a track is as high as a line of words, and fewer on a paper too
+/// short for that. Today's is line 0, and always has them.
+fn temp_label_every(pitch: f32) -> usize {
+    ((ROW_H / pitch.max(1.0)).ceil() as usize).clamp(1, TEMP_DAYS)
+}
+
+/// Which shade the pen is for a temperature `offset` tracks from the
+/// drum's reference.
+///
+/// INSIDE ITS TRACK THE PEN IS GREEN, AND OUT OF IT IT IS HOT. The spectrum
+/// drum's pen is keyed to the luck line: green for what chance does, and
+/// yellow, red and white for what it does not. Here the edge of a line's
+/// own track is that line. On the reference the pen is the sea green the
+/// spectrum's floor is; at the edge of the track, half a track out, it is
+/// the last of the greens; and beyond it, where the line is on its
+/// neighbour's ground, it is yellow, then red, and white by nine tenths of
+/// a track. The width follows the shade, by `drum::pen`, as it does there.
+fn temp_shade(offset: f32) -> usize {
+    const REST: f32 = 0.22;
+    const EDGE: f32 = 0.66;
+    let t = (REST + (EDGE - REST) * offset.abs() / 0.5).min(1.0);
+    ((t * SHADES as f32) as usize).min(SHADES - 1)
+}
+
+/// A temperature both ways, as the panel writes it: 79.0 F and 26.1 C.
+fn both_ways(celsius: f64) -> String {
+    format!("{:.1}\u{b0}F {:.1}\u{b0}C", fahrenheit(celsius), celsius)
+}
+
+/// The line of words over the temperature drum: whose it is, how it is
+/// laid out and what a track is worth, in as many words as `width` has
+/// room for.
+///
+/// A TRACK IS A DIFFERENCE, so its Fahrenheit is nine fifths of its
+/// Celsius and no thirty-two added. The reference is a temperature, and
+/// has them.
+fn temp_words(drum: &TempDrum, name: &str, width: f32) -> String {
+    let track = format!(
+        "one track = {:.2} \u{b0}C ({:.2} \u{b0}F)",
+        drum.span,
+        drum.span * 9.0 / 5.0
+    );
+    let whose = if name.is_empty() { "temperature".to_string() } else { format!("temperature {}", name) };
+    let forms = [
+        format!(
+            "{} \u{b7} a line a day, today at the foot \u{b7} {} \u{b7} each line stands on {}",
+            whose, track, both_ways(drum.reference)
+        ),
+        format!("{} \u{b7} {} \u{b7} lines on {}", whose, track, both_ways(drum.reference)),
+        format!("{} \u{b7} {}", whose, track),
+        track.clone(),
+    ];
+    let fits = |text: &String| text.chars().count() as f32 * 10.0 * ADVANCE <= width;
+    forms.iter().find(|f| fits(f)).unwrap_or(&forms[3]).clone()
+}
+
+/// Which counter's temperature drum is open after a click or a key.
+///
+/// A CLICK ON A THERMOMETER opens its drum, and a second click on the same
+/// one shuts it; a click on another's turns the paper to that one. THE KEY
+/// goes round: shut, then each counter that has a temperature in turn,
+/// then shut again. `have` is the counters that have given one.
+fn next_open(open: Option<usize>, asked: Option<usize>, have: &[usize]) -> Option<usize> {
+    match asked {
+        Some(k) if open == Some(k) => None,
+        Some(k) => have.contains(&k).then_some(k),
+        None => match open {
+            None => have.first().copied(),
+            Some(k) => have.iter().copied().find(|h| *h > k),
+        },
+    }
+}
+
+/// The colour of a shade: the pen's temperature, as the window's own colour.
+/// See `radbeeper::drum::heat`.
+fn heat(shade: usize) -> Color {
+    let [r, g, b] = radbeeper::drum::heat(shade);
+    Color { r, g, b, a: 1.0 }
 }
 
 /// The ground the trail is drawn on: the panel's, half way to black.
@@ -396,12 +783,18 @@ const CLUSTER_SHARE: f32 = 0.34;
 ///
 /// Never below 1.0. The small-window layout is the one that was measured
 /// against a 560x400 tile, and nothing here may make that worse.
-fn dial_scale(size: iced::Size, tubes: usize) -> f32 {
+///
+/// THE THERMOMETERS STAND AT THE RIGHT OF THE READOUT, in room it mostly had
+/// already: its rows are some thirty-six pixels narrower than the width
+/// kept for them. The first thermometer asks the dials for the rest of its
+/// slot and each one after it for a whole slot.
+fn dial_scale(size: iced::Size, tubes: usize, thermos: usize) -> f32 {
     // What the readout beside the dials needs: the big number and the five
     // window rows, at the sizes they are drawn.
     const READOUT_W: f32 = 320.0;
     let faces = 2.0;
-    let spare = (size.width - 22.0 - READOUT_W) / (faces * DIAL_W);
+    let glass = (thermos as f32 * THERMO_W - 36.0).max(0.0);
+    let spare = (size.width - 22.0 - READOUT_W - glass) / (faces * DIAL_W);
     // Rather less than a third of the height. The charts are the instrument
     // and this is taken from them, so the share is the smallest one that
     // still leaves the cluster looking like it belongs on the panel rather
@@ -519,17 +912,6 @@ const METER_MS: u64 = 80;
 /// hidden in an argument.
 const ADRIFT_AFTER: Duration = Duration::from_secs(10);
 
-/// THE OVERLAY, AND WHY THESE THREE. A spectrum resolves periods up to its own
-/// window and no further: you cannot see an hourly rhythm in ten minutes of
-/// listening. One window is therefore always the wrong question for somebody
-/// hunting an unknown period, so three are run at once and drawn on top of one
-/// another against a shared logarithmic period axis -- a real line stands in
-/// the same place in all three, which is most of what tells it from a fluke.
-///
-/// Powers of two because the transform is radix-2. 512 s is eight minutes and
-/// answers quickly; 4096 s is an hour and change; 32768 s is nine hours, which
-/// is the working day the longest averaging window already watches.
-const LADDER: [usize; 3] = [512, 4096, 32768];
 
 /// The width the cutoff is worked out against.
 ///
@@ -694,12 +1076,37 @@ fn software_only() -> bool {
     saw_card
 }
 
+/// The picture asked for with `--shot`: the file, and the seconds to wait
+/// before it is taken. See `Message::Shoot`.
+static SHOT: std::sync::OnceLock<(std::path::PathBuf, f64)> = std::sync::OnceLock::new();
+
+/// The window's size, when `--size` gave one, and what `--show` asked of
+/// the day paper, the month paper and the temperature drum, in that order:
+/// open, a tile, or nothing said.
+static SIZE: std::sync::OnceLock<iced::Size> = std::sync::OnceLock::new();
+static SHOW: std::sync::OnceLock<[Option<bool>; 3]> = std::sync::OnceLock::new();
+
+/// The size the window opens at.
+fn first_size() -> iced::Size {
+    SIZE.get().copied().unwrap_or(iced::Size::new(760.0, 900.0))
+}
+
+/// `760x900` as a size; None for anything that is not two numbers, or is
+/// too small to be a window.
+fn parse_size(text: &str) -> Option<iced::Size> {
+    let (w, h) = text.split_once(['x', 'X'])?;
+    let (w, h): (f32, f32) = (w.trim().parse().ok()?, h.trim().parse().ok()?);
+    (w >= 100.0 && h >= 100.0 && w <= 16384.0 && h <= 16384.0).then(|| iced::Size::new(w, h))
+}
+
 fn logs_dir() -> std::path::PathBuf {
     LOGS.get().cloned().unwrap_or_else(log::state_dir)
 }
 
 fn main() -> iced::Result {
     let mut renderer: Option<String> = None;
+    let mut shot: Option<std::path::PathBuf> = None;
+    let mut shot_after = SHOT_AFTER;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -716,6 +1123,28 @@ fn main() -> iced::Result {
             "--renderer" => {
                 renderer = args.next();
             }
+            "--size" => {
+                if let Some(size) = args.next().as_deref().and_then(parse_size) {
+                    let _ = SIZE.set(size);
+                }
+            }
+            "--show" => {
+                if let Some(what) = args.next() {
+                    let _ = SHOW.set([
+                        show_asked(&what, "days"),
+                        show_asked(&what, "months"),
+                        show_asked(&what, "temp"),
+                    ]);
+                }
+            }
+            "--shot" => {
+                shot = args.next().map(std::path::PathBuf::from);
+            }
+            "--shot-after" => {
+                if let Some(s) = args.next().and_then(|s| s.parse::<f64>().ok()) {
+                    shot_after = s.clamp(0.0, 86400.0);
+                }
+            }
             "-h" | "--help" => {
                 println!("radbeeper-gui -- a window onto the counters");
                 println!();
@@ -724,6 +1153,19 @@ fn main() -> iced::Result {
                 println!("                whatever ~/.config/copal/current says)");
                 println!("  --renderer R  wgpu or tiny-skia (the default: wgpu,");
                 println!("                except on a virtio GPU, which has none)");
+                println!("  --size WxH    the size the window opens at (760x900)");
+                println!("  --show LIST   how the window starts: any of days, months and");
+                println!("                temp, with commas between; a name alone is that");
+                println!("                paper open, and NAME:tile is it tucked into the");
+                println!("                dial band (days,months:tile,temp)");
+                println!("  --shot FILE   save the window's own picture as a PNG, and exit");
+                println!("  --shot-after SECONDS");
+                println!("                how long to wait before taking it (20)");
+                println!();
+                println!("Keys: q closes the window; d, m and t open the day paper, the");
+                println!("month paper and the temperature drum, and tuck them back into");
+                println!("the dial band. A click on a tile, a paper or a thermometer");
+                println!("does the same.");
                 println!();
                 println!("It opens no serial port. Start `radbeeper service` first, or");
                 println!("`radbeeper watch`, and this attaches to whichever is serving.");
@@ -733,6 +1175,9 @@ fn main() -> iced::Result {
         }
     }
     let _ = SKIN.set(Skin::detect());
+    if let Some(file) = shot {
+        let _ = SHOT.set((file, shot_after));
+    }
     // BEFORE THE RUNTIME STARTS, because it is the runtime's first act that
     // prints. See `pick_renderer`.
     pick_renderer(renderer.as_deref());
@@ -746,14 +1191,33 @@ fn main() -> iced::Result {
         // size, no workspace, no way to pick it out of a tiling layout. The
         // convention is the basename of the .desktop file.
         .window(iced::window::Settings {
-            size: iced::Size::new(760.0, 900.0),
-            platform_specific: iced::window::settings::PlatformSpecific {
-                application_id: "radbeeper-gui".to_string(),
-                ..Default::default()
-            },
+            size: first_size(),
+            // A PICTURE IS TAKEN WITHOUT SHOWING THE WINDOW. A window that
+            // opens is given the keyboard, and `--shot` is run while
+            // somebody is working at the same desk; the renderer draws a
+            // window that is not shown as it draws one that is.
+            visible: SHOT.get().is_none(),
+            platform_specific: platform_window(),
             ..Default::default()
         })
         .run()
+}
+
+/// The part of the window's settings that is the platform's own.
+///
+/// Linux has the application id; a Mac's window has no such field, and the
+/// window is built there so the counter can be read on one.
+#[cfg(target_os = "linux")]
+fn platform_window() -> iced::window::settings::PlatformSpecific {
+    iced::window::settings::PlatformSpecific {
+        application_id: "radbeeper-gui".to_string(),
+        ..Default::default()
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn platform_window() -> iced::window::settings::PlatformSpecific {
+    Default::default()
 }
 
 // ---------------------------------------------------------------- messages ---
@@ -1006,6 +1470,18 @@ struct Snapshot {
     /// flat at the time. An emission is an audit record of ONE source.
     random: Option<(usize, String, String, bool)>,
     pool: String,
+    /// Each counter's newest temperature, in degrees Celsius; None for a
+    /// counter that has given none, which has no thermometer drawn.
+    temps: Vec<Option<f64>>,
+    /// Each one's temperature drum, and how many times they have been
+    /// made, so the canvas knows when to draw one again.
+    drums: Arc<Vec<Option<TempDrum>>>,
+    drums_made: u64,
+    /// The day paper's lines and the month paper's, newest first, None an
+    /// empty track; and how many times they have been read.
+    days: Arc<Vec<Option<LongRow>>>,
+    months: Arc<Vec<Option<LongRow>>>,
+    long_made: u64,
 }
 
 impl Snapshot {
@@ -1026,6 +1502,16 @@ enum Message {
     Hover(Option<iced::Point>),
     /// `q` was pressed. See `App::subscription`.
     Quit,
+    /// A thermometer was clicked, or `t` pressed with none named: open the
+    /// temperature drum, turn it to another counter, or shut it. See
+    /// `next_open`.
+    Temp(Option<usize>),
+    /// A tile or a paper was clicked, or `d` or `m` pressed: open what is
+    /// a tile, tuck away what is open.
+    Fold(Fold),
+    /// `--shot`: the wait is over, and then the picture the renderer made.
+    Shoot,
+    Shot(iced::window::Screenshot),
 }
 
 // ------------------------------------------------------------------- state ---
@@ -1043,6 +1529,14 @@ struct App {
     size: iced::Size,
     /// Where the pointer is on the chart. See `Chart::update`.
     hover: Option<iced::Point>,
+    /// Whose temperature drum is open, if one is; and whether `--show temp`
+    /// is still waiting for the first temperature to open one.
+    temp_open: Option<usize>,
+    temp_wanted: bool,
+    /// Whether the day paper and the month paper are open, where somebody
+    /// has said; None is the default, which `fold_open` has.
+    days_open: Option<bool>,
+    months_open: Option<bool>,
 }
 
 impl App {
@@ -1054,8 +1548,12 @@ impl App {
                 meters: Meters::default(),
                 adrift: "looking for the counters...".into(),
                 cpm_per_usvh: 153.8,
-                size: iced::Size::new(760.0, 900.0),
+                size: first_size(),
                 hover: None,
+                temp_open: None,
+                temp_wanted: SHOW.get().is_some_and(|s| s[2] == Some(true)),
+                days_open: SHOW.get().and_then(|s| s[0]),
+                months_open: SHOW.get().and_then(|s| s[1]),
             },
             iced::Task::none(),
         )
@@ -1070,7 +1568,41 @@ impl App {
 
     fn update(&mut self, message: Message) -> iced::Task<Message> {
         match message {
-            Message::Update(s) => self.shot = Some(*s),
+            Message::Update(s) => {
+                if self.temp_wanted {
+                    if let Some(k) = s.temps.iter().position(Option::is_some) {
+                        self.temp_open = Some(k);
+                        self.temp_wanted = false;
+                    }
+                }
+                self.shot = Some(*s);
+            }
+            Message::Fold(what) => {
+                let have = |rows: fn(&Snapshot) -> &Arc<Vec<Option<LongRow>>>| {
+                    self.shot.as_ref().map_or(0, |s| long_have(rows(s)))
+                };
+                match what {
+                    Fold::Days => {
+                        let open = fold_open(what, self.days_open, have(|s| &s.days));
+                        self.days_open = Some(!open);
+                    }
+                    Fold::Months => {
+                        let open = fold_open(what, self.months_open, have(|s| &s.months));
+                        self.months_open = Some(!open);
+                    }
+                    // The temperature's is whose drum is open: see below.
+                    Fold::Temp => return self.update(Message::Temp(None)),
+                }
+            }
+            Message::Temp(asked) => {
+                let have: Vec<usize> = self
+                    .shot
+                    .iter()
+                    .flat_map(|s| s.temps.iter().enumerate())
+                    .filter_map(|(k, t)| t.map(|_| k))
+                    .collect();
+                self.temp_open = next_open(self.temp_open, asked, &have);
+            }
             Message::Moved(m) => self.meters = m,
             Message::Adrift(why) => {
                 self.shot = None;
@@ -1083,6 +1615,27 @@ impl App {
             // the file. Nothing is being written that an exit could cut
             // short, so there is nothing to flush first.
             Message::Quit => return iced::exit(),
+            // THE WINDOW'S OWN PICTURE, asked of the renderer that drew it:
+            // what is saved is what was on the glass, whatever is in front
+            // of the window and whether or not anything can see the screen.
+            Message::Shoot => {
+                return iced::window::latest()
+                    .and_then(iced::window::screenshot)
+                    .map(Message::Shot);
+            }
+            Message::Shot(picture) => {
+                if let Some((file, _)) = SHOT.get() {
+                    let png = png_of(picture.size.width, picture.size.height, &picture.rgba);
+                    match std::fs::write(file, png) {
+                        Ok(()) => println!(
+                            "{} {}x{}",
+                            file.display(), picture.size.width, picture.size.height
+                        ),
+                        Err(why) => eprintln!("radbeeper-gui: {}: {}", file.display(), why),
+                    }
+                }
+                return iced::exit();
+            }
         }
         iced::Task::none()
     }
@@ -1106,15 +1659,38 @@ impl App {
         // Plain means without Ctrl, Alt or Super, so that a compositor
         // binding with `q` in it -- Hyprland's own close-window chord is
         // Super+q -- is left to the compositor and not answered twice.
+        // And with `--shot`, a fourth: one message when the wait is over.
+        let shoot = if SHOT.get().is_some() {
+            Subscription::run(shoot_when_due)
+        } else {
+            Subscription::none()
+        };
         Subscription::batch([
+            shoot,
             Subscription::run(feed),
             iced::window::resize_events().map(|(_, size)| Message::Resized(size)),
+            // AND THREE MORE, PLAIN IN THE SAME WAY: `d` and `m` for the day
+            // paper and the month paper, and `t` for the temperature drum,
+            // which a click on a tile, a paper or a thermometer also opens
+            // and tucks away.
+            //
+            // NOT WHILE A PICTURE IS BEING TAKEN. A new window is given the
+            // keyboard, and whatever was being typed at the desk when
+            // `--shot` opened one arrived here: a `t` shut the drum the
+            // picture was to be of, and a `q` would have ended it with no
+            // picture at all.
             iced::keyboard::listen().filter_map(|event| match event {
                 iced::keyboard::Event::KeyPressed { key, modifiers, .. }
-                    if key.as_ref() == iced::keyboard::Key::Character("q")
+                    if SHOT.get().is_none()
                         && !(modifiers.control() || modifiers.alt() || modifiers.logo()) =>
                 {
-                    Some(Message::Quit)
+                    match key.as_ref() {
+                        iced::keyboard::Key::Character("q") => Some(Message::Quit),
+                        iced::keyboard::Key::Character("t") => Some(Message::Temp(None)),
+                        iced::keyboard::Key::Character("d") => Some(Message::Fold(Fold::Days)),
+                        iced::keyboard::Key::Character("m") => Some(Message::Fold(Fold::Months)),
+                        _ => None,
+                    }
                 }
                 _ => None,
             }),
@@ -1136,14 +1712,57 @@ impl App {
         };
 
         let tubes = s.tubes();
-        // Whether there is room for the trail under the spectrum.
-        let falls = self.size.height >= FALL_ROOM;
+        // The counters that have given a temperature: a thermometer each,
+        // and for one that has given none, nothing, and no room kept.
+        let thermos: Vec<(usize, f64)> =
+            s.temps.iter().enumerate().filter_map(|(k, t)| t.map(|c| (k, c))).collect();
         // How big the instruments are in this window. Everything about the
         // cluster is measured from it, on the canvas and in the widgets
         // alike, so the two cannot drift apart.
-        let scale = dial_scale(self.size, tubes);
+        let scale = dial_scale(self.size, tubes, thermos.len());
         let dial_w = DIAL_W * scale;
         let band_h = cluster_h(tubes, scale);
+        // The temperature drum that is open, and the height it has.
+        let open: Option<(usize, &TempDrum)> = self
+            .temp_open
+            .and_then(|k| Some((k, s.drums.get(k)?.as_ref()?)));
+        let temp_h = if open.is_some() { temp_room(self.size.height, band_h) } else { 0.0 };
+        // Whether there is room for the trail under the spectrum, in what
+        // the temperature drum has left.
+        let falls = self.size.height - temp_h >= FALL_ROOM;
+        // THE LONG PAPERS: how many lines each has to show, which are open,
+        // and how many lines the open ones are given of the ground. A
+        // window too short for the trail has no ground to put them on.
+        let panel_w = (self.size.width - 22.0).max(80.0);
+        let (days_have, months_have) = (long_have(&s.days), long_have(&s.months));
+        let days_open = falls && fold_open(Fold::Days, self.days_open, days_have);
+        let months_open = falls && fold_open(Fold::Months, self.months_open, months_have);
+        let ground_px =
+            (chart_room(self.size.height, band_h) - temp_h) * ground_parts(falls) as f32 / 100.0;
+        let (day_lines, month_lines) = long_lines(
+            ground_px,
+            s.fall.len(),
+            if days_open { days_have } else { 0 },
+            if months_open { months_have } else { 0 },
+        );
+        // WHAT IS NOT OPEN IS A TILE IN THE DIAL BAND, where the band has
+        // the room: see `tile_slots`.
+        let mut tucked: Vec<Fold> = Vec::new();
+        if days_have > 0 && day_lines == 0 {
+            tucked.push(Fold::Days);
+        }
+        if months_have > 0 && month_lines == 0 {
+            tucked.push(Fold::Months);
+        }
+        if open.is_none() && !thermos.is_empty() {
+            tucked.push(Fold::Temp);
+        }
+        let grid = if tubes > 1 { tubes.div_ceil(5) as f32 * 12.0 } else { 0.0 };
+        let tiles: Vec<(Fold, Rectangle)> = tucked
+            .iter()
+            .copied()
+            .zip(tile_slots(panel_w, 2.0 * dial_w, band_h, grid, tucked.len()))
+            .collect();
         let tint = s.headline.map(|c| self.skin.colour(band(c))).unwrap_or(self.skin.dim);
 
         // ---- who is on the other end ------------------------------------
@@ -1271,6 +1890,18 @@ impl App {
             fall_age: s.fall_age,
             fall_luck: s.fall_luck,
             hover: self.hover,
+            days: s.days.clone(),
+            months: s.months.clone(),
+            long_made: s.long_made,
+            day_lines,
+            month_lines,
+            tiles: tiles.clone(),
+            thermos: thermos.clone(),
+            lettered: tubes > 1,
+            temp_h,
+            temp_open: open.map(|(k, _)| k),
+            drums: s.drums.clone(),
+            drums_made: s.drums_made,
         })
         .width(Fill)
         .height(Fill);
@@ -1598,7 +2229,7 @@ impl App {
                 // Under the counts' captions, by the arithmetic the column
                 // beside this one is laid out by: see `regions`.
                 column![
-                    Space::new().height(Length::Fixed(band_h)),
+                    Space::new().height(Length::Fixed(band_h + temp_h)),
                     Space::new().height(Length::FillPortion(ground_parts(falls))),
                     Space::new().height(Length::Fixed(2.0 * ROW_H + 1.0)),
                     container(row![
@@ -1627,19 +2258,269 @@ impl App {
             None => Space::new().into(),
         };
 
+        // ---- the thermometers' readings ----------------------------------
+        //
+        // BESIDE THE GLASS, AT THE HEIGHT OF THE COLUMN, both ways: the
+        // Fahrenheit the scale is in, and under it the Celsius the counter
+        // gave. The scale's two ends are named and the tens between them
+        // are ticks. A layer of its own over the canvas, set against the
+        // right edge as the canvas sets the glass: see `thermo_slot`.
+        let mut glasses = row![Space::new().width(Fill)].spacing(0);
+        for (_, celsius) in &thermos {
+            // The two lines are about the column's top, and kept between
+            // the names of the scale's ends.
+            let above = (thermo_level(*celsius) - 2.0 - ROW_H).clamp(0.0, THERMO_H - 4.0 * ROW_H);
+            glasses = glasses.push(
+                container(
+                    column![
+                        mono(format!("{:.0}", THERMO_HIGH_F)).size(8).color(self.skin.faint),
+                        Space::new().height(Length::Fixed(above)),
+                        mono(format!("{:.1}\u{b0}F", fahrenheit(*celsius)))
+                            .size(9)
+                            .wrapping(text::Wrapping::None)
+                            .color(self.skin.fg),
+                        mono(format!("{:.1}\u{b0}C", celsius))
+                            .size(9)
+                            .wrapping(text::Wrapping::None)
+                            .color(self.skin.dim),
+                        Space::new().height(Fill),
+                        mono(format!("{:.0}", THERMO_LOW_F)).size(8).color(self.skin.faint),
+                        Space::new().height(Length::Fixed(THERMO_H - THERMO_FOOT - 6.0)),
+                    ]
+                    .spacing(0),
+                )
+                .padding(iced::Padding { top: 2.0, right: 0.0, bottom: 0.0, left: THERMO_X + 9.0 })
+                .width(Length::Fixed(THERMO_W))
+                .height(Length::Fixed(THERMO_H + 2.0)),
+            );
+        }
+        let glasses: Element<Message> =
+            if thermos.is_empty() { Space::new().into() } else { glasses.into() };
+
+        // ---- the temperature drum's words ---------------------------------
+        //
+        // A LINE OVER THE PAPER saying whose it is and what a track is
+        // worth; on the paper, at each line's own height, its date on the
+        // left and its mean on the right; and the hours under it. The
+        // paper is dark in both skins, so its words are light in both.
+        let temp_block: Option<Element<Message>> = open.map(|(k, drum)| {
+            let paper = (temp_h - 2.0 * ROW_H).max(0.0);
+            let pitch = temp_pitch(paper);
+            let ink = Color { r: 0.80, g: 0.87, b: 0.84, a: 1.0 };
+            // A date for every line while a line is as high as its words;
+            // on a shorter paper, for every second or third, today's
+            // always among them. EACH IS SET AT ITS OWN LINE'S HEIGHT BY A
+            // SPACE OVER IT, and not by giving every line a row as high
+            // as a track: a row lower than its words grows to hold them,
+            // and every date under it is then a little further down than
+            // its line.
+            let every = temp_label_every(pitch);
+            let mut lines = column![].spacing(0);
+            let mut drawn_to = 0.0f32;
+            for (j, line) in drum.lines.iter().enumerate().rev() {
+                if j % every != 0 {
+                    continue;
+                }
+                let head = (temp_line(paper, j) - ROW_H * 0.5).clamp(drawn_to, (paper - ROW_H).max(drawn_to));
+                let near = 1.0 - 0.5 * j as f32 / TEMP_DAYS as f32;
+                lines = lines.push(Space::new().height(Length::Fixed(head - drawn_to))).push(
+                    row![
+                        container(
+                            mono(clock::format(line.day + 43200.0, "%m-%d"))
+                                .size(9)
+                                .wrapping(text::Wrapping::None)
+                                .color(Color { a: near, ..ink })
+                        )
+                        .padding([0, 4])
+                        .width(Length::Fixed(TEMP_LEFT)),
+                        Space::new().width(Fill),
+                        container(
+                            mono(line.mean.map(both_ways).unwrap_or_default())
+                                .size(9)
+                                .wrapping(text::Wrapping::None)
+                                .color(Color { a: near, ..ink })
+                        )
+                        .padding([0, 4])
+                        .width(Length::Fixed(TEMP_RIGHT))
+                        .align_x(iced::Right),
+                    ]
+                    .align_y(iced::Center)
+                    .height(Length::Fixed(ROW_H)),
+                );
+                drawn_to = head + ROW_H;
+            }
+            let name = if tubes > 1 { tube_name(k) } else { String::new() };
+            let hour = |h: &'static str| {
+                container(mono(h).size(10).color(self.skin.dim)).width(Length::FillPortion(1))
+            };
+            column![
+                container(
+                    mono(temp_words(drum, &name, panel_w))
+                        .size(10)
+                        .wrapping(text::Wrapping::None)
+                        .color(self.skin.dim)
+                )
+                .height(Length::Fixed(ROW_H)),
+                container(lines).height(Length::Fixed(paper)),
+                row![
+                    Space::new().width(Length::Fixed(TEMP_LEFT)),
+                    hour("00"),
+                    hour("06"),
+                    hour("12"),
+                    hour("18"),
+                    container(mono("24").size(10).color(self.skin.dim))
+                        .width(Length::Fixed(TEMP_RIGHT)),
+                ]
+                .height(Length::Fixed(ROW_H)),
+            ]
+            .spacing(0)
+            .height(Length::Fixed(temp_h))
+            .into()
+        });
+
+        // ---- the tiles' names ----------------------------------------------
+        //
+        // TWO WORDS ON EACH, at its head, where the canvas drew it: a space
+        // as high as the tile is down the band, a space as wide as the
+        // first is across it, and then each name in its tile's width.
+        let paper_ink = Color { r: 0.80, g: 0.87, b: 0.84, a: 0.85 };
+        let tile_words: Element<Message> = match tiles.first() {
+            None => Space::new().into(),
+            Some((_, first)) => {
+                let mut names = row![Space::new().width(Length::Fixed(first.x))].spacing(0);
+                for (what, slot) in &tiles {
+                    names = names.push(
+                        container(
+                            mono(what.name())
+                                .size(8)
+                                .wrapping(text::Wrapping::None)
+                                .color(paper_ink),
+                        )
+                        .padding(iced::Padding { top: 1.0, right: 0.0, bottom: 0.0, left: 4.0 })
+                        .width(Length::Fixed(slot.width + TILE_GAP)),
+                    );
+                }
+                column![Space::new().height(Length::Fixed(first.y)), names].into()
+            }
+        };
+
+        // ---- the long papers' heads ----------------------------------------
+        //
+        // THE NAME AND THE AXIS IN ONE STRIP, at the head of each paper: the
+        // period the axis begins at and what the paper is at the left, and
+        // then each named period over its own hairline, the last against
+        // the right edge. The strips are where `papers` puts them, month
+        // over day, and the live drum under them says nothing as it never
+        // did.
+        let plate = shaded(self.skin.bg);
+        let head_of = |paper: Paper, rows: &[Option<LongRow>], lines: usize| -> Element<'_, Message> {
+            let ends = long_ends(paper, rows);
+            let ticks = long_ticks(paper, ends);
+            let mut strip = row![].spacing(0);
+            for (k, pair) in ticks.windows(2).enumerate() {
+                let (from, to) = (
+                    long_place(ends, pair[0].0).unwrap_or(0.0),
+                    long_place(ends, pair[1].0).unwrap_or(1.0),
+                );
+                let share = (((to - from) * 1000.0).round() as u16).max(1);
+                let words = if k == 0 {
+                    long_words(paper, rows, lines, (to - from) * panel_w - 8.0)
+                } else {
+                    pair[0].1.clone()
+                };
+                // ON A PLATE OF THE PAPER'S OWN SHADE, no wider than the
+                // words: the oldest line shown rises into this strip when
+                // it is loud, and the words are read through it otherwise.
+                let plated = |words: String| {
+                    container(mono(words).size(8).wrapping(text::Wrapping::None).color(paper_ink))
+                        .padding([0, 3])
+                        .style(move |_| container::Style {
+                            background: Some(Color { a: 0.82, ..plate }.into()),
+                            ..container::Style::default()
+                        })
+                };
+                strip = strip.push(if k + 2 < ticks.len() {
+                    container(plated(words)).width(Length::FillPortion(share))
+                } else {
+                    container(row![
+                        plated(words),
+                        Space::new().width(Fill),
+                        plated(pair[1].1.clone()),
+                    ])
+                    .width(Length::FillPortion(share))
+                });
+            }
+            container(strip).height(Length::Fixed(LONG_HEAD)).into()
+        };
+        // A DATE AT THE LEFT OF EVERY FEW LINES, small and quiet, so how
+        // far up the paper is how far back can be read off it: the day of
+        // the month on the day paper, the month on the month paper. Each
+        // is set at its own line's height by a space over it, as the
+        // temperature drum's are, and stands on the line it names.
+        let dates_of = |paper: Paper, rows: &[Option<LongRow>], lines: usize| -> Element<'_, Message> {
+            let high = long_height(lines) - LONG_HEAD;
+            let stamp = if paper == Paper::Day { "%d %b" } else { "%b %Y" };
+            let mut dates = column![].spacing(0);
+            let mut drawn_to = 0.0f32;
+            for k in (0..lines.min(rows.len())).rev() {
+                let Some(row) = rows[k].as_ref().filter(|_| k % long_dated(paper) == 0) else { continue };
+                // The line is `k` steps over the paper's foot, and the
+                // words stand on it.
+                let head = high - 1.0 - k as f32 * LONG_STEP - 10.0;
+                if head < drawn_to {
+                    continue;
+                }
+                dates = dates.push(Space::new().height(Length::Fixed(head - drawn_to))).push(
+                    container(
+                        mono(clock::format(row.start + 43200.0, stamp))
+                            .size(8)
+                            .wrapping(text::Wrapping::None)
+                            .color(Color { a: 0.62, ..paper_ink }),
+                    )
+                    .padding([0, 3])
+                    .height(Length::Fixed(10.0))
+                    .style(move |_| container::Style {
+                        background: Some(Color { a: 0.55, ..plate }.into()),
+                        ..container::Style::default()
+                    }),
+                );
+                drawn_to = head + 10.0;
+            }
+            container(dates).height(Length::Fixed(high)).clip(true).into()
+        };
+        let mut ground = column![].spacing(0);
+        if month_lines > 0 {
+            ground = ground
+                .push(head_of(Paper::Month, &s.months, month_lines))
+                .push(dates_of(Paper::Month, &s.months, month_lines));
+        }
+        if day_lines > 0 {
+            ground = ground
+                .push(head_of(Paper::Day, &s.days, day_lines))
+                .push(dates_of(Paper::Day, &s.days, day_lines));
+        }
+        let ground = container(ground)
+            .height(Length::FillPortion(ground_parts(falls)))
+            .clip(true);
+
         // THE SAME ARITHMETIC AS THE CANVAS: see `regions`. The dials, the
-        // ground, the spectrum's axis under it, and the counts with their
-        // captions over their head.
-        let over = column![
+        // temperature drum when it is open, the ground, the spectrum's
+        // axis under it, and the counts with their captions over their
+        // head.
+        let mut over = column![
             container(row![dial_faces, Space::new().width(6.0), numbers].spacing(0))
                 .height(Length::Fixed(band_h)),
-            Space::new().height(Length::FillPortion(ground_parts(falls))),
-            container(axis).height(Length::Fixed(ROW_H)),
-            container(caps).height(Length::Fixed(ROW_H)),
-            Space::new().height(Length::FillPortion(100 - ground_parts(falls))),
         ]
         .spacing(0);
-        let panel = stack![chart, over, hover].height(Fill);
+        if let Some(block) = temp_block {
+            over = over.push(block);
+        }
+        let over = over
+            .push(ground)
+            .push(container(axis).height(Length::Fixed(ROW_H)))
+            .push(container(caps).height(Length::Fixed(ROW_H)))
+            .push(Space::new().height(Length::FillPortion(100 - ground_parts(falls))));
+        let panel = stack![chart, over, glasses, tile_words, hover].height(Fill);
         // ---- the clock, the emission and its countdown, on ONE line -----
         //
         // FOUR LINES BECAME ONE, and the panel is denser for it. It used to
@@ -1976,7 +2857,30 @@ struct Chart {
     fall_luck: f32,
     /// Where the pointer is on the canvas, when it is on it.
     hover: Option<iced::Point>,
+    /// The long papers: every line each has, how many times they have been
+    /// read, and how many lines of each are open on the ground.
+    days: Arc<Vec<Option<LongRow>>>,
+    months: Arc<Vec<Option<LongRow>>>,
+    long_made: u64,
+    day_lines: usize,
+    month_lines: usize,
+    /// What is tucked into the dial band, and where: see `tile_slots`.
+    tiles: Vec<(Fold, Rectangle)>,
+    /// The thermometers: which counter each is, and its degrees Celsius;
+    /// and whether there is more than one counter to tell apart.
+    thermos: Vec<(usize, f64)>,
+    lettered: bool,
+    /// The temperature drum: how high it is, whose is open, and all of
+    /// them, with how many times they have been made.
+    temp_h: f32,
+    temp_open: Option<usize>,
+    drums: Arc<Vec<Option<TempDrum>>>,
+    drums_made: u64,
 }
+
+/// Everything the long papers and the tiles are drawn from, as numbers
+/// that are the same exactly when the drawing would be.
+type LongKey = (u64, u64, usize, usize, Vec<(Fold, [u32; 4])>);
 
 /// What the canvas keeps between one drawing and the next.
 ///
@@ -1989,9 +2893,17 @@ struct Chart {
 #[derive(Default)]
 struct Kept {
     fall: canvas::Cache,
-    /// Which row was newest, how old it was, and how far the axis went,
-    /// when that was drawn.
-    of: std::cell::Cell<(u64, usize, usize)>,
+    /// Which row was newest, how old it was, how far the axis went, and how
+    /// high the live drum's part of the ground was, when that was drawn.
+    of: std::cell::Cell<(u64, usize, usize, u32)>,
+    /// The temperature drum, kept for the same reason: which making of
+    /// the drums, and whose, was drawn.
+    temp: canvas::Cache,
+    temp_of: std::cell::Cell<(u64, Option<usize>)>,
+    /// The long papers and the tiles, which change every few minutes or
+    /// at a click: what was drawn, as `Chart::long_key` says it.
+    long: canvas::Cache,
+    long_of: std::cell::Cell<Option<LongKey>>,
     /// Where the pointer was last said to be.
     hover: Option<iced::Point>,
 }
@@ -2008,11 +2920,18 @@ impl canvas::Program<Message> for Chart {
         bounds: Rectangle,
         cursor: iced::mouse::Cursor,
     ) -> Option<canvas::Action<Message>> {
-        if !matches!(event, iced::Event::Mouse(_)) {
-            return None;
+        let iced::Event::Mouse(mouse) = event else { return None };
+        let at = regions(bounds.height, self.cluster, self.falls, self.temp_h);
+        // A CLICK ON A THERMOMETER opens its drum or shuts it; a click on a
+        // tile opens what it is a miniature of, and a click on an open
+        // paper tucks it back. Nothing else on the panel answers a click.
+        if matches!(mouse, iced::mouse::Event::ButtonPressed(iced::mouse::Button::Left)) {
+            return self
+                .pressed(cursor.position_in(bounds)?, bounds)
+                .map(canvas::Action::publish);
         }
         // Over the counts, which is where there are bars to be over.
-        let counts = regions(bounds.height, self.cluster, self.falls).cascade;
+        let counts = at.cascade;
         let now = cursor
             .position_in(bounds)
             .filter(|p| p.y >= counts.0 && p.y <= counts.0 + counts.1);
@@ -2035,31 +2954,487 @@ impl canvas::Program<Message> for Chart {
         if bounds.width < 40.0 {
             return vec![frame.into_geometry()];
         }
-        let at = regions(bounds.height, self.cluster, self.falls);
+        let at = regions(bounds.height, self.cluster, self.falls, self.temp_h);
         self.cluster(&mut frame);
+        self.thermometers(&mut frame, bounds.width);
         self.cascade(&mut frame, bounds, at.cascade);
+        // The temperature drum, kept between one reading and the next.
+        let mut layers = Vec::new();
+        if let Some(drum) = self.temp_open.and_then(|k| self.drums.get(k)?.as_ref()) {
+            let of = (self.drums_made, self.temp_open);
+            if kept.temp_of.get() != of {
+                kept.temp_of.set(of);
+                kept.temp.clear();
+            }
+            layers.push(kept.temp.draw(renderer, bounds.size(), |frame| {
+                self.temp_paper(frame, bounds.width, at.temp, drum);
+            }));
+        }
+        // The long papers and the tiles, kept until they are read again.
+        let rooms = papers(at.ground, self.day_lines, self.month_lines);
+        let of = self.long_key();
+        if kept.long_of.take().as_ref() != Some(&of) {
+            kept.long.clear();
+        }
+        kept.long_of.set(Some(of));
+        layers.push(kept.long.draw(renderer, bounds.size(), |frame| {
+            for (what, slot) in &self.tiles {
+                self.tile(frame, *what, *slot);
+            }
+            if self.falls {
+                let across = Rectangle { x: 0.0, y: 0.0, width: bounds.width, height: 0.0 };
+                for (rows, paper, room, lines) in [
+                    (&self.months, Paper::Month, rooms[0], self.month_lines),
+                    (&self.days, Paper::Day, rooms[1], self.day_lines),
+                ] {
+                    if lines > 0 {
+                        let area = Rectangle { y: room.0, height: room.1, ..across };
+                        self.long_paper(frame, area, rows, paper, lines, 1.0);
+                    }
+                }
+            }
+        }));
         if !self.falls {
             self.spectrum(&mut frame, bounds, at.ground, false);
-            return vec![frame.into_geometry()];
+            layers.push(frame.into_geometry());
+            return layers;
         }
         // The trail first and the spectrum over it: the spectrum is the
         // front of the stack.
-        let of = (self.fall_made, self.fall_age, ladder_ends(&self.layers).1);
+        let of = (self.fall_made, self.fall_age, ladder_ends(&self.layers).1, rooms[2].1.to_bits());
         if kept.of.get() != of {
             kept.of.set(of);
             kept.fall.clear();
         }
         let trail = kept.fall.draw(renderer, bounds.size(), |frame| {
-            self.trail(frame, bounds.width, at.ground);
+            self.trail(frame, bounds.width, rooms[2]);
         });
         // The spectrum is drawn on the foot of the ground, on the line
         // the newest row is drawn on, and to the rows' own scale.
         self.spectrum(&mut frame, bounds, at.ground, true);
-        vec![trail, frame.into_geometry()]
+        layers.push(trail);
+        layers.push(frame.into_geometry());
+        layers
+    }
+
+    /// A hand over what answers a click: a thermometer, a tile, an open
+    /// paper.
+    fn mouse_interaction(
+        &self,
+        _kept: &Kept,
+        bounds: Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> iced::mouse::Interaction {
+        match cursor.position_in(bounds).and_then(|p| self.pressed(p, bounds)) {
+            Some(_) => iced::mouse::Interaction::Pointer,
+            None => iced::mouse::Interaction::default(),
+        }
     }
 }
 
 impl Chart {
+    /// What a click at `p` asks for, if it is on anything that answers one.
+    fn pressed(&self, p: iced::Point, bounds: Rectangle) -> Option<Message> {
+        if let Some(k) = self.thermo_at(p, bounds.width) {
+            return Some(Message::Temp(Some(k)));
+        }
+        if let Some((what, _)) = self.tiles.iter().find(|(_, slot)| slot.contains(p)) {
+            return Some(Message::Fold(*what));
+        }
+        let at = regions(bounds.height, self.cluster, self.falls, self.temp_h);
+        let within = |room: (f32, f32)| room.1 > 0.0 && p.y >= room.0 && p.y < room.0 + room.1;
+        if within(at.temp) {
+            return self.temp_open.map(|k| Message::Temp(Some(k)));
+        }
+        if !self.falls {
+            return None;
+        }
+        let rooms = papers(at.ground, self.day_lines, self.month_lines);
+        if within(rooms[0]) {
+            return Some(Message::Fold(Fold::Months));
+        }
+        within(rooms[1]).then_some(Message::Fold(Fold::Days))
+    }
+
+    /// What the long papers and the tiles were drawn from. See `LongKey`.
+    fn long_key(&self) -> LongKey {
+        (
+            self.long_made,
+            self.drums_made,
+            self.day_lines,
+            self.month_lines,
+            self.tiles
+                .iter()
+                .map(|(what, r)| {
+                    (*what, [r.x.to_bits(), r.y.to_bits(), r.width.to_bits(), r.height.to_bits()])
+                })
+                .collect(),
+        )
+    }
+
+    /// A tile in the dial band: the paper it stands for, small.
+    ///
+    /// THE SAME DRAWING AT A SMALLER SIZE, and not a picture of it: the
+    /// day tile is every day there is, drawn by what draws the day paper,
+    /// with a thinner pen and its lines closer; the temperature's is its
+    /// ten days. It is to be read as a texture -- a stripe down the day
+    /// tile is the same stripe the open paper has -- and its two words say
+    /// which it is.
+    fn tile(&self, frame: &mut canvas::Frame, what: Fold, slot: Rectangle) {
+        use canvas::{Path, Stroke};
+        frame.fill_rectangle(slot.position(), slot.size(), shaded(self.skin.bg));
+        // Under the two words, and a hair inside the rim.
+        let inner = Rectangle {
+            x: slot.x + 2.0,
+            y: slot.y + 11.0,
+            width: slot.width - 4.0,
+            height: slot.height - 13.0,
+        };
+        match what {
+            Fold::Days => {
+                self.long_paper(frame, inner, &self.days, Paper::Day, long_have(&self.days), 0.0)
+            }
+            Fold::Months => {
+                self.long_paper(frame, inner, &self.months, Paper::Month, long_have(&self.months), 0.0)
+            }
+            Fold::Temp => {
+                if let Some(drum) = self.drums.iter().flatten().next() {
+                    self.temp_lines(frame, inner, drum, 0.55);
+                }
+            }
+        }
+        frame.stroke(
+            &Path::rectangle(slot.position(), slot.size()),
+            Stroke::default().with_width(1.0).with_color(Color { a: 0.35, ..self.skin.bezel }),
+        );
+    }
+
+    /// A long paper: a line of spectrum a day, or a month, the newest at
+    /// its foot and the older ones stepping up and away.
+    ///
+    /// THE LIVE DRUM'S PAPER AND PEN, over a longer axis. The ground is
+    /// the same shaded one; a line rises from its own baseline by
+    /// `analysis::gain` against the loudest thing on the paper; it is
+    /// stroked in runs of one shade, in `heat` at the width `pen` gives,
+    /// with the glow under what is over the luck line; and it puts the
+    /// ground back under itself, so the line in front hides what is behind
+    /// it. A band's 1.0 is what chance puts there, as a bin's is on the
+    /// live drum, so green and hot mean on this paper what they mean on
+    /// that one.
+    ///
+    /// A LINE NOT YET FINISHED IS DRAWN OVER THE PERIODS IT HAS and no
+    /// further: today's reaches leftwards as the day goes on. A SPAN WITH
+    /// NO RECORD IS AN EMPTY TRACK, ruled very faintly, so the paper does
+    /// not close up over a break. A line made from part of its span is
+    /// fainter by how much of it was missing.
+    ///
+    /// `full` is 1.0 for the paper on the ground, which has its hairline,
+    /// the rules down it at the named periods and the strip at its head
+    /// left clear for them; and 0.0 for a tile, which has only the lines,
+    /// as many as it has, closer together and in a thinner pen.
+    fn long_paper(
+        &self,
+        frame: &mut canvas::Frame,
+        area: Rectangle,
+        rows: &[Option<LongRow>],
+        paper: Paper,
+        lines: usize,
+        full: f32,
+    ) {
+        use canvas::{path::Builder, Stroke};
+        let lines = lines.min(rows.len());
+        if lines == 0 || area.height < 4.0 || area.width < 8.0 {
+            return;
+        }
+        let whole = full > 0.5;
+        let ends = long_ends(paper, rows);
+        let ground = shaded(self.skin.bg);
+        let (top, foot) = (area.y, area.y + area.height);
+        if whole {
+            frame.fill_rectangle(area.position(), area.size(), ground);
+            for (period, _) in long_ticks(paper, ends) {
+                let Some(x) = long_place(ends, period) else { continue };
+                frame.fill_rectangle(
+                    iced::Point::new((area.x + x * (area.width - 1.0)).floor(), top),
+                    iced::Size::new(1.0, area.height),
+                    Color { a: 0.07, ..Color::WHITE },
+                );
+            }
+            frame.fill_rectangle(
+                iced::Point::new(area.x, top),
+                iced::Size::new(area.width, 1.0),
+                Color { a: 0.22, ..Color::WHITE },
+            );
+        }
+        // On the ground the lines are `LONG_STEP` apart under the head; in
+        // a tile they share its height, and rise by as much less.
+        let (step, reach, thin) = if whole {
+            (LONG_STEP, LONG_REACH, 1.0)
+        } else {
+            let step = (area.height / (lines as f32 + 1.5)).min(area.height / 3.0);
+            (step, (step * 3.0).clamp(4.0, area.height * 0.6), 0.6)
+        };
+        let shown = &rows[..lines];
+        let loudest = shown
+            .iter()
+            .flatten()
+            .flat_map(|r| r.bands.iter())
+            .filter(|b| long_place(ends, b.0 as f64).is_some())
+            .map(|b| b.1)
+            .fold(LONG_LUCK * 1.5, f32::max) as f64;
+        let hot = shade_of(LONG_LUCK, LONG_LUCK);
+        for (k, row) in shown.iter().enumerate().rev() {
+            let line = foot - 1.0 - k as f32 * step;
+            if line < top {
+                continue;
+            }
+            let Some(row) = row else {
+                frame.fill_rectangle(
+                    iced::Point::new(area.x, line.floor()),
+                    iced::Size::new(area.width, 1.0),
+                    Color { a: 0.12, ..heat(0) },
+                );
+                continue;
+            };
+            let points: Vec<(f32, f32, f32)> = row
+                .bands
+                .iter()
+                .filter_map(|(period, power)| {
+                    let x = area.x + long_place(ends, *period as f64)? * area.width;
+                    let y = (line - analysis::gain(*power as f64, loudest) as f32 * reach).max(top);
+                    Some((x, y, *power))
+                })
+                .collect();
+            if points.len() < 2 {
+                continue;
+            }
+            // The ground, put back under the line.
+            let mut under = Builder::new();
+            under.move_to(iced::Point::new(points[0].0, line));
+            for (x, y, _) in &points {
+                under.line_to(iced::Point::new(*x, *y));
+            }
+            under.line_to(iced::Point::new(points[points.len() - 1].0, line));
+            under.close();
+            frame.fill(&under.build(), ground);
+
+            let away = k as f32 / lines.max(1) as f32;
+            let alpha = (0.55 + 0.45 * row.covered.clamp(0.0, 1.0)) * (1.0 - 0.35 * away);
+            let mut shades: Vec<Option<Builder>> = (0..SHADES).map(|_| None).collect();
+            for pair in points.windows(2) {
+                let ((x0, y0, p0), (x1, y1, p1)) = (pair[0], pair[1]);
+                let b = shades[shade_of(p0.max(p1), LONG_LUCK)].get_or_insert_with(Builder::new);
+                b.move_to(iced::Point::new(x0, y0));
+                b.line_to(iced::Point::new(x1, y1));
+            }
+            for (shade, b) in shades.into_iter().enumerate() {
+                let Some(b) = b else { continue };
+                let (path, ink, wide) = (b.build(), heat(shade), pen(shade) * thin);
+                if shade >= hot && whole {
+                    frame.stroke(
+                        &path,
+                        Stroke::default()
+                            .with_width(wide + 3.0)
+                            .with_color(Color { a: 0.22 * alpha, ..ink }),
+                    );
+                }
+                frame.stroke(
+                    &path,
+                    Stroke::default().with_width(wide).with_color(Color { a: alpha, ..ink }),
+                );
+            }
+        }
+    }
+
+    /// Which counter's thermometer a point of the canvas is on.
+    fn thermo_at(&self, p: iced::Point, width: f32) -> Option<usize> {
+        let n = self.thermos.len();
+        self.thermos
+            .iter()
+            .enumerate()
+            .find(|(i, _)| thermo_slot(width, *i, n).contains(p))
+            .map(|(_, (k, _))| *k)
+    }
+
+    /// The thermometers, in a row against the right of the dial band.
+    ///
+    /// A GLASS, A COLUMN AND A SCALE, and the scale never moves: 50 F at
+    /// the foot and 100 F at the top, a room from cold to hot, with a tick
+    /// at every ten. The column is in the pen's colours, by how far up the
+    /// scale it stands -- green in a room as rooms are, yellow in a warm
+    /// one, red near the top -- so the glass and the drum it opens are one
+    /// instrument. A reading off either end stands at that end. The glass
+    /// whose drum is open has a brighter rim.
+    fn thermometers(&self, frame: &mut canvas::Frame, width: f32) {
+        use canvas::{Path, Stroke};
+        let n = self.thermos.len();
+        for (i, (k, celsius)) in self.thermos.iter().enumerate() {
+            let slot = thermo_slot(width, i, n);
+            let x = slot.x + THERMO_X;
+            let (top, foot) = (slot.y + THERMO_TOP, slot.y + THERMO_FOOT);
+            let bulb = iced::Point::new(x, foot + 8.0);
+            let lit = self.temp_open == Some(*k);
+            // With several counters the rim is the counter's own colour.
+            let rim = if self.lettered { self.skin.tube(*k) } else { self.skin.bezel };
+            let rim = Color { a: if lit { 1.0 } else { 0.55 }, ..rim };
+            let glass = Path::new(|b| {
+                b.move_to(iced::Point::new(x, top - 3.0));
+                b.line_to(iced::Point::new(x, foot + 4.0));
+            });
+            let round = |width: f32, tint: Color| Stroke {
+                line_cap: canvas::LineCap::Round,
+                ..Stroke::default().with_width(width).with_color(tint)
+            };
+            frame.stroke(&glass, round(9.0, rim));
+            frame.fill(&Path::circle(bulb, 7.5), rim);
+            frame.stroke(&glass, round(6.5, self.skin.face));
+            frame.fill(&Path::circle(bulb, 6.0), self.skin.face);
+            // The column, from the bulb up to the reading.
+            let up = thermo_fraction(*celsius) as f32;
+            let ink = heat((up * (SHADES - 1) as f32) as usize);
+            let level = slot.y + thermo_level(*celsius);
+            frame.fill(&Path::circle(bulb, 4.2), ink);
+            frame.stroke(
+                &Path::line(iced::Point::new(x, bulb.y), iced::Point::new(x, level)),
+                Stroke::default().with_width(3.0).with_color(ink),
+            );
+            // A tick at every ten degrees, the two ends longer.
+            let tens = ((THERMO_HIGH_F - THERMO_LOW_F) / 10.0).round() as usize;
+            for t in 0..=tens {
+                let y = foot - (foot - top) * t as f32 / tens as f32;
+                let long = if t == 0 || t == tens { 6.0 } else { 3.5 };
+                frame.stroke(
+                    &Path::line(
+                        iced::Point::new(x + 5.5, y),
+                        iced::Point::new(x + 5.5 + long, y),
+                    ),
+                    Stroke::default().with_width(1.0).with_color(Color { a: 0.7, ..self.skin.dim }),
+                );
+            }
+        }
+    }
+
+    /// The temperature drum: ten days, a line a day, as a drum recorder
+    /// would lay them down.
+    ///
+    /// THE SPECTRUM DRUM'S PAPER AND THE SPECTRUM DRUM'S PEN. The ground is
+    /// the same shaded one, and a line is drawn as a row of the trail is:
+    /// in runs of one shade, each stroked in `heat` at the width `pen`
+    /// gives, with the wider, fainter stroke under it where it is hot.
+    /// What is hot here is what is out of its track: see `temp_shade`.
+    ///
+    /// TODAY IS AT THE FOOT AND YESTERDAY A TRACK ABOVE IT, the way the
+    /// rows of the trail go up and away, and an older line is a little
+    /// fainter. Every line stands on the same temperature and is drawn to
+    /// the same degrees a track -- `analysis::temp_drum` -- so a day like
+    /// the others stays in its own track and the lines read apart.
+    ///
+    /// THE LINES MAY CROSS, AND NOTHING IS HIDDEN WHERE THEY DO. A row of
+    /// the trail paints the ground back under itself, because it only ever
+    /// rises and what is behind it is older news. A day's temperature goes
+    /// both ways from its line, and a line that has left its track for its
+    /// neighbour's is the one thing this paper is kept to show.
+    ///
+    /// AN EMPTY DAY IS AN EMPTY TRACK: each line's baseline is ruled very
+    /// faintly whether or not anything was read on it, so the paper is ten
+    /// lines from the first day and fills from the foot. A stretch nothing
+    /// was read in is a gap in its line. The ring is the pen, where it is
+    /// now.
+    fn temp_paper(&self, frame: &mut canvas::Frame, width: f32, room: (f32, f32), drum: &TempDrum) {
+        let (top, paper) = (room.0 + ROW_H, room.1 - 2.0 * ROW_H);
+        if paper < 8.0 || width <= TEMP_LEFT + TEMP_RIGHT + 8.0 {
+            return;
+        }
+        frame.fill_rectangle(
+            iced::Point::new(0.0, top),
+            iced::Size::new(width, paper),
+            shaded(self.skin.bg),
+        );
+        let (left, across) = (TEMP_LEFT, width - TEMP_LEFT - TEMP_RIGHT);
+        // The hours: a rule down the paper at every sixth, over the
+        // figures under it.
+        for h in 0..=4 {
+            frame.fill_rectangle(
+                iced::Point::new((left + across * h as f32 / 4.0).floor(), top),
+                iced::Size::new(1.0, paper),
+                Color { a: 0.10, ..Color::WHITE },
+            );
+        }
+        let area = Rectangle { x: left, y: top, width: across, height: paper };
+        self.temp_lines(frame, area, drum, 1.0);
+    }
+
+    /// The drum's ten lines, in `area`: what `temp_paper` puts on its
+    /// paper, and at a smaller size and with a pen `thin` of the width,
+    /// what the temperature's tile is.
+    fn temp_lines(&self, frame: &mut canvas::Frame, area: Rectangle, drum: &TempDrum, thin: f32) {
+        use canvas::{path::Builder, Path, Stroke};
+        let (left, top, across, paper) = (area.x, area.y, area.width, area.height);
+        let pitch = temp_pitch(paper);
+        let mut head: Option<iced::Point> = None;
+        for (k, line) in drum.lines.iter().enumerate().rev() {
+            let base = top + temp_line(paper, k);
+            frame.fill_rectangle(
+                iced::Point::new(left, base.floor()),
+                iced::Size::new(across, 1.0),
+                Color { a: 0.16, ..heat(0) },
+            );
+            let cells = line.cells.len().max(1) as f32;
+            let at = |c: usize, off: f32| {
+                iced::Point::new(
+                    left + across * (c as f32 + 0.5) / cells,
+                    (base - off * pitch).clamp(top + 1.0, top + paper - 1.0),
+                )
+            };
+            let alpha = 1.0 - 0.45 * k as f32 / TEMP_DAYS as f32;
+            let mut shades: Vec<Option<Builder>> = (0..SHADES).map(|_| None).collect();
+            for c in 0..line.cells.len() {
+                let Some(here) = line.cells[c] else { continue };
+                if k == 0 {
+                    head = Some(at(c, here));
+                }
+                match line.cells.get(c + 1).copied().flatten() {
+                    Some(next) => {
+                        let far = if here.abs() > next.abs() { here } else { next };
+                        let b = shades[temp_shade(far)].get_or_insert_with(Builder::new);
+                        b.move_to(at(c, here));
+                        b.line_to(at(c + 1, next));
+                    }
+                    // A reading with nothing either side of it is a dot,
+                    // or it would not be on the paper at all.
+                    None if c == 0 || line.cells[c - 1].is_none() => {
+                        frame.fill(
+                            &Path::circle(at(c, here), 1.2 * thin),
+                            Color { a: alpha, ..heat(temp_shade(here)) },
+                        );
+                    }
+                    None => {}
+                }
+            }
+            for (shade, b) in shades.into_iter().enumerate() {
+                let Some(b) = b else { continue };
+                let (path, ink, wide) = (b.build(), heat(shade), pen(shade) * thin);
+                if shade > temp_shade(0.5) && thin >= 1.0 {
+                    frame.stroke(
+                        &path,
+                        Stroke::default()
+                            .with_width(wide + 3.0)
+                            .with_color(Color { a: 0.22 * alpha, ..ink }),
+                    );
+                }
+                frame.stroke(
+                    &path,
+                    Stroke::default().with_width(wide).with_color(Color { a: alpha, ..ink }),
+                );
+            }
+        }
+        if let Some(here) = head {
+            frame.stroke(
+                &Path::circle(here, 1.0 + 2.5 * thin),
+                Stroke::default().with_width(1.2 * thin).with_color(Color::WHITE),
+            );
+        }
+    }
 
     /// The dials, in a row from the left, as an instrument cluster.
     ///
@@ -2847,6 +4222,115 @@ impl Chart {
     }
 }
 
+// -------------------------------------------------------------------- shot ---
+
+/// How long `--shot` waits before the picture, unless told: long enough for
+/// a service's history to have arrived and the first snapshots to be drawn.
+const SHOT_AFTER: f64 = 20.0;
+
+/// One `Shoot`, when `--shot-after` has passed.
+///
+/// A THREAD THAT SLEEPS, for the reason the feed is one: this crate carries
+/// no timer backend. See `App::subscription`.
+fn shoot_when_due() -> impl iced::futures::Stream<Item = Message> {
+    iced::stream::channel(1, async |mut out| {
+        std::thread::spawn(move || {
+            let wait = SHOT.get().map(|s| s.1).unwrap_or(SHOT_AFTER);
+            std::thread::sleep(Duration::from_secs_f64(wait));
+            // The channel is one deep and the interface may be busy: asked
+            // until it is taken.
+            while out.try_send(Message::Shoot).is_err() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        });
+    })
+}
+
+/// A picture as a PNG file: eight bits each of red, green, blue and alpha.
+///
+/// WRITTEN OUT BY HAND, AND NOT COMPRESSED. This crate depends on iced and
+/// on radbeeper and on nothing else, and a picture of the window is not
+/// worth a third. A PNG's pixels are a zlib stream, and zlib allows a block
+/// that is stored as it stands, so the file is the pixels with a header and
+/// three checksums: larger than a compressed one by several times, and read
+/// by everything that reads a PNG.
+fn png_of(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
+    let row = width as usize * 4;
+    // Every row begins with the byte that says it is not filtered.
+    let mut raw = Vec::with_capacity((row + 1) * height as usize);
+    for y in 0..height as usize {
+        raw.push(0);
+        let line = rgba.get(y * row..(y + 1) * row).unwrap_or(&[]);
+        raw.extend_from_slice(line);
+        // A picture shorter than it says it is, is black where it ends.
+        raw.resize((y + 1) * (row + 1), 0);
+    }
+    // The zlib stream: its two-byte head, stored blocks of at most 65535
+    // bytes each with its length and the length's complement, and the
+    // Adler-32 of what was stored.
+    let mut z = vec![0x78, 0x01];
+    let mut blocks = raw.chunks(65535).peekable();
+    if blocks.peek().is_none() {
+        z.extend_from_slice(&[1, 0, 0, 0xff, 0xff]);
+    }
+    while let Some(block) = blocks.next() {
+        z.push(blocks.peek().is_none() as u8);
+        z.extend_from_slice(&(block.len() as u16).to_le_bytes());
+        z.extend_from_slice(&(!(block.len() as u16)).to_le_bytes());
+        z.extend_from_slice(block);
+    }
+    z.extend_from_slice(&adler32(&raw).to_be_bytes());
+
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    let mut chunk = |name: &[u8; 4], body: &[u8]| {
+        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        let from = out.len();
+        out.extend_from_slice(name);
+        out.extend_from_slice(body);
+        let sum = crc32(&out[from..]);
+        out.extend_from_slice(&sum.to_be_bytes());
+    };
+    let mut head = Vec::with_capacity(13);
+    head.extend_from_slice(&width.to_be_bytes());
+    head.extend_from_slice(&height.to_be_bytes());
+    // Eight bits a channel, colour with alpha, and the only compression,
+    // filter and interlace a PNG has.
+    head.extend_from_slice(&[8, 6, 0, 0, 0]);
+    chunk(b"IHDR", &head);
+    chunk(b"IDAT", &z);
+    chunk(b"IEND", &[]);
+    out
+}
+
+/// The CRC a PNG chunk ends with: the one zlib and Ethernet use.
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut table = [0u32; 256];
+    for (n, slot) in table.iter_mut().enumerate() {
+        let mut c = n as u32;
+        for _ in 0..8 {
+            c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+        }
+        *slot = c;
+    }
+    !bytes.iter().fold(!0u32, |c, b| table[((c ^ *b as u32) & 0xff) as usize] ^ (c >> 8))
+}
+
+/// The checksum a zlib stream ends with.
+fn adler32(bytes: &[u8]) -> u32 {
+    let (mut a, mut b) = (1u32, 0u32);
+    // 5552 bytes is as many as can be added before either sum can pass 32
+    // bits, so the remainder is taken once a run and not once a byte.
+    for run in bytes.chunks(5552) {
+        for byte in run {
+            a += *byte as u32;
+            b += a;
+        }
+        a %= 65521;
+        b %= 65521;
+    }
+    (b << 16) | a
+}
+
 // -------------------------------------------------------------------- feed ---
 
 /// The mean rate across the tubes, from windows holding every tube's samples.
@@ -2888,6 +4372,30 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
     iced::stream::channel(32, async |mut out| {
         std::thread::spawn(move || {
             let dir = logs_dir();
+            // THE LONG PAPERS ARE READ ON A THREAD OF THEIR OWN. A month of
+            // days with no finished lines kept is a second of reading and
+            // transforming, a year of months more, and this thread has a
+            // needle to move twelve times a second. They are read at the
+            // start and every few minutes after, whether or not anything
+            // is serving: they are made from the log, not the stream.
+            let (long_out, long_in) = std::sync::mpsc::channel();
+            {
+                let dir = dir.clone();
+                std::thread::spawn(move || loop {
+                    let now = clock::now();
+                    let both = (
+                        longdrum::rows(&dir, Paper::Day, now, DAY_LINES),
+                        longdrum::rows(&dir, Paper::Month, now, MONTH_LINES),
+                    );
+                    if long_out.send(both).is_err() {
+                        break;
+                    }
+                    std::thread::sleep(LOG_REREAD);
+                });
+            }
+            let mut days: Arc<Vec<Option<LongRow>>> = Arc::new(Vec::new());
+            let mut months: Arc<Vec<Option<LongRow>>> = Arc::new(Vec::new());
+            let mut long_made = 0u64;
             loop {
                 let Some(mut client) = Client::attach(&dir) else {
                     let _ = out.try_send(Message::Adrift(format!(
@@ -2971,6 +4479,21 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                 let mut gaps = (0.0f64, 0u32);
                 let mut replaying = true;
                 let mut sent = Instant::now() - Duration::from_secs(1);
+                // WHAT THE COUNT LOG FILLED, before the replay's first
+                // second: how many seconds, at the head of everything
+                // kept. See `seconds_from_log`.
+                let mut filled = 0usize;
+                let mut fill_tried = false;
+                // THE TEMPERATURES: each counter's newest, and its ten days
+                // -- what the log has, read every few minutes, and after
+                // it what has arrived since. The drums are made again when
+                // either changes, and counted so the canvas knows.
+                let mut temps: Vec<Option<f64>> = vec![None; tubes];
+                let mut temp_days: Vec<Vec<(f64, f64)>> = vec![Vec::new(); tubes];
+                let mut drums: Arc<Vec<Option<TempDrum>>> = Arc::new(Vec::new());
+                let mut drums_made = 0u64;
+                let mut drums_stale = false;
+                let mut logs_read: Option<Instant> = None;
 
                 // A SHORT POLL AND A COUNTED SILENCE, rather than a long
                 // blocking read. The needle has to move between samples and
@@ -3000,6 +4523,32 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                         match event {
                             Event::Sample { who, when, counts } => {
                                 let who = who.min(tubes - 1);
+                                // THE REPLAY BEGINS WHERE THE SERVICE'S
+                                // MEMORY DOES, which after a restart is
+                                // minutes ago, and the count log has the
+                                // hours before. They go in first, ending
+                                // where this second begins, so the long
+                                // averages are full and the coarse bars
+                                // are drawn from the start. ONE TUBE ONLY:
+                                // with several, the windows and the strip
+                                // are kept by tube and by arrival, and a
+                                // row of the log is neither.
+                                if !fill_tried {
+                                    fill_tried = true;
+                                    if tubes == 1 {
+                                        let log = longdrum::Counts::load(&dir, when - FILL_REACH, when);
+                                        let bin = longdrum::DAY_BIN;
+                                        let bins = log.binned(when - FILL_REACH, when, bin);
+                                        let seconds = seconds_from_log(&bins, bin as usize, FILL_JOIN);
+                                        filled = seconds.len();
+                                        for (k, (rate, dealt)) in seconds.iter().enumerate() {
+                                            let then = when - (filled - k) as f64;
+                                            all.add(then, *dealt);
+                                            each[0].add(then, *dealt);
+                                            merged.push_back(*rate);
+                                        }
+                                    }
+                                }
                                 all.add(when, counts);
                                 each[who].add(when, counts);
                                 if let Some((prev, t)) = last {
@@ -3067,6 +4616,8 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                                 present.resize(tubes, false);
                                 spoke.resize(tubes, None);
                                 newest.resize(tubes, None);
+                                temps.resize(tubes, None);
+                                temp_days.resize(tubes, Vec::new());
                                 if let Some(p) = present.get_mut(who) {
                                     *p = true;
                                 }
@@ -3101,6 +4652,20 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                             // A row of the log, which the log has; the
                             // table under the panel is the trend's now.
                             Event::Row { .. } => {}
+                            // A counter's temperature: its thermometer's
+                            // reading, and one more point on its drum.
+                            Event::Temp { who, when, celsius } => {
+                                if who < tubes && celsius.is_finite() {
+                                    if temps[who].is_none() {
+                                        // The first of a counter's: its
+                                        // days are in the log, and wanted.
+                                        logs_read = None;
+                                    }
+                                    temps[who] = Some(celsius);
+                                    temp_days[who].push((when, celsius));
+                                    drums_stale = true;
+                                }
+                            }
                         }
                     }
                     if replaying {
@@ -3183,8 +4748,12 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                     } else {
                         // Cut in samples, the newest of which is this second.
                         let n = (dropped + series.len()) as i64;
-                        (tiers_with(&series, dropped, STRIP_COLS, LADDER[0], TIERS, 1.0),
-                         Vec::new(), n, clock_end - n)
+                        let mut strip =
+                            tiers_with(&series, dropped, STRIP_COLS, LADDER[0], TIERS, 1.0);
+                        if filled > 0 {
+                            blank_fine(&mut strip, n, filled as i64);
+                        }
+                        (strip, Vec::new(), n, clock_end - n)
                     };
                     // The scale rises at once and sinks slowly: see PEAK_TAU.
                     let tallest = strip
@@ -3199,6 +4768,46 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                     };
                     let headline = mean_of(&all, HEADLINE, tubes)
                         .or_else(|| id.spans.last().and_then(|s| mean_of(&all, *s, tubes)));
+                    // THE LOG, READ AGAIN EVERY FEW MINUTES and not every
+                    // second: ten days of temperatures are thirty thousand
+                    // lines. What a counter has said since the log's last
+                    // line is kept after it -- by a second and more, the
+                    // log's stamps being whole seconds -- so the drum does
+                    // not wait for the next reading of the file.
+                    if logs_read.is_none_or(|t| t.elapsed() >= LOG_REREAD) {
+                        logs_read = Some(Instant::now());
+                        let since = at - (TEMP_DAYS as f64 + 1.0) * 86400.0;
+                        for k in 0..tubes {
+                            let Some(serial) = id.counters.get(k).map(|c| c.serial_no.as_str())
+                            else {
+                                continue;
+                            };
+                            if temps[k].is_none() {
+                                continue;
+                            }
+                            let mut days = log::read_temps(&dir, serial, since);
+                            let last = days.last().map(|d| d.0).unwrap_or(f64::MIN);
+                            days.extend(temp_days[k].iter().filter(|d| d.0 > last + 1.0));
+                            temp_days[k] = days;
+                            drums_stale = true;
+                        }
+                    }
+                    while let Ok((d, m)) = long_in.try_recv() {
+                        days = Arc::new(d);
+                        months = Arc::new(m);
+                        long_made += 1;
+                    }
+                    if drums_stale {
+                        drums_stale = false;
+                        drums_made += 1;
+                        drums = Arc::new(
+                            (0..tubes)
+                                .map(|k| {
+                                    temps[k].map(|_| temp_drum(&temp_days[k], at, TEMP_COLS, TEMP_DAYS))
+                                })
+                                .collect(),
+                        );
+                    }
                     // The rows, worked out when there is a new one to show.
                     if fall.newest() != fall_drawn {
                         fall_drawn = fall.newest();
@@ -3266,6 +4875,12 @@ fn feed() -> impl iced::futures::Stream<Item = Message> {
                         strip_shift,
                         random: random.clone(),
                         pool: entropy::pool_status(&pool, "next in "),
+                        temps: temps.clone(),
+                        drums: drums.clone(),
+                        drums_made,
+                        days: days.clone(),
+                        months: months.clone(),
+                        long_made,
                     };
                     if out.try_send(Message::Update(Box::new(shot))).is_err() {
                         // The interface is gone, or a second behind and not
@@ -3526,6 +5141,7 @@ impl Skin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use radbeeper::drum::{STRETCH_LONG, STRETCH_MIDDLE};
 
     /// THE FLOOR IS SOLVED, NOT PICKED. It is the period at which the
     /// SHORTEST window's bins are still a bar apart -- and because that floor
@@ -3555,6 +5171,354 @@ mod tests {
         assert!((mid / short - 8.0).abs() < 1e-6);
         // And every layer still reaches its own window at the top.
         assert!(long < 32768.0, "the longest window can draw some of itself");
+    }
+
+    /// A PNG a reader will take: the signature, the three chunks with
+    /// their checksums, and the pixels back out of the stored blocks. The
+    /// two checksums are held to the values everybody's are.
+    #[test]
+    fn a_picture_is_written_as_a_png_that_reads_back() {
+        assert_eq!(crc32(b"123456789"), 0xcbf4_3926);
+        assert_eq!(adler32(b"Wikipedia"), 0x11e6_0398);
+        // Wider than one stored block holds, so there are two.
+        let (w, h) = (300u32, 60u32);
+        let rgba: Vec<u8> = (0..w * h * 4).map(|i| (i * 7 % 251) as u8).collect();
+        let png = png_of(w, h, &rgba);
+        assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        let mut at = 8;
+        let mut names = Vec::new();
+        let mut data = Vec::new();
+        while at < png.len() {
+            let len = u32::from_be_bytes(png[at..at + 4].try_into().unwrap()) as usize;
+            let body = &png[at + 4..at + 8 + len];
+            let sum = u32::from_be_bytes(png[at + 8 + len..at + 12 + len].try_into().unwrap());
+            assert_eq!(crc32(body), sum, "a chunk's checksum is of its name and its body");
+            names.push(String::from_utf8_lossy(&body[..4]).into_owned());
+            if &body[..4] == b"IHDR" {
+                assert_eq!(&body[4..12], &[0, 0, 1, 44, 0, 0, 0, 60]);
+                assert_eq!(&body[12..], &[8, 6, 0, 0, 0]);
+            }
+            if &body[..4] == b"IDAT" {
+                data = body[4..].to_vec();
+            }
+            at += 12 + len;
+        }
+        assert_eq!(names, ["IHDR", "IDAT", "IEND"]);
+        // The stored blocks, taken apart again.
+        assert_eq!(&data[..2], &[0x78, 0x01]);
+        let (mut at, mut raw, mut blocks) = (2, Vec::new(), 0);
+        loop {
+            let last = data[at];
+            let len = u16::from_le_bytes([data[at + 1], data[at + 2]]);
+            assert_eq!(!len, u16::from_le_bytes([data[at + 3], data[at + 4]]));
+            raw.extend_from_slice(&data[at + 5..at + 5 + len as usize]);
+            at += 5 + len as usize;
+            blocks += 1;
+            if last == 1 {
+                break;
+            }
+        }
+        assert_eq!(blocks, 2);
+        assert_eq!(&data[at..], &adler32(&raw).to_be_bytes());
+        let row = w as usize * 4 + 1;
+        assert_eq!(raw.len(), row * h as usize);
+        for y in 0..h as usize {
+            assert_eq!(raw[y * row], 0, "no row is filtered");
+            assert_eq!(&raw[y * row + 1..(y + 1) * row], &rgba[y * (row - 1)..(y + 1) * (row - 1)]);
+        }
+        // And a size is two numbers with an x between them.
+        assert_eq!(parse_size("760x900"), Some(iced::Size::new(760.0, 900.0)));
+        assert_eq!(parse_size("760"), None);
+        assert_eq!(parse_size("0x900"), None);
+    }
+
+    /// The thermometers stand against the right edge without overlapping,
+    /// the column is at the foot at 50 F and at the top at 100 F and held
+    /// there beyond, and one thermometer costs the dials next to nothing.
+    #[test]
+    fn a_thermometer_is_small_and_its_scale_does_not_move() {
+        let (a, b) = (thermo_slot(700.0, 0, 2), thermo_slot(700.0, 1, 2));
+        assert_eq!(a.x + a.width, b.x);
+        assert_eq!(b.x + b.width, 700.0);
+        assert_eq!(thermo_slot(700.0, 0, 1), b);
+        assert_eq!(thermo_level(10.0), THERMO_FOOT);
+        assert_eq!(thermo_level(-5.0), THERMO_FOOT);
+        assert!((thermo_level(37.0 + 7.0 / 9.0) - THERMO_TOP).abs() < 1e-3);
+        assert_eq!(thermo_level(60.0), THERMO_TOP);
+        let middle = thermo_level(23.0 + 8.0 / 9.0);
+        assert!((middle - (THERMO_TOP + THERMO_FOOT) / 2.0).abs() < 1e-3, "75 F is half way");
+        assert!(THERMO_H <= CLUSTER_H, "it stands inside the smallest dial band");
+        let size = iced::Size::new(760.0, 900.0);
+        let (none, one) = (dial_scale(size, 1, 0), dial_scale(size, 1, 1));
+        assert!(one <= none && none - one < 0.1, "{} against {}", one, none);
+        assert!(dial_scale(size, 3, 3) < one);
+        assert_eq!(dial_scale(iced::Size::new(560.0, 400.0), 2, 2), 1.0);
+        assert_eq!(both_ways(26.0), "78.8\u{b0}F 26.0\u{b0}C");
+    }
+
+    /// The temperature drum's paper: shut it takes nothing, open it takes
+    /// the smaller part of what the charts had, the charts still do not
+    /// overlap, and the ten lines stand a track apart with today's lowest.
+    #[test]
+    fn the_temperature_drum_is_cut_from_the_charts_and_ruled_in_ten() {
+        for (height, cluster) in [(900.0f32, 250.0f32), (640.0, 170.0), (400.0, 156.0)] {
+            let temp = temp_room(height, cluster);
+            assert!(temp > 0.0 && temp <= TEMP_ROOM_MAX);
+            assert!(temp < (height - cluster) * 0.5, "{} of {}", temp, height - cluster);
+            let r = regions(height, cluster, true, temp);
+            assert_eq!(r.temp, (cluster, temp));
+            assert_eq!(r.ground.0, cluster + temp);
+            assert!(r.ground.0 + r.ground.1 + ROW_H <= r.cascade.0 + 1e-3);
+            assert_eq!(regions(height, cluster, true, 0.0).ground.0, cluster);
+        }
+        let paper = 210.0;
+        let pitch = temp_pitch(paper);
+        assert!((temp_line(paper, 0) - (paper - pitch)).abs() < 1e-3);
+        assert!((temp_line(paper, 0) - temp_line(paper, 1) - pitch).abs() < 1e-3);
+        // Half a track of margin over the oldest line's own track.
+        assert!((temp_line(paper, TEMP_DAYS - 1) - pitch).abs() < 1e-3);
+        assert_eq!(temp_label_every(pitch), 1);
+        assert_eq!(temp_label_every(6.5), 2);
+        assert_eq!(temp_label_every(0.0), TEMP_DAYS);
+    }
+
+    /// The pen is green inside the track, hotter the further out, the same
+    /// either side of the line, and hot only beyond the track's edge.
+    #[test]
+    fn the_temperature_pen_is_hot_only_out_of_its_track() {
+        let edge = temp_shade(0.5);
+        assert!(temp_shade(0.0) < edge);
+        assert!(temp_shade(0.0) > 0, "a steady room is still a line that can be seen");
+        assert_eq!(temp_shade(-0.3), temp_shade(0.3));
+        for pair in [0.0f32, 0.1, 0.25, 0.5, 0.7, 0.9, 2.0].windows(2) {
+            assert!(temp_shade(pair[0]) <= temp_shade(pair[1]));
+        }
+        // The greens end before yellow does: see `drum::heat`.
+        assert!((edge as f32) < 0.76 * SHADES as f32);
+        assert!(temp_shade(0.7) as f32 > 0.76 * SHADES as f32);
+        assert_eq!(temp_shade(1.0), SHADES - 1);
+        assert_eq!(temp_shade(-40.0), SHADES - 1);
+    }
+
+    /// What the words over the drum say, and that they give way to the
+    /// width; a track is a difference, so 0.10 C is 0.18 F.
+    #[test]
+    fn the_drum_says_what_a_track_is_worth() {
+        let drum = temp_drum(&[(1_700_000_000.0, 26.0)], 1_700_000_000.0, TEMP_COLS, TEMP_DAYS);
+        assert_eq!(drum.lines.len(), TEMP_DAYS);
+        let long = temp_words(&drum, "", 2000.0);
+        assert!(long.contains("one track = 0.10 \u{b0}C (0.18 \u{b0}F)"), "{}", long);
+        assert!(long.contains("78.8\u{b0}F 26.0\u{b0}C"), "{}", long);
+        assert!(temp_words(&drum, "B", 2000.0).starts_with("temperature B"));
+        let short = temp_words(&drum, "", 100.0);
+        assert_eq!(short, "one track = 0.10 \u{b0}C (0.18 \u{b0}F)");
+        let mid = temp_words(&drum, "", 420.0);
+        assert!(mid.len() < long.len() && mid.len() > short.len());
+    }
+
+    /// A click on a thermometer opens its drum and a second shuts it; the
+    /// key goes round the counters that have a temperature and then shuts.
+    #[test]
+    fn a_click_opens_and_shuts_and_the_key_goes_round() {
+        let have = [0usize, 2];
+        assert_eq!(next_open(None, Some(2), &have), Some(2));
+        assert_eq!(next_open(Some(2), Some(2), &have), None);
+        assert_eq!(next_open(Some(2), Some(0), &have), Some(0));
+        assert_eq!(next_open(None, Some(1), &have), None, "a counter with no temperature");
+        assert_eq!(next_open(None, None, &have), Some(0));
+        assert_eq!(next_open(Some(0), None, &have), Some(2));
+        assert_eq!(next_open(Some(2), None, &have), None);
+        assert_eq!(next_open(None, None, &[]), None);
+    }
+
+    /// A long paper's axis is the logarithm of the period between its two
+    /// ends; the long end is the longest period a finished line has, and a
+    /// third of the span when there is none; its named periods are on it
+    /// in order with the ends first and last; and what is off it has no
+    /// place.
+    #[test]
+    fn a_long_paper_has_its_own_axis() {
+        assert_eq!(long_ends(Paper::Day, &[]), (28800.0, 120.0));
+        assert_eq!(long_ends(Paper::Month, &[]).1, 1200.0);
+        // An unfinished line does not set the end; a finished one does.
+        let mut young = long_row(0.0).unwrap();
+        young.whole = false;
+        young.bands = vec![(4000.0, 1.0), (120.0, 1.0)];
+        let mut done = long_row(0.0).unwrap();
+        done.bands = vec![(27000.0, 1.0), (120.0, 1.0)];
+        assert_eq!(long_ends(Paper::Day, &[Some(young.clone())]).0, 28800.0);
+        assert_eq!(long_ends(Paper::Day, &[Some(young), None, Some(done)]).0, 27000.0);
+        for paper in [Paper::Day, Paper::Month] {
+            let ends = long_ends(paper, &[]);
+            let (long, short) = ends;
+            assert_eq!(long_place(ends, long), Some(0.0));
+            assert_eq!(long_place(ends, short), Some(1.0));
+            let middle = long_place(ends, (long * short).sqrt()).unwrap();
+            assert!((middle - 0.5).abs() < 1e-4, "{}", middle);
+            assert_eq!(long_place(ends, long * 2.0), None);
+            assert_eq!(long_place(ends, short / 2.0), None);
+            assert_eq!(long_place(ends, 0.0), None);
+            let ticks = long_ticks(paper, ends);
+            assert_eq!(ticks[0].0, long);
+            assert_eq!(ticks[ticks.len() - 1].0, short);
+            for pair in ticks.windows(2) {
+                assert!(long_place(ends, pair[0].0).unwrap() < long_place(ends, pair[1].0).unwrap());
+            }
+        }
+        let names = |paper| -> Vec<String> {
+            long_ticks(paper, long_ends(paper, &[])).into_iter().map(|t| t.1).collect()
+        };
+        assert_eq!(names(Paper::Day), ["8h", "3h", "1h", "20m", "5m", "2m"]);
+        assert_eq!(names(Paper::Month), ["10d", "3d", "1d", "6h", "1h", "20m"]);
+        assert_eq!(period_name(45.0), "45s");
+        assert_eq!(period_name(9.6 * 86400.0), "10d");
+    }
+
+    fn long_row(start: f64) -> Option<LongRow> {
+        Some(LongRow {
+            start,
+            seconds: 86400.0,
+            covered: 1.0,
+            whole: true,
+            cps: 0.7,
+            bands: vec![(28800.0, 1.0), (120.0, 1.0)],
+        })
+    }
+
+    /// The papers share the ground: with nothing to show the live drum has
+    /// all of it; a paper is its head, its clear ground and its lines; the
+    /// month paper is over the day paper and the live drum is at the foot,
+    /// with the larger part, and nothing between them.
+    #[test]
+    fn the_ground_is_shared_out_and_the_live_drum_keeps_the_foot() {
+        let full = FALL_DEPTH;
+        assert_eq!(long_lines(286.0, full, 0, 0), (0, 0));
+        assert_eq!(papers((100.0, 286.0), 0, 0), [(100.0, 0.0), (100.0, 0.0), (100.0, 286.0)]);
+        // One line is one line, and has its paper.
+        assert_eq!(long_lines(286.0, full, 1, 0), (1, 0));
+        let (day, month) = long_lines(286.0, full, 30, 12);
+        assert!(day >= 8 && day <= DAY_LINES && month >= 2 && month <= MONTH_LINES, "{} {}", day, month);
+        let cut = papers((100.0, 286.0), day, month);
+        assert_eq!(cut[0], (100.0, long_height(month)));
+        assert_eq!(cut[1].0, cut[0].0 + cut[0].1);
+        assert_eq!(cut[2].0, cut[1].0 + cut[1].1);
+        assert!((cut[2].0 + cut[2].1 - 386.0).abs() < 1e-3, "the live drum ends at the foot");
+        assert!(cut[2].1 > 286.0 * 0.4, "and keeps {} of 286", cut[2].1);
+        // More room is more lines, up to what there is to show.
+        let tall = long_lines(900.0, full, 30, 12);
+        assert!(tall.0 > day && tall.1 >= month);
+        assert_eq!(long_lines(4000.0, full, 30, 12), (30, 12));
+        assert_eq!(long_lines(4000.0, full, 3, 1), (3, 1));
+        // A ground too small for them has none, and the live drum has it.
+        assert_eq!(long_lines(20.0, full, 30, 12), (0, 0));
+        // WHAT THE LIVE DRUM IS NOT USING GOES TO THE PAPERS: a young drum
+        // leaves more lines than a full one, the day paper first, and
+        // never so many that the drum's own rows and reach are cut.
+        let young = long_lines(286.0, 10, 30, 12);
+        assert!(young.0 > day && young.1 >= month, "{:?} against {:?}", young, (day, month));
+        let left = 286.0 - long_height(young.0) - long_height(young.1);
+        assert!(left >= LIVE_LEAST as f32 * TRAIL_STEP + TRAIL_REACH, "{} left", left);
+        assert_eq!(long_lines(286.0, 0, 30, 12), young, "no rows yet is the same as a few");
+        // A ground with more than the drum's ninety-six rows of room has
+        // the same to give however old the drum is.
+        assert_eq!(long_lines(600.0, full, 30, 12), (30, 12));
+        // And a drum that has all its rows is given nothing back: the
+        // papers have then what the share alone gives them.
+        let (old, new) = (long_lines(440.0, full, 30, 12), long_lines(440.0, 0, 30, 12));
+        assert!(old.0 <= new.0 && old.1 <= new.1 && old != new, "{:?} {:?}", old, new);
+        assert_eq!(long_height(0), 0.0);
+        // Empty tracks inside the record count; beyond its oldest line, not.
+        let rows = vec![long_row(3.0), None, long_row(1.0), None, None];
+        assert_eq!(long_have(&rows), 3);
+        assert_eq!(long_have(&[None, None]), 0);
+        let words = long_words(Paper::Day, &rows, 3, 2000.0);
+        assert!(words.starts_with("8h \u{b7} days \u{b7} a line a day"), "{}", words);
+        assert!(words.contains("3 back to"), "{}", words);
+        assert_eq!(long_words(Paper::Month, &[], 3, 10.0), "10d \u{b7} months");
+    }
+
+    /// What is open by default, what a click makes of it, and what
+    /// `--show` asks.
+    #[test]
+    fn a_paper_is_open_or_a_tile() {
+        assert!(!fold_open(Fold::Days, None, 0));
+        assert!(!fold_open(Fold::Days, Some(true), 0), "nothing to show is not open");
+        assert!(!fold_open(Fold::Days, None, 1));
+        assert!(fold_open(Fold::Days, None, 2));
+        assert!(fold_open(Fold::Days, Some(true), 1));
+        assert!(!fold_open(Fold::Days, Some(false), 30));
+        assert!(!fold_open(Fold::Months, None, 12));
+        assert!(fold_open(Fold::Months, Some(true), 1));
+        assert_eq!(show_asked("days,months:tile", "days"), Some(true));
+        assert_eq!(show_asked("days,months:tile", "months"), Some(false));
+        assert_eq!(show_asked("days, months:tile", "temp"), None);
+        assert_eq!(show_asked("temp:tile", "temp"), Some(false));
+    }
+
+    /// The tiles are under the readout and right of the dials, side by
+    /// side inside the band; a band with no room under its readout has
+    /// none, and a narrow one has as many as fit.
+    #[test]
+    fn the_tiles_fit_the_dial_band_or_are_left_out() {
+        let slots = tile_slots(738.0, 410.0, 250.0, 0.0, 3);
+        assert_eq!(slots.len(), 3);
+        for pair in slots.windows(2) {
+            assert!((pair[0].x + pair[0].width + TILE_GAP - pair[1].x).abs() < 1e-3);
+        }
+        for slot in &slots {
+            assert!(slot.x >= 410.0 && slot.x + slot.width <= 738.0 + 1e-3);
+            assert!(slot.y >= READOUT_H && slot.y + slot.height <= 250.0);
+            assert!(slot.width <= TILE_W && slot.height <= TILE_H);
+        }
+        // The smallest dial band: the readout has all of it.
+        assert!(tile_slots(538.0, 252.0, CLUSTER_H, 0.0, 3).is_empty());
+        // A narrow band with height to spare: the last tiles are left out.
+        let few = tile_slots(540.0, 410.0, 250.0, 0.0, 3);
+        assert_eq!(few.len(), 2);
+        assert!(few.iter().all(|s| s.width >= TILE_MIN_W && s.x + s.width <= 540.0 + 1e-3));
+        assert!(tile_slots(738.0, 410.0, 250.0, 0.0, 0).is_empty());
+        // The readings of nine tubes are two more rows over them.
+        assert_eq!(tile_slots(738.0, 410.0, 274.0, 24.0, 1)[0].y, READOUT_H + 24.0);
+    }
+
+    /// The log's rows become seconds that hold exactly its counts; the run
+    /// stops at a break; a short break where it meets the replay is closed
+    /// and a long one means no run; and the bars finer than a row are
+    /// emptied over what the log filled.
+    #[test]
+    fn the_log_fills_the_hours_the_replay_does_not_reach() {
+        // Thirty seconds at 0.5 a second are fifteen counts, dealt evenly.
+        let bins = [Some(0.2), None, Some(0.5), Some(0.7)];
+        let seconds = seconds_from_log(&bins, 30, FILL_JOIN);
+        assert_eq!(seconds.len(), 60, "the run after the break");
+        assert_eq!(seconds[..30].iter().map(|s| s.1).sum::<u32>(), 15);
+        assert_eq!(seconds[30..].iter().map(|s| s.1).sum::<u32>(), 21);
+        assert!(seconds[..30].iter().all(|s| s.0 == 0.5 && s.1 <= 1));
+        assert_eq!(seconds_from_log(&[Some(0.5), None, None], 30, 2).len(), 30);
+        assert!(seconds_from_log(&[Some(0.5), None, None, None], 30, 2).is_empty());
+        assert!(seconds_from_log(&[None, None], 30, FILL_JOIN).is_empty());
+        assert!(seconds_from_log(&[], 30, FILL_JOIN).is_empty());
+
+        // An hour of a steady rate, of which the first 3000 seconds are
+        // the log's.
+        let series = vec![0.5f64; 3600];
+        let mut strip = tiers_with(&series, 0, STRIP_COLS, LADDER[0], TIERS, 1.0);
+        let before = strip.clone();
+        blank_fine(&mut strip, 3600, 3000);
+        let spans = analysis::bar_spans(&strip, 3600);
+        let mut emptied = 0;
+        for ((tier, was), spans) in strip.iter().zip(&before).zip(&spans) {
+            for ((now, then), (from, _)) in tier.values.iter().zip(&was.values).zip(spans) {
+                if tier.seconds < FILL_BAR && *from < 3000 {
+                    assert_eq!(*now, None, "a {}s bar at {}", tier.seconds, from);
+                    emptied += then.is_some() as usize;
+                } else {
+                    assert_eq!(now, then, "a {}s bar at {}", tier.seconds, from);
+                }
+            }
+        }
+        assert!(emptied > 0, "some fine bars were over the log's stretch");
+        assert!(strip.iter().any(|t| t.seconds >= FILL_BAR && t.values.iter().any(Option::is_some)));
     }
 
     /// Nothing is resolvable below the Nyquist limit of a one-second sample,
@@ -3592,7 +5556,7 @@ mod tests {
     fn the_canvas_is_cut_into_charts_that_do_not_overlap() {
         for trail in [false, true] {
             for (height, cluster) in [(604.0f32, 185.0f32), (460.0, 170.0), (1000.0, 240.0)] {
-                let r = regions(height, cluster, trail);
+                let r = regions(height, cluster, trail, 0.0);
                 assert_eq!(r.ground.0, cluster);
                 // The spectrum's axis is between them.
                 assert!((r.ground.0 + r.ground.1 + ROW_H - r.cascade.0).abs() < 1e-3);
@@ -3604,11 +5568,11 @@ mod tests {
                 assert!((r.ground.0 + r.ground.1 - axis).abs() < 1e-3);
             }
         }
-        let (plain, with) = (regions(600.0, 180.0, false), regions(600.0, 180.0, true));
+        let (plain, with) = (regions(600.0, 180.0, false, 0.0), regions(600.0, 180.0, true, 0.0));
         assert!(with.ground.1 > plain.ground.1 && with.cascade.1 < plain.cascade.1);
         // Ninety-six rows, two pixels apart, fit on the ground of the
         // commonest window there is.
-        assert!(regions(604.0, 185.0, true).ground.1 >= FALL_DEPTH as f32 * TRAIL_STEP);
+        assert!(regions(604.0, 185.0, true, 0.0).ground.1 >= FALL_DEPTH as f32 * TRAIL_STEP);
     }
 
     /// The pointer is over a bar, and the bar is one of a tier.
@@ -3943,7 +5907,7 @@ mod tests {
     /// may make that worse.
     #[test]
     fn the_dials_grow_with_the_glass_and_never_below_their_minimum() {
-        let at = |w: f32, h: f32| dial_scale(iced::Size::new(w, h), 2);
+        let at = |w: f32, h: f32| dial_scale(iced::Size::new(w, h), 2, 0);
         // The tile this was laid out for: unchanged, exactly 1.
         assert_eq!(at(560.0, 400.0), 1.0);
         // The default window is not a tile, it is a window somebody opened,
