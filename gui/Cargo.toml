@@ -20,7 +20,7 @@ version = "0.6.0"
 edition = "2021"
 authors = ["Paul Richeson <paulr@sdf.org>"]
 rust-version = "1.85"
-description = "A window onto a GQ GMC Geiger-Muller counter, over radbeeper's stream"
+description = "A window onto a GQ GMC Geiger-Muller counter, over radbeeper's stream: dials, counts, drum spectrograms by the minute, day and month, and the temperature"
 license = "MIT"
 repository = "https://github.com/vonglurt/radbeeper"
 

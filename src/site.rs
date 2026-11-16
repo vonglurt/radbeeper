@@ -708,6 +708,16 @@ seconds. The counter's own memory is read back to fill in the time nothing
 was listening, and the whole record becomes a web page with one
 command.</p></div>
 
+<div class="fact"><h2>Days, weeks and months back</h2><p>Above the live
+chart, the same paper with <strong>a line for every day and every
+month</strong> the counter has logged, there the moment the window opens.
+What comes round once an hour shows as a stripe through the days.</p></div>
+
+<div class="fact"><h2>The temperature too</h2><p>A GMC-320 has a thermometer.
+It is read between two counts, logged beside them, and drawn
+<strong>a line a day</strong>, today against yesterday, in &deg;F and
+&deg;C.</p></div>
+
 <div class="fact"><h2>One counter or several</h2><p>Plug in a second and both
 are read, with nothing to set. The reading gets more precise, each keeps its
 own log, and one that stops answering is left out until it

@@ -94,8 +94,18 @@ radbeeper watch
 ![the monitor](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch.png)
 
 Everything on one screen of a terminal: the reading in large digits, the five
-averages, the strip of counts, the check for rhythms, and the rows as they
-are written to the log.
+averages, a small thermometer, the drum spectrogram with a line for each day
+and each month above it, the strip of counts, and the rows as they are
+written to the log.
+
+| Key | |
+|---|---|
+| `d` | the day paper: shown, folded to one row, off |
+| `m` | the month paper, the same |
+| `t` | the temperature, ten days of it, a line a day |
+| `q` | quit |
+
+![the temperature in a terminal](https://raw.githubusercontent.com/vonglurt/radbeeper/main/docs/screenshots/watch-temperature.png)
 
 ---
 
@@ -111,12 +121,19 @@ radbeeper-gui
 |---|---|
 | **The counters** | Which counters are connected, and what each counted in the last second. An empty space means that counter has stopped answering. |
 | **The dials** | The reading as a needle. The coloured bands are *nominal*, *advisory*, *warning* and *deadly*. |
+| **The thermometer** | The counter's own temperature, top right, in °F and °C. Click it for ten days of it. |
+| **The tiles** | A chart you have folded away, small, under the big number. Click one to open it. |
 | **The big number** | Counts per minute over the last half minute, how precise that is, and the dose rate. |
 | **The averages** | The same reading over 3 seconds, 30 seconds, 5 minutes, 50 minutes and a working day. |
-| **The striped chart** | The check for rhythms. Mostly green is the good answer. See [Reading the drum spectrogram](docs/reading-the-drum-spectrogram.md). |
+| **The striped chart** | The check for rhythms. Mostly green is the good answer. The lines at its top are whole days, and above them whole months. See [Reading the drum spectrogram](docs/reading-the-drum-spectrogram.md). |
 | **The counts** | A bar for each second on the right, with older counts packed closer together to the left. The line over the bars is the trend. **Point at a bar** to see when it was and what it read. |
 | **The key** | The newest random number, and which counter it came from. |
 | **The table** | The trend line in numbers: for each panel of the counts, where the trend is now, its average over that panel, and its high and low, in CPM. |
+
+The pictures of the window and the monitor on this page were taken on 16
+November 2026 over made-up logs with rhythms put in on purpose, so there is
+something to see; a real room is mostly green. The moving picture at the top
+is older and shows the window before the day and month papers.
 
 The window follows your desktop's light or dark theme, and fits whatever
 space it is given: in a small window the table goes first and the charts
