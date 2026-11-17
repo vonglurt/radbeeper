@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A user experience review — RadBeeper</title>
+<meta name="description" content="What it is like to install and use RadBeeper, from the first command to the daily glance: what already works, forty findings, nearly all with a fix, and the ten changes that would help a user most.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/user-experience-review.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="A user experience review — RadBeeper">
+<meta property="og:description" content="What it is like to install and use RadBeeper, from the first command to the daily glance: what already works, forty findings, nearly all with a fix, and the ten changes that would help a user most.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/user-experience-review.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.drum img{display:block;width:100%;height:auto;margin:1.75rem 0 0;
+border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.caption{font-size:.9rem;color:var(--dim);margin:.6rem 0 0;max-width:44rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-flex;align-items:center;justify-content:center;min-height:2.6rem;
+padding:.55rem 1.15rem;font:700 .82rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.12em;text-transform:uppercase;text-decoration:none;color:var(--fg);
+border:1px solid var(--line);border-radius:999px;
+background:repeating-linear-gradient(180deg,rgba(255,255,255,.06) 0 1px,transparent 1px 3px),var(--card);
+box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 2px 6px rgba(0,0,0,.25);
+transition:transform .08s,filter .15s}
+.cta a:hover{filter:brightness(1.07)}
+.cta a:active{transform:translateY(1px)}
+.cta a.primary{color:#004712;text-shadow:0 1px 0 rgba(255,255,255,.55);border-color:#2c7a34;
+background:repeating-linear-gradient(180deg,rgba(255,255,255,.08) 0 1px,transparent 1px 3px),
+linear-gradient(180deg,#5fae66 0,#c4ffc8 5%,#9effa8 10%,#4fc95c 90%,#2c7a34 100%);
+box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 0 18px rgba(51,242,77,.45),0 2px 6px rgba(0,0,0,.35)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="a-user-experience-review">A user experience review</h1>
+<p><strong>What it is like to install and use RadBeeper, from the first command to the daily glance: what already works, forty findings, nearly all with a fix, and the ten changes that would help a user most.</strong></p>
+<p><em>16 November 2026, against commit <code>cf8eb39</code> with the working tree's uncommitted changes built in. Done on a Mac with a fake counter (<code>tests/fake_gmc.py</code>) and 45 days of made-up logs (<code>examples/sample_logs.rs</code>): every command was run and its output read, the terminal monitor was captured at five sizes, and the window and the pages were rendered to pictures and read, not clicked. No real counter was plugged in at any point.</em></p>
+<hr>
+<h2 id="the-verdict">The verdict</h2>
+<p>Once a counter is being read, RadBeeper is good to use. The terminal monitor fits an 80 by 24 screen with nothing cut off, the window and the pages are full the moment they open because they are made from the log, and almost every waiting state says how long the wait is. The trouble is at the edges. A person with no counter, no service, a mistyped command or a Mac is told too little, or is told to run a Linux command. The window never says that it has keys or that its parts can be clicked. None of this is deep: most of the ten changes at the end are a line of text each.</p>
+<hr>
+<h2 id="what-works-well">What works well</h2>
+<table><thead><tr><th></th><th>The evidence</th></tr></thead><tbody><tr><td><strong>Waiting states say how long</strong></td><td>A fresh terminal monitor prints <code>30s   filling, 21s to go</code>, <code>spectrum   accumulating, 120s to the first window of 128</code> and, where a day paper exists, <code>now   the first row in 432s</code> (<code>tui-fresh-80x24.txt</code>, <code>tui-80x24.txt</code>).</td></tr><tr><td><strong>80 by 24 is a whole monitor</strong></td><td>Header, five averages, thermometer, a folded day line, the live drum, the counts and the key line all fit, with no wrapped or cut line (<code>tui-80x24.png</code>). At 120 by 40 and 160 by 50 the same screen gains the papers in full and the log table (<code>tui-120x40.png</code>, <code>tui-160x50.txt</code>).</td></tr><tr><td><strong>256 colours lose nothing visible</strong></td><td>With <code>COLORTERM</code> unset the monitor sends <code>38;5;</code> colours only, and the picture reads the same as the 24-bit one (<code>tui-120x40-256.png</code> beside <code>tui-120x40.png</code>).</td></tr><tr><td><strong><code>now</code> is a good interface for a program</strong></td><td>With no service it exits 1 and says what to do. With one it prints a header line and a row, or one JSON object with an age beside every value. Six seconds after the fake counter was stopped the JSON said <code>"live":false</code>.</td></tr><tr><td><strong>The service says what it is doing</strong></td><td>Its start is twelve plain lines, one fact each: the port, the files, the row spacing, the socket, the first temperature (<code>service.out</code>).</td></tr><tr><td><strong>Exit codes are consistent</strong></td><td>2 for an unknown option, 1 for no counter and for no service, 0 for a dormant service.</td></tr><tr><td><strong>The drums page explains itself</strong></td><td>Every chart on <code>drums.html</code> has a paragraph above saying how to read it and a caption below saying what it was made from, and the temperature section ends "the inside of the counter's case, not the air of the room" (<code>view-drums.png</code>). Neither generated page contains a script.</td></tr><tr><td><strong>The front page says what the thing is</strong></td><td>The first screen at 1200 by 900 has the sentence "RadBeeper reads a GQ GMC-320 Plus over USB", an Install button and the top of a picture of the window (<code>page-front.png</code>).</td></tr><tr><td><strong>The window keeps its shape</strong></td><td>At 760 by 900, 1262 by 756 and 560 by 400, in both themes, nothing overlaps and the dials, the big number and the counts stay readable (<code>gui-760x900-dark.png</code>, <code>gui-1262x756-antiquity.png</code>, <code>gui-560x400-dark.png</code>). The one exception is finding 4.3.</td></tr></tbody></table>
+<hr>
+<h2 id="findings">Findings</h2>
+<p>Severity is one of three: <strong>blocks</strong> (a user cannot go on without reading the source or asking), <strong>confuses</strong> (a user goes on, with a wrong idea or after a detour), <strong>polish</strong>. Pictures and captures are in <code>/tmp/rbux-review/</code>; they are not in the repository.</p>
+<h3 id="1-first-run-and-install">1. First run and install</h3>
+<p><strong>1.1 The window needs a service, and the README's first run does not say so (confuses).</strong> The README lists <code>probe</code>, <code>watch</code>, <code>radbeeper-gui</code> ("or the same counter in a window"), then <code>service</code>. <code>radbeeper-gui --logs /tmp/rbux-none</code> with nothing serving drew two lines, "no counter" and "nothing is serving /tmp/rbux-none/sock" (<code>gui-none-dark.png</code>). A Linux user off Copal who types the third line of the README gets that screen with a counter plugged in and working. <em>Fix:</em> put <code>radbeeper service</code> second in the list, and say in one sentence that the window attaches to a running <code>service</code> or <code>watch</code>.</p>
+<p><strong>1.2 The tree and the release are both 0.6.0 (confuses).</strong> The README says the temperature, the long drums and the Mac build are "in this repository, not yet in a release", and the release is 0.6.0. <code>radbeeper --version</code> from the tree prints <code>radbeeper 0.6.0</code>, and the window's corner reads "radbeeper 0.6.0". A user cannot tell from the program which of the two they are running, and neither can a bug report. <em>Fix:</em> call the tree <code>0.7.0-dev</code>, or print the commit after the version.</p>
+<p><strong>1.3 The first eight and a half minutes of the window are a black rectangle (confuses).</strong> With a new log directory the window's largest panel, about a third of its height, is black and carries no words (<code>gui-fresh-dark.png</code>). The terminal monitor in the same state says <code>spectrum   accumulating, 120s to the first window of 128</code>. This is the first thing a new user sees after the dials. <em>Fix:</em> write the terminal's sentence in the empty paper.</p>
+<p><strong>1.4 On a Mac the app alone leaves no <code>radbeeper</code> in the shell (confuses).</strong> On this Mac <code>/Applications/RadBeeper.app</code> is installed and <code>which radbeeper radbeeper-gui</code> finds neither; the program is inside the app as <code>radbeeper-cli</code>. The README's fleet section and every document say <code>radbeeper now</code>. <code>make install</code> would put it on the path; <code>make app</code> does not say that it has not. <em>Fix:</em> have <code>make app</code> end with a line saying where the program is and that <code>make install</code> puts it on the path.</p>
+<h3 id="2-the-command-line">2. The command line</h3>
+<p><strong>2.1 An unknown command is reported as a missing counter (confuses).</strong></p>
+<pre><code>$ radbeeper frobnicate
+no counter: no serial device is present
+    Nothing matching /dev/ttyUSB* or /dev/ttyACM*.
+[exit 1]</code></pre>
+<p><code>radbeeper help</code> gives the same. The check for the command's name is the last arm of the match that runs after a counter has been found (<code>src/main.rs</code>, "unknown command"), so only a user with a counter plugged in is told the truth. An unknown option is caught at once: <code>radbeeper: unknown option --frobnicate</code>, exit 2. <em>Fix:</em> check the name first; make <code>help</code> print the help.</p>
+<p><strong>2.2 With the service running, <code>cpm</code> says the port is busy, and the message says that cannot happen (confuses).</strong> <code>radbeeper -d /dev/ttys002 cpm</code>, with a service of this build holding that port:</p>
+<pre><code>port busy: the port is already open by another radbeeper
+    ...A `service` from this version hands the stream to anyone
+    who asks and never produces this message, so the holder is a
+    one-shot that wants the port to itself...
+    doas rc-service radbeeper stop</code></pre>
+<p>The holder was a <code>service</code> from this version. <code>cpm</code> is the command the README gives "for a script", and on Copal the service is always running, so this is what that script gets. <code>clock</code> and <code>backfill</code> behave the same way; <code>backfill</code> says only <code>no counter: the port is already open by another radbeeper</code>, under the heading "no counter" and with no next step. <em>Fix:</em> let <code>cpm</code> answer from the service when one is serving, as <code>probe</code> does; until then, have the busy message name <code>radbeeper now</code>.</p>
+<p><strong>2.3 A missing argument is not an error (polish).</strong> <code>radbeeper --logs</code> prints the whole help and exits 0. <code>radbeeper random --check</code> with no file says <code>no counter: no serial device is present</code>; with a file that does not exist it says <code>radbeeper: no emissions in /tmp/nonexistent.tsv</code>. <em>Fix:</em> "--logs needs a directory", "--check needs a file", "no such file", each with exit 2 or 1.</p>
+<p><strong>2.4 <code>export</code> over a directory with no logs writes an empty page and exits 0 (confuses).</strong> <code>radbeeper --logs /tmp/rbux-empty export</code> in a scratch directory printed <code>radbeeper: index.html -- 0 counters, 0 rows</code> and wrote the file. A mistyped <code>--logs</code> publishes a blank report. <em>Fix:</em> exit 1 with "no cpm-*.tsv in DIR" and write nothing.</p>
+<p><strong>2.5 The help is one flat list of 20 commands and 39 options (polish).</strong> Options are marked by command only some of the time (<code>hotplug:</code>, <code>export:</code>, <code>service:</code>), <code>-o, --output</code> appears twice with two meanings, and the text ends "site and recompute are in the Python program in the same repository. They are being ported". The README's command table lists <code>site</code> with no such note, and <code>radbeeper site</code> exits 2 pointing at the GitHub address although the Python <code>radbeeper</code> is in the checkout's root. <em>Fix:</em> group the options under the command that takes them; mark <code>site</code> in the README.</p>
+<p><strong>2.6 <code>watch</code> into a pipe sends the full-screen escape codes (polish).</strong> <code>radbeeper watch | cat</code> begins <code>^[[?1049h^[[?25l^[[2J</code>. There is no plain mode: <code>watch --plain</code> is <code>radbeeper: unknown option --plain</code>. <code>preview --duration 1</code> ignored the duration and served until it was killed. <em>Fix:</em> when standard output is not a terminal, print one line a row, or refuse and name <code>now</code>.</p>
+<p><strong>2.7 <code>now</code> in its first seconds labels 17 seconds as five minutes (polish).</strong> Seventeen seconds after the service started, <code>now</code> printed <code>cpm 37.5</code> and <code>cpm_300 37.5</code>. The JSON carries <code>"cpm_300_seconds":17</code>; the plain form has no such column. <em>Fix:</em> print <code>-</code> in the plain form until the window is full, as the log table does.</p>
+<h3 id="3-the-terminal-monitor">3. The terminal monitor</h3>
+<p><strong>3.1 The key line states what a paper is, not what the key will do (confuses).</strong> The last line reads <code>q to quit   t temperature   d days folded   m months off</code>. <code>t temperature</code> is an action; <code>d days folded</code> is a state. <code>d</code> moves through three states (shown, folded, off) and nothing on screen says there are three. The tour documents it; the screen does not. <em>Fix:</em> <code>d days: folded → off</code>, or the three words with the present one bright.</p>
+<p><strong>3.2 The <code>d</code> and <code>m</code> hints can disappear with the papers (confuses).</strong> At 80 by 24, a few seconds after opening, pressing <code>d</code> once took the day line off, and the key line became <code>q to quit   t temperature</code> (<code>tui-80x24-d.png</code>). The key that would bring the paper back was no longer listed. The hints are drawn only when a paper or a live row is on screen (<code>src/main.rs</code>, the block that builds <code>keys</code>), so this lasts until the live drum has its first row. <em>Fix:</em> list <code>d</code> and <code>m</code> whenever the log has day or month lines, whatever is showing.</p>
+<p><strong>3.3 Several marks have no label (polish).</strong> From <code>tui-120x40.png</code>: the large digits at the top right are the 30-second reading and say so nowhere; the day line ends <code>20m ×22</code>; the counts' ruler reads <code>F 64s/bar</code> and <code>F 1s/bar · 19s</code>; a line reads <code>random   measuring the source (4s)</code>. Each is explained in a document. On the screen a new user has four things to look up. <em>Fix:</em> <code>30s</code> under the digits; drop or spell out the <code>F</code>.</p>
+<p><strong>3.4 "run" is not this run (polish).</strong> Five seconds after <code>watch</code> opened over the sample logs the screen read <code>run  19911 counts in 30081s</code>. The figure comes from the log the monitor read at start. With a new log it read <code>run  8 counts in 9s</code>. <em>Fix:</em> call it <code>log</code> or <code>window</code> when it was seeded.</p>
+<p><strong>3.5 Below 80 columns the header wraps (polish).</strong> At 60 by 15 the first line wrapped into the second, the thermometer's column was past the edge of the spectrum, and there was no key line (<code>tui-60x15.txt</code>). <em>Fix:</em> cut the header to the width, as the key line already is.</p>
+<p><strong>3.6 The temperature is in Fahrenheit first, with no way to change it (polish).</strong> The monitor, the window and the drums page put °F in bold and °C dim; the scale is fixed at 50 to 100 °F. The log, <code>now</code> and the service's own messages are in °C only. A reader outside the United States reads the smaller number. <em>Fix:</em> an option, or follow the locale; say what happens below 50 °F.</p>
+<h3 id="4-the-window">4. The window</h3>
+<p>All of this section is judged from rendered pictures. Nothing was clicked and no key was pressed.</p>
+<p><strong>4.1 Nothing on the window says it has keys or that anything can be clicked (confuses).</strong> In every picture taken, the tiles are plain boxes captioned "day drum", "month drum" and "room temp", the thermometer is a drawing, and no line names <code>d</code>, <code>m</code>, <code>t</code> or <code>q</code> (<code>gui-760x900-dark-tiles.png</code>). The only places a user learns of them are <code>radbeeper-gui --help</code> and the documents. The terminal monitor has a key line; the window, which has more room, does not. <em>Fix:</em> one dim line at the foot, "d days · m months · t temperature · q quit · click a tile to open it".</p>
+<p><strong>4.2 "no counter" gives no next step (blocks).</strong> The whole window is "no counter / nothing is serving /Users/user/.local/share/radbeeper/sock" (<code>app-no-counter.png</code>). A person who double-clicked an icon is shown a socket path. <em>Fix:</em> a third line: on Linux "start it with: radbeeper service"; in the Mac app "plug the counter in and switch it on", with what the service last said (the <code>status</code> file has it).</p>
+<p><strong>4.3 In a narrow window the thermometer is drawn over the reading (bug).</strong> At 420 by 1000 the thermometer and its two labels sit on top of "CPM ±8 (23.6%)", the dose rate and the right-hand column of the averages (<code>gui-420x1000-dark-all.png</code>). <em>Fix:</em> drop the thermometer to a number, or move it under the dials, when the dial band has no room.</p>
+<p><strong>4.4 At 560 by 400 the papers and their tiles vanish and leave a gap (confuses).</strong> By default the band between the dials and the counts is empty: no paper and no tile (<code>gui-560x400-dark.png</code>). With <code>--show days,months,temp</code> only a three-label temperature strip appears, the days and months are dropped without a word, and a blank band remains under it (<code>gui-560x400-antiquity-all.png</code>). <em>Fix:</em> keep the tiles at this size, since a tile is the small form.</p>
+<p><strong>4.5 The live drum has no title, and is black until its first line (confuses).</strong> The day paper is headed "8h · days · a line a day" and the month paper "10d · months". The live drum below them has no heading. With all three papers folded it is a black rectangle of about a third of the window between the dials and the counts (<code>gui-760x900-dark-tiles.png</code>). See also 1.3. <em>Fix:</em> head it "live · a line every 8 s".</p>
+<p><strong>4.6 The date labels are small and the lines run through them (polish).</strong> On the day paper the dates sit under the pen: in <code>gui-760x900-dark.png</code> "01 Nov" and "13 Nov" are struck through by their own lines. At 1262 by 756 the labels are about 8 pixels tall in a picture at roughly the window's own size. Dates are also written four ways: "10 Nov" on the day paper, "11-07" on the window's temperature paper, "Nov 07" on the terminal's, "7 Nov" on the page. <em>Fix:</em> a margin for the labels as the temperature paper has; one date form.</p>
+<p><strong>4.7 Small wording (polish).</strong> The tile says "room temp" where every document says the inside of the counter's case. The temperature paper's heading gives "3.00 °C (5.40 °F)", Celsius first, beside labels that are Fahrenheit first. The second dial's caption, "1s 60 · 30s 40 / 3s held · 1–99", needs its document to read.</p>
+<p><strong>4.8 The antiquity theme's papers are harder to read (polish).</strong> The papers are brown with green lines and pale labels (<code>gui-760x900-antiquity-all.png</code>). From the picture, the ordinary green line and the date labels stand out less than on the dark theme's black. This is a judgement from one rendering, not a measurement.</p>
+<h3 id="5-the-pages">5. The pages</h3>
+<p><strong>5.1 The report does not link to the drums page (confuses).</strong> <code>export --drums-page</code> wrote both. <code>drums.html</code> opens with "← Radiation monitor"; <code>monitor.html</code> has no link to <code>drums.html</code>, in my export or in the scratch build of the site, and no link to the front page. A visitor who arrives on the report cannot reach the days and months. <em>Fix:</em> a link line at the top of <code>monitor.html</code>, the same shape as the one on <code>drums.html</code>.</p>
+<p><strong>5.2 The report describes the author's machine as its own (confuses).</strong> A page exported on a Mac from <code>/tmp/rbux</code> begins "A GQ GMC-320 Plus Geiger–Müller counter, plugged into a machine running Alpine Linux ... here shared into a virtual machine over USB pass-through ... this page is regenerated from those files by a GitHub Action on every push" (<code>view-monitor.png</code>). None of it was true of that page. <em>Fix:</em> a neutral paragraph by default, and the present one behind an option the repository's own build passes.</p>
+<p><strong>5.3 "how to read the drum" is a dead link outside the repository (confuses).</strong> <code>drums.html</code> links to <code>docs/reading-the-drum-spectrogram.html</code>, which exists only where the site is built. The log links in <code>monitor.html</code> are relative to where the page was written (<code>../rbux/cpm-…</code>), so they break when the page is moved. <em>Fix:</em> the published address for the first; copy or omit for the second.</p>
+<p><strong>5.4 The front page says Linux three times and Mac not once on its first screen (polish).</strong> The eyebrow is "GQ GMC-320 PLUS · USB · LINUX", the title tag is "Geiger counter data logging for Linux", and a pill reads "Alpine &amp; Copal Linux" (<code>page-front.png</code>). The README says "Linux and macOS". Of the eight buttons, "Architecture" is for a contributor, and in the scratch build it was a dead link because that document was still being written; check it after both new documents exist.</p>
+<p><strong>5.5 "±0.0 CPM" (polish).</strong> The first card on the report reads "PRECISION ±0.0 CPM, 0.06% of the mean". <em>Fix:</em> two significant figures.</p>
+<h3 id="6-the-documents">6. The documents</h3>
+<p><strong>6.1 Troubleshooting and Running it do not mention the Mac (blocks a Mac user).</strong> Neither file contains "Mac" or "macOS". Troubleshooting speaks of <code>/dev/ttyUSB*</code>, <code>dmesg</code>, <code>dialout</code>, <code>/var/lib/radbeeper/sock</code> and <code>rc-service</code>. The README sends every reader there: "Troubleshooting has the fix for each". <em>Fix:</em> a short Mac section in each: what the port is called, that the log is in <code>~/.local/share/radbeeper</code>, how to see whether the service is running and how to stop it.</p>
+<p><strong>6.2 Running it opens with a migration (polish).</strong> Its second section is fourteen lines of <code>doas</code> and <code>sed</code> over <code>/etc/init.d/radbeeper</code> to move a log directory. A newcomer cannot tell whether it applies to them. <em>Fix:</em> say at its head who needs it, or move it to the archive.</p>
+<p><strong>6.3 The README is the right length (no change).</strong> It was read top to bottom as a newcomer would. What it does, what you need, install, first run and the commands fit in one sitting, and "Learn more" picks eleven documents out of some thirty in <code>docs/</code>.</p>
+<h3 id="7-the-mac">7. The Mac</h3>
+<p><strong>7.1 A counter plugged in after the app is opened is never seen (blocks).</strong> Running the app's launcher with no counter started a service, which wrote <code>radbeeper: dormant</code> and exited 0; the window showed "no counter". Nothing then looks again. <code>packaging/RadBeeper.sh</code> says in a comment "plug one in and open the app again", which the user never sees, and a second double click on an open app does not run the launcher again: the app has to be quit first. Plugging in was not tested, there being no counter; this is from the script and from the service's observed exit. <em>Fix:</em> have the launcher, or the service under an option, wait for a counter the way <code>--wait</code> waits for a port; and see 4.2.</p>
+<p><strong>7.2 Messages on a Mac name Linux commands and Linux ports (confuses).</strong> Each of these was printed on this Mac:</p>
+<pre><code>no counter: no serial device is present
+    Nothing matching /dev/ttyUSB* or /dev/ttyACM*.</code></pre>
+<pre><code>    it will look again at the next boot, or when you run: rc-service radbeeper start</code></pre>
+<pre><code>battery and clock of a served counter need the port itself:
+    doas rc-service radbeeper stop</code></pre>
+<p>The program also looks for <code>/dev/cu.usbserial*</code> and does not say so. There is no <code>rc-service</code> and no boot service on a Mac. Whether a GMC-320's adapter always appears under that name on a Mac, and not as <code>cu.wchusbserial*</code>, could not be checked. <em>Fix:</em> choose the words by platform in the three places; on a Mac say "open RadBeeper again" and name the <code>cu.</code> pattern.</p>
+<p><strong>7.3 The service outlives the window, and nothing shows it or stops it (confuses).</strong> That it keeps logging is the design, and the README says so. But a Mac user has no icon, no menu and no command for it: the stop command the program prints is the <code>rc-service</code> one. <em>Fix:</em> document how to find and stop it; in time, <code>radbeeper service --stop</code>.</p>
+<p><strong>7.4 The installed app was older than the tree and said so nowhere (bug in the installed copy).</strong> <code>/Applications/RadBeeper.app</code>, built at 15:34, with no counter:</p>
+<pre><code>no counter: a serial device is present but is not a GMC counter
+    Tried . None answered &lt;GETVER&gt;&gt; with a GMC version.</code></pre>
+<p>The tree's build of 16:02 has this fixed and prints "no serial device is present". Both call themselves 0.6.0 (1.2). <em>Fix:</em> run <code>make app</code> again; and 1.2.</p>
+<h3 id="8-working-in-a-fleet">8. Working in a fleet</h3>
+<p><strong>8.1 After the counter is unplugged, <code>now</code> still exits 0 with the old figures (confuses).</strong> Forty seconds after the fake counter was stopped:</p>
+<pre><code>#serial	cpm	cpm_300	usvh	age	temp_c	temp_age	live	port	version
+123456789ABCDE	25.0	36.8	0.2429	40.4	26.1	48.4	no	/dev/ttys003	GMC-320Re 4.26
+[exit 0]</code></pre>
+<p>The ages and <code>live no</code> are honest, and a careful caller reads them. A one-line script that takes the sixth column gets a room temperature from a counter that is no longer there, for as long as the service runs. <em>Fix:</em> <code>now --max-age SECONDS</code>, exiting 3 and printing <code>-</code> for anything older; say in the README that a caller must read <code>temp_age</code>.</p>
+<p><strong>8.2 <code>probe</code> lists an unplugged counter as held and says nothing else (confuses).</strong> In the same state <code>probe</code> printed the counter, its port and <code>held by    the radbeeper serving /tmp/rbux2/sock</code>, exit 0, while the status file read <code>waiting: /dev/ttys003 stopped answering</code>. <em>Fix:</em> print the status line under a held counter.</p>
+<p><strong>8.3 The README's fleet section does not say the service must be the new build (confuses).</strong> <code>now</code> and the temperature file exist only when the running service is from this tree. Running it explains that the boot service runs <code>/usr/local/bin/radbeeper</code> and not the copy <code>make install</code> wrote; the fleet section, which is where a fleet user stops reading, does not. What <code>now</code> prints against an older service was not tested. <em>Fix:</em> the four-line upgrade in the fleet section, and a sentence on how to tell.</p>
+<hr>
+<h2 id="what-could-not-be-reviewed">What could not be reviewed</h2>
+<ul><li><strong>Clicking and typing in the window.</strong> Whether a click on a tile, a paper or the thermometer does what the help says, whether pointing at a bar shows its time, and how the window behaves while it is resized. Every statement about the window above is from a picture.</li><li><strong>A real counter.</strong> Plugging in and unplugging, a charge-only cable, the 85.0 °C first answer, the backfill at start, two counters at once, and the name a real adapter takes on a Mac.</li><li><strong>A Linux desktop.</strong> The launcher entries, the icon, <code>hotplug</code> opening a monitor, the fonts the window gets on Copal, and the <code>dialout</code> step. <code>hotplug --duration 3</code> on this Mac printed nothing and exited 0.</li><li><strong>A phone.</strong> Headless Chrome on a desktop does not lay a page out narrower than about 500 pixels, so the 390-pixel pictures are cropped, not reflowed, and say nothing. The pages do carry a viewport tag and one <code>max-width</code> rule.</li><li><strong>Hours of use.</strong> The longest any program ran was about twelve minutes. What the monitor is like on its third day was not seen.</li><li><strong>The random numbers and the frame browser.</strong> The fake counter's logs had no emissions, so <code>random.html</code> and <code>frames.html</code> were not written.</li></ul>
+<hr>
+<h2 id="the-ten-changes-that-would-help-most">The ten changes that would help most</h2>
+<table><thead><tr><th></th><th>Change</th><th>Findings</th><th>Size</th></tr></thead><tbody><tr><td>1</td><td>On "no counter", say what to do next; on a Mac, keep looking for a counter after the app is open</td><td>4.2, 7.1</td><td>small, then medium</td></tr><tr><td>2</td><td>A key and click line at the foot of the window</td><td>4.1</td><td>small</td></tr><tr><td>3</td><td>Check the command's name before looking for a counter; make <code>help</code> work</td><td>2.1</td><td>small</td></tr><tr><td>4</td><td>Choose the words by platform: no <code>rc-service</code>, no "next boot" and the <code>cu.</code> port name on a Mac</td><td>7.2, 7.3</td><td>small</td></tr><tr><td>5</td><td>A Mac section in Troubleshooting and in Running it</td><td>6.1</td><td>small</td></tr><tr><td>6</td><td>In the README's first run, put <code>service</code> before the window and say the window needs it</td><td>1.1</td><td>small</td></tr><tr><td>7</td><td>Link the report to the drums page and the front page; a neutral opening paragraph; fix the dead link</td><td>5.1, 5.2, 5.3</td><td>small</td></tr><tr><td>8</td><td>Let <code>cpm</code> answer from the service, and correct the busy message that says a service never causes it</td><td>2.2</td><td>medium</td></tr><tr><td>9</td><td>The window's empty and small states: words in the live drum before its first line, tiles at 560 by 400, no overlap at 420 wide</td><td>1.3, 4.3, 4.4, 4.5</td><td>medium</td></tr><tr><td>10</td><td>Tell the tree from the release: a version of its own, or the commit beside it</td><td>1.2, 7.4</td><td>small</td></tr></tbody></table>
+<p>Next after these: the terminal's key line (3.1, 3.2), <code>export</code> refusing an empty directory (2.4), and <code>now --max-age</code> (8.1).</p>
+<hr>
+<p><a href="../index.html">← back to the overview</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>

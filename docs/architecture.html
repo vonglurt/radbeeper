@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The architecture — RadBeeper</title>
+<meta name="description" content="One process reads each counter and writes the record; every other program is handed the same seconds over a socket and draws from them. This is how that is built, function by function, and a review of where it is sound and where it is not.">
+<link rel="canonical" href="https://vonglurt.github.io/radbeeper/docs/architecture.html">
+<meta property="og:type" content="website">
+<meta property="og:title" content="The architecture — RadBeeper">
+<meta property="og:description" content="One process reads each counter and writes the record; every other program is handed the same seconds over a socket and draws from them. This is how that is built, function by function, and a review of where it is sound and where it is not.">
+<meta property="og:url" content="https://vonglurt.github.io/radbeeper/docs/architecture.html">
+<meta property="og:image" content="https://vonglurt.github.io/radbeeper/docs/screenshots/gui-dark.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+:root{--bg:#fbfaf7;--fg:#1e2a3a;--dim:#5b6472;--faint:#8a919c;--line:#e2ded4;
+--card:#fff;--accent:#1e6b63;--code:#f4f2ec}
+@media (prefers-color-scheme:dark){:root{--bg:#161822;--fg:#d6dbe6;--dim:#9ea3b8;
+--faint:#6d7383;--line:#2a2e3d;--card:#1e2130;--accent:#8cf2e6;--code:#1a1d29}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:16px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{max-width:60rem;margin:0 auto;padding:0 1.25rem}
+header.hero{border-bottom:1px solid var(--line);padding:3rem 0 2.25rem}
+.drum img{display:block;width:100%;height:auto;margin:1.75rem 0 0;
+border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.caption{font-size:.9rem;color:var(--dim);margin:.6rem 0 0;max-width:44rem}
+.eyebrow{font:600 .75rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 .9rem}
+h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
+.lede{font-size:1.15rem;color:var(--dim);margin:0 0 1.5rem;max-width:44rem}
+.badges{display:flex;flex-wrap:wrap;gap:.5rem;margin:0 0 1.5rem;padding:0;list-style:none}
+.badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
+.cta{display:flex;flex-wrap:wrap;gap:.6rem}
+.cta a{display:inline-flex;align-items:center;justify-content:center;min-height:2.6rem;
+padding:.55rem 1.15rem;font:700 .82rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.12em;text-transform:uppercase;text-decoration:none;color:var(--fg);
+border:1px solid var(--line);border-radius:999px;
+background:repeating-linear-gradient(180deg,rgba(255,255,255,.06) 0 1px,transparent 1px 3px),var(--card);
+box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 2px 6px rgba(0,0,0,.25);
+transition:transform .08s,filter .15s}
+.cta a:hover{filter:brightness(1.07)}
+.cta a:active{transform:translateY(1px)}
+.cta a.primary{color:#004712;text-shadow:0 1px 0 rgba(255,255,255,.55);border-color:#2c7a34;
+background:repeating-linear-gradient(180deg,rgba(255,255,255,.08) 0 1px,transparent 1px 3px),
+linear-gradient(180deg,#5fae66 0,#c4ffc8 5%,#9effa8 10%,#4fc95c 90%,#2c7a34 100%);
+box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 0 18px rgba(51,242,77,.45),0 2px 6px rgba(0,0,0,.35)}
+.facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
+padding:2rem 0;border-bottom:1px solid var(--line)}
+.fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
+.fact h2{font-size:.78rem;letter-spacing:.1em;text-transform:uppercase;
+color:var(--accent);margin:0 0 .4rem}
+.fact p{margin:0;font-size:.92rem;color:var(--dim)}
+main{padding:2.5rem 0 3rem}
+main h1,main h2,main h3,main h4{line-height:1.25;margin:2rem 0 .7rem;letter-spacing:-.01em}
+main h1{font-size:1.9rem} main h2{font-size:1.45rem;padding-top:.6rem;
+border-top:1px solid var(--line)} main h3{font-size:1.12rem} main h4{font-size:1rem}
+main>h1:first-child{margin-top:0;border:0}
+p{margin:0 0 1rem}
+a{color:var(--accent)}
+img{max-width:100%;height:auto;border-radius:.4rem;display:block;margin:1.2rem 0}
+code{font:.88em/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;
+background:var(--code);padding:.13em .38em;border-radius:.25rem}
+pre{background:var(--code);border:1px solid var(--line);border-radius:.45rem;
+padding:.9rem 1rem;overflow-x:auto;margin:0 0 1.2rem}
+pre code{background:none;padding:0;font-size:.85rem;line-height:1.55}
+table{border-collapse:collapse;width:100%;margin:0 0 1.3rem;font-size:.93rem;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:.5rem .7rem;text-align:left;vertical-align:top}
+th{background:var(--card);font-weight:600}
+blockquote{margin:0 0 1.2rem;padding:.7rem 1rem;border-left:3px solid var(--accent);
+background:var(--card);color:var(--dim)}
+blockquote p{margin:0}
+hr{border:0;border-top:1px solid var(--line);margin:2rem 0}
+ul,ol{margin:0 0 1.1rem;padding-left:1.4rem} li{margin:.3rem 0}
+details{border:1px solid var(--line);border-radius:.45rem;padding:.7rem 1rem;margin:0 0 1.2rem;
+background:var(--card)} summary{cursor:pointer;font-weight:600}
+footer{border-top:1px solid var(--line);padding:2rem 0 3rem;color:var(--faint);font-size:.88rem}
+footer a{color:var(--dim)}
+.nav{display:flex;flex-wrap:wrap;gap:1.1rem;margin:0 0 1rem;padding:0;list-style:none;font-size:.9rem}
+@media (max-width:40rem){h1{font-size:2rem}.lede{font-size:1.05rem}}
+</style>
+</head>
+<body>
+<div class="wrap"><main>
+<ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<h1 id="the-architecture">The architecture</h1>
+<p><strong>One process reads each counter and writes the record; every other program is handed the same seconds over a socket and draws from them. This is how that is built, function by function, and a review of where it is sound and where it is not.</strong></p>
+<p><em>A description of the program's structure and techniques with links to the code, followed by a software architecture review. Written against the working tree of 16 November 2026, commit cf8eb39.</em></p>
+<hr>
+<h2 id="how-to-read-this">How to read this</h2>
+<p>Every function, type and constant named here is a link to its definition. The links point at the <code>main</code> branch on GitHub, and the line numbers are those of commit cf8eb39. A later reader who follows a link after <code>main</code> has moved may land a few lines off; the name in the link is what to search for. Two files, <code>src/site.rs</code> and <code>tools/landing.py</code>, were changed in the commit that added this document, and the links into them use their lines after it.</p>
+<p>The code excerpts are copied from the files as they stand at that commit. Each has the file and its lines over it.</p>
+<p>The sizes, so the rest can be weighed:</p>
+<table><thead><tr><th>Part</th><th>File</th><th>Lines</th></tr></thead><tbody><tr><td>The command-line program</td><td><code>src/main.rs</code></td><td>7,586, of which the last 1,037 are its tests</td></tr><tr><td>The window</td><td><code>gui/src/main.rs</code></td><td>5,992, of which the last 843 are its tests</td></tr><tr><td>The library, 17 modules</td><td><code>src/*.rs</code> named in <code>src/lib.rs</code></td><td>16,449</td></tr><tr><td>The port, two modules of the binary and not of the library</td><td><code>src/counter.rs</code>, <code>src/serial.rs</code></td><td>891</td></tr><tr><td>The reference program</td><td><code>radbeeper</code> (Python, one file)</td><td>6,851</td></tr></tbody></table>
+<p>The root crate has one dependency, <code>libc</code>. The window is a separate crate in <code>gui/</code> that depends on the root crate and on iced, and is deliberately not a workspace member, so that the root's lock file does not grow by several hundred crates.</p>
+<hr>
+<h1 id="part-one-how-it-is-built">Part one: how it is built</h1>
+<h2 id="1-the-processes-and-who-owns-what">1. The processes, and who owns what</h2>
+<p><strong>One process holds a counter's serial port. It is the only reader the port has, the only writer the log directory has, and it serves what it reads on a unix socket in that directory. Everything else attaches to the socket.</strong></p>
+<p>The port is exclusive because two processes reading one tty each get a share of the bytes and neither is told. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/serial.rs#L50-L69"><code>Serial::open</code></a> takes an advisory lock before it touches the line settings, and every radbeeper takes it:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/serial.rs#L60-L65"><code>src/serial.rs</code>, lines 60 to 65</a></p>
+<pre><code class="language-rust">        // Advisory, and every radbeeper takes it -- which are exactly the
+        // programs that would otherwise collide here.
+        if unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            unsafe { libc::close(fd) };
+            return Err(OpenError::Busy);
+        }</code></pre>
+<p>The lock argues for one reader. It does not argue for one consumer, and <a href="the-stream.html">The stream</a> is the report on the difference. The process that holds the lock starts a <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L180-L191"><code>Server</code></a> on the socket <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L62-L64"><code>socket_path</code></a> names, which is <code>sock</code> in the log directory, and publishes every second it reads.</p>
+<pre><code>                      /dev/ttyUSB0            /dev/ttyUSB1
+                           |                       |
+                    flock  |                flock  |
+              +------------+-----------------------+-----------+
+              |  radbeeper service   (or a `watch` that found  |
+              |                       nobody serving)          |
+              |                                                |
+              |  reader thread per counter  --&gt;  one channel   |
+              |  main loop: windows, pools, spectrum, loggers  |
+              +------+--------------------------------+--------+
+                     | writes                         | serves
+                     v                                v
+        LOGDIR/cpm-*.tsv  temp-*.tsv  spectrum-*   LOGDIR/sock
+        random-*  drum-day.tsv  drum-month.tsv        |
+        status  starts                                |
+                     ^                                |
+                     | reads only                     | reads only
+        +------------+-----+-----------+--------------+---------+
+        |                  |           |              |         |
+   radbeeper watch   radbeeper-gui   radbeeper now  radbeeper probe
+   (terminal)        (window)        (one line a    (identity of what
+                                      counter)       is being served)</code></pre>
+<table><thead><tr><th>Program</th><th>Entry</th><th>Holds a port</th><th>Writes the log directory</th></tr></thead><tbody><tr><td><code>radbeeper service</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L3445-L3954"><code>service</code></a></td><td>yes</td><td>yes: everything in section 4</td></tr><tr><td><code>radbeeper watch</code>, nobody serving</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2387-L3429"><code>watch</code></a> over the <code>Own</code> arm of <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2005-L2020"><code>Feed</code></a></td><td>yes</td><td>yes, unless <code>--no-log</code>; no temperature (section 3)</td></tr><tr><td><code>radbeeper watch</code>, a service running</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2387-L3429"><code>watch</code></a> over its <code>Attached</code> arm</td><td>no</td><td>no</td></tr><tr><td><code>radbeeper-gui</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4379-L4906"><code>feed</code></a></td><td>no; the crate has no code for one</td><td>no</td></tr><tr><td><code>radbeeper now</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L4098-L4202"><code>now_cmd</code></a></td><td>no</td><td>no</td></tr><tr><td><code>radbeeper probe</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L4204-L4267"><code>probe_cmd</code></a></td><td>only ports nobody else holds</td><td>no</td></tr><tr><td><code>radbeeper hotplug</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L6501-L6546"><code>hotplug</code></a></td><td>it watches <code>/dev</code> for a node appearing; <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L6390-L6402"><code>worth_a_window</code></a> opens the port for a moment only when there is no socket</td><td>the <code>status</code> line, when nothing answers</td></tr><tr><td><code>cpm</code>, <code>clock</code>, <code>log</code>, <code>backfill</code>, <code>random</code></td><td>dispatched in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L5793-L6231"><code>main</code></a></td><td>yes, for one conversation</td><td><code>backfill</code> and <code>random</code> do</td></tr></tbody></table>
+<p>Which of the two a monitor is, is decided in one place. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2083-L2121"><code>Feed::open</code></a> asks the socket first and opens a port only when nobody answers:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2094-L2098"><code>src/main.rs</code>, lines 2094 to 2098</a></p>
+<pre><code class="language-rust">        if let Some(c) = broker::Client::attach(dir) {
+            if devices.iter().all(|d| c.identity().serves(d)) {
+                return Ok(Feed::Attached(c));
+            }
+        }</code></pre>
+<p>A monitor that does take the port serves in turn (<code>Feed::Own</code> carries its own <code>broker::Server</code>), so the next window attaches to it. The drawing code in <code>watch</code> is handed a <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2023-L2043"><code>Tick</code></a> either way and cannot tell which kind of feed it has.</p>
+<p>The rule that a client writes nothing is kept by construction where it can be: the window's crate does not contain the serial code, because <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L10"><code>counter</code></a> and <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L11"><code>serial</code></a> are modules of the command-line binary and are not in <code>src/lib.rs</code>. In the terminal monitor it is kept by a line: <code>logging.filter(|_| feed.owns_the_port())</code>.</p>
+<h2 id="2-the-path-of-a-count">2. The path of a count</h2>
+<p><strong>A count is two bytes on a wire, then a number on a channel, then a line on a socket. Between the channel and the socket the process that owns the port does everything that is done once: averages for the log, the entropy pool, the spectrum row, the log row.</strong></p>
+<pre><code> counter --2 bytes/s--&gt; Serial::read_exact_or_timeout
+                              |
+                        Counter::next_raw            src/counter.rs
+                              |  u16, flag bits and all
+                        reader thread (Bank::spawn)  src/main.rs
+                              |  Tube::Sample { who, when, counts }
+                        mpsc channel, one for all counters
+                              |
+                        service loop                 src/main.rs
+          +---------+---------+----------+-----------+-----------+
+          |         |         |          |           |           |
+     Windows    Windows   Entropy     Ladder      Trail       Server::
+     each[who]    all     pools[who]  (suspect?)  (512 s)     publish_sample
+          |         |         |                      |           |
+     Logger::add  Merged   write_record         write_spectrum   |  "s who when counts"
+     log::Writer  Logger   write_frame                           v
+          |         |         |                               LOGDIR/sock
+     Server::       |     Server::                               |
+     publish_row    |     publish_random                   broker::Client
+                    |                                       /           \
+              cpm-merged-*.tsv                    Feed::poll -&gt; Tick   feed thread -&gt; Snapshot
+                                                  watch: Windows,      App::update, Chart::draw
+                                                  Trail, Paper</code></pre>
+<p><strong>The wire.</strong> In heartbeat mode the counter sends a 16-bit count every second with no framing. The reader stays in step only by asking for exactly two bytes and giving up at a deadline. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/serial.rs#L130-L158"><code>Serial::read_exact_or_timeout</code></a> is the one primitive: <code>count</code> bytes, or fewer if the time runs out. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L361-L364"><code>Counter::next_raw</code></a> is the stream on top of it:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L361-L364"><code>src/counter.rs</code>, lines 361 to 364</a></p>
+<pre><code class="language-rust">    pub fn next_raw(&amp;self, timeout: Duration) -&gt; Option&lt;u16&gt; {
+        let r = self.port.read_exact_or_timeout(2, timeout);
+        (r.len() == 2).then(|| u16::from_be_bytes([r[0], r[1]]))
+    }</code></pre>
+<p>The top two bits are status flags; <a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L13"><code>COUNT_MASK</code></a> takes them off.</p>
+<p><strong>The reader thread and the channel.</strong> <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1652-L1671"><code>Bank</code></a> holds one slot per counter ever seen, and one <code>mpsc</code> channel that every reader sends on. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1742-L1859"><code>Bank::spawn</code></a> starts a thread per counter that reads a second, stamps it with the wall clock and sends it. What it sends is a <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1625-L1632"><code>Tube</code></a>:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1625-L1632"><code>src/main.rs</code>, lines 1625 to 1632</a></p>
+<pre><code class="language-rust">enum Tube {
+    Sample { who: usize, when: f64, counts: u32 },
+    /// This tube stopped answering. Its slot stays reserved for its serial.
+    Gone { who: usize },
+    /// This tube's own thermometer, in degrees Celsius. Only from a bank
+    /// that was told to ask, and a counter that has one. See `Bank::spawn`.
+    Temp { who: usize, when: f64, celsius: f64 },
+}</code></pre>
+<p><code>who</code> is the counter's index in the bank, and a counter that is unplugged and put back keeps the index its serial had (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1688-L1723"><code>Bank::adopt</code></a>). Reading does not begin when the bank is made. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1894-L1902"><code>Bank::start</code></a> is separate from <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1674-L1684"><code>Bank::open</code></a> because the flash download at start is a conversation on the same port, and a reader running during it takes the flash for counts.</p>
+<p><strong>The service loop.</strong> <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L3445-L3954"><code>service</code></a> is one loop on the main thread. Each turn lets in new clients (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L259-L270"><code>Server::accept_pending</code></a>), looks every thirty seconds for a counter that was not there before (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1937-L1941"><code>Prober</code></a>, on threads of its own so a dead port holds nobody up), and takes one <code>Tube</code> from the bank. A sample goes to that counter's windows, to the room's windows, and out on the socket, in that order:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L3856-L3860"><code>src/main.rs</code>, lines 3856 to 3860</a></p>
+<pre><code class="language-rust">        each[who].add(when, counts);
+        all.add(when, counts);
+        if let Some(s) = srv.as_mut() {
+            s.publish_sample(who, when, counts);
+        }</code></pre>
+<p>Then, in the same turn:</p>
+<table><thead><tr><th>What</th><th>Where</th><th>Rule</th></tr></thead><tbody><tr><td>Averages</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L12-L23"><code>Windows</code></a>, one per counter and one across all</td><td>a window says nothing until it is full (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L86-L92"><code>Windows::average</code></a>)</td></tr><tr><td>The whole second, summed across counters</td><td><code>sec_bin</code> and <code>sec_sum</code> in the loop</td><td>closes when the wall clock's second does</td></tr><tr><td>Is the spectrum flat</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L1121-L1123"><code>Ladder</code></a>, fed the summed second</td><td>an emission is marked <code>suspect</code> when the loudest bin stands 1.25 times over <a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L1092-L1094"><code>Spectrum::chance_max</code></a></td></tr><tr><td>The spectrum row</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L684-L696"><code>Trail</code></a> with a hop of one window, then <a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L405-L430"><code>write_spectrum</code></a></td><td>one row every 512 seconds</td></tr><tr><td>The entropy pool</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/entropy.rs#L107-L123"><code>Entropy</code></a>, one per counter, never merged</td><td>when <a href="https://github.com/vonglurt/radbeeper/blob/main/src/entropy.rs#L197-L199"><code>Entropy::ready</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/entropy.rs#L439-L462"><code>write_record</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/entropy.rs#L765-L773"><code>write_frame</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L378-L380"><code>Server::publish_random</code></a></td></tr><tr><td>The log row</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L4286-L4295"><code>Logger</code></a> over <a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L1180-L1194"><code>Writer</code></a></td><td>one row an interval, then <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L368-L374"><code>Server::publish_row</code></a></td></tr><tr><td>The room's row</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L4382-L4419"><code>MergedLogger</code></a></td><td>only when more than one counter is plugged in</td></tr></tbody></table>
+<p><code>Windows</code> keeps a running sum for each span and subtracts what falls out of the back, so a sample costs the same whatever the span:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L45-L60"><code>src/analysis.rs</code>, lines 45 to 60</a></p>
+<pre><code class="language-rust">        for i in 0..self.spans.len() {
+            self.sums[i] += counts as u64;
+            self.held[i] += 1;
+            let cutoff = when - self.spans[i];
+            let mut head = self.heads[i];
+            while head - self.base &lt; self.samples.len() {
+                let (t, c) = self.samples[head - self.base];
+                if t &gt; cutoff {
+                    break;
+                }
+                self.sums[i] -= c as u64;
+                self.held[i] -= 1;
+                head += 1;
+            }
+            self.heads[i] = head;
+        }</code></pre>
+<p><strong>The socket.</strong> The protocol is lines of tab-separated text. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L345-L351"><code>Server::publish_sample</code></a> keeps the sample in a ring and writes <code>s</code>, the index, the time and the count to every client. Live writes are non-blocking, and a client that does not take a line is dropped rather than waited for:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L397-L407"><code>src/broker.rs</code>, lines 397 to 407</a></p>
+<pre><code class="language-rust">    fn publish(&amp;mut self, line: &amp;str) {
+        let bytes = line.as_bytes();
+        self.clients.retain_mut(|c| match c.write_all(bytes) {
+            Ok(()) =&gt; true,
+            // A window that was closed, and a window that has stopped
+            // reading, are the same thing from here and get the same
+            // treatment. Neither is an error worth printing: people close
+            // windows.
+            Err(_) =&gt; false,
+        });
+    }</code></pre>
+<p>A client that attaches is given the greeting (<code>hello</code>, the protocol number, the server's spans, and a <code>c</code> line for each counter), then the ring, then the newest log rows, then the newest temperature of each counter, then <code>live</code>. That replay is why a window opened on a service that has been up all day has its eight-hour average at once:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L288-L302"><code>src/broker.rs</code>, lines 288 to 302</a></p>
+<pre><code class="language-rust">        for (who, when, counts) in &amp;self.ring {
+            out.push_str(&amp;tab(&amp;["s", &amp;who.to_string(), &amp;t(*when), &amp;counts.to_string()]));
+        }
+        for (who, r) in &amp;self.rows {
+            out.push_str(&amp;tab(&amp;["row", &amp;who.to_string(), r]));
+        }
+        // The newest temperature of each counter, so a client that attaches,
+        // reads to `live` and leaves -- `radbeeper now` -- has it without
+        // waiting half a minute for the next.
+        for (who, at) in self.temps.iter().enumerate() {
+            if let Some((when, celsius)) = at {
+                out.push_str(&amp;tab(&amp;["t", &amp;who.to_string(), &amp;t(*when), &amp;format!("{:.1}", celsius)]));
+            }
+        }
+        out.push_str("live\n");</code></pre>
+<p>The ring is <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L46"><code>RING</code></a>, 30,000 samples, and the rows are <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L49"><code>ROWS</code></a>, 64.</p>
+<p><strong>The clients.</strong> <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L472-L504"><code>Client::connect</code></a> reads the greeting into an <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L82-L89"><code>Identity</code></a>. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L540-L569"><code>Client::poll</code></a> gives one <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L113-L141"><code>Event</code></a> at a time and keeps three answers apart: an event, nothing yet, and the socket closed. The parsing is <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L592-L629"><code>parse</code></a>, and a line whose first word it does not know is skipped.</p>
+<p>The terminal monitor turns an <code>Event</code> into a <code>Tick</code> (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2056-L2071"><code>Tick::of</code></a>) and, in <code>watch</code>, feeds the same types the service feeds: <code>Windows</code>, <code>Ladder</code>, <code>Trail</code>. The window does the same on a thread (<a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4379-L4906"><code>feed</code></a>), packs what the interface needs into a <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L1428-L1485"><code>Snapshot</code></a> about once a second, and sends it as the <code>Update</code> arm of <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L1494-L1515"><code>Message</code></a>. <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L1569-L1641"><code>App::update</code></a> stores it, <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L1700-L2651"><code>App::view</code></a> lays the widgets out and builds a <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L2833-L2879"><code>Chart</code></a>, and the canvas calls its <code>draw</code>.</p>
+<p>Neither client computes a random line of its own. The hex on a client's screen is the one the server published, so there is one line and it is the one in the file.</p>
+<h2 id="3-the-path-of-a-temperature">3. The path of a temperature</h2>
+<p><strong>The reader thread asks the counter its temperature in the gap after a second of counts, without stopping the stream. An answer is told from a count by its top bit, not by when it arrives. A temperature goes to a file of its own and to a line of its own on the socket, and nowhere a count goes.</strong></p>
+<p><a href="the-thermometer.html">The thermometer</a> is the report, with the incident that fixed the design: the first version decided by timing, a slower firmware's answers arrived as the wait ran out, and three rows of one counter's log say about 6,600 counts in half a minute.</p>
+<p>Only a service asks. <code>service</code> sets <code>bank.temp_every</code>; a monitor that holds the port itself leaves it <code>None</code> (the field's own comment in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1652-L1671"><code>Bank</code></a> says so). In <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1742-L1859"><code>Bank::spawn</code></a> a counter is asked only if <a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L128-L139"><code>temp_supported</code></a> names its firmware (a GMC-320 at Re 3.01 or later), only after two seconds of stream, and only while every second so far has carried <a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L117"><code>STREAM_FLAG</code></a>.</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L396-L423"><code>Counter::temp_in_stream</code></a> writes <code>&lt;GETTEMP&gt;&gt;</code> without flushing the input, then reads pairs until its wait (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1648"><code>TEMP_WAIT_MS</code></a>, 700 ms) runs out. This is the whole of the discrimination:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L416-L421"><code>src/counter.rs</code>, lines 416 to 421</a></p>
+<pre><code class="language-rust">            let raw = u16::from_be_bytes([head[0], head[1]]);
+            if raw &amp; STREAM_FLAG != 0 {
+                samples.push(raw &amp; COUNT_MASK);
+                continue;
+            }
+            return StreamTemp { answer: self.late_answer(raw), samples };</code></pre>
+<p>A pair with the bit is a second of counts and is handed back in the <code>samples</code> of a <a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L107-L110"><code>StreamTemp</code></a>, which the reader forwards as ordinary <code>Tube::Sample</code>s. The first pair without it is the head of the answer. If the wait runs out first, the reader remembers that an answer is owed, and the next pair without the bit that turns up where a second was expected is taken as that answer by <a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L431-L443"><code>Counter::late_answer</code></a>. The head of that branch in the reader:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1763-L1769"><code>src/main.rs</code>, lines 1763 to 1769</a></p>
+<pre><code class="language-rust">                if raw &amp; counter::STREAM_FLAG == 0 {
+                    // A pair without the mark, from a stream that has always
+                    // had it, while a question is unanswered: the answer,
+                    // late. It is read as one and it is NOT a second of
+                    // counts.
+                    if marked &amp;&amp; seen &gt; 0 &amp;&amp; owed.map(|at| clock::now() - at &lt; 5.0).unwrap_or(false) {
+                        owed = None;</code></pre>
+<p>The four bytes are decoded by <a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L153-L164"><code>decode_temp</code></a>, which also knows the one answer that is not a temperature:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L153-L164"><code>src/counter.rs</code>, lines 153 to 164</a></p>
+<pre><code class="language-rust">pub fn decode_temp(r: &amp;[u8]) -&gt; TempAnswer {
+    if r.len() != 4 || r[3] != 0xAA || r[1] &gt; 9 {
+        return TempAnswer::Garbled;
+    }
+    if r[0] == 85 &amp;&amp; r[1] == 0 &amp;&amp; r[2] == 0 {
+        return TempAnswer::NotYet;
+    }
+    // Tenths as a whole number and ONE division, so 1A 01 is the double
+    // nearest 26.1 and not a sum that lands one bit beside it.
+    let v = (r[0] as f64 * 10.0 + r[1] as f64) / 10.0;
+    TempAnswer::Degrees(if r[2] != 0 { -v } else { v })
+}</code></pre>
+<p>The four results are the <a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L92-L102"><code>TempAnswer</code></a>. <code>NotYet</code> is asked again in two seconds, five times at most, and after that at the ordinary spacing. <code>Silent</code> or <code>Garbled</code> three times running (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1650"><code>TEMP_MISSES</code></a>) and the counter is not asked again until it is next plugged in.</p>
+<p>From the channel on, a <code>Tube::Temp</code> takes a short road. The service publishes it and writes it, and <code>continue</code>s before anything that handles a count:</p>
+<table><thead><tr><th>Step</th><th>Function</th></tr></thead><tbody><tr><td>To every client, and kept as the newest for whoever attaches next</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L359-L365"><code>Server::publish_temp</code></a>, the <code>t</code> line</td></tr><tr><td>To <code>temp-&lt;serial&gt;-YYYY-MM.tsv</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L291-L301"><code>write_temp</code></a></td></tr><tr><td>Read back for the ten days of drum</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L310-L345"><code>read_temps</code></a></td></tr><tr><td>Laid down a line a day</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L915-L979"><code>temp_drum</code></a></td></tr><tr><td>Drawn in the terminal</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1247-L1280"><code>draw_thermometer</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1343-L1400"><code>draw_temp_drum</code></a></td></tr><tr><td>Drawn in the window</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L3268-L3315"><code>Chart::thermometers</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L3343-L3365"><code>Chart::temp_paper</code></a></td></tr><tr><td>Given to another program</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L4098-L4202"><code>now_cmd</code></a>, the <code>temp_c</code> and <code>temp_age</code> columns</td></tr></tbody></table>
+<p>The writer is short enough to show whole. It opens, appends and closes each time, and writes the header when the file is new:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L291-L301"><code>src/log.rs</code>, lines 291 to 301</a></p>
+<pre><code class="language-rust">pub fn write_temp(directory: &amp;Path, serial: &amp;str, when: f64, celsius: f64)
+    -&gt; std::io::Result&lt;()&gt;
+{
+    let path = temp_path(when, directory, serial);
+    let fresh = fs::metadata(&amp;path).map(|m| m.len() == 0).unwrap_or(true);
+    let mut f = fs::OpenOptions::new().create(true).append(true).open(&amp;path)?;
+    if fresh {
+        writeln!(f, "#time\ttemp_c")?;
+    }
+    writeln!(f, "{}\t{:.1}", clock::stamp(when), celsius)
+}</code></pre>
+<p>The <code>t</code> line was added without changing <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L34"><code>PROTOCOL</code></a>: a client built before it skips a word it does not know.</p>
+<h2 id="4-the-record-on-disk">4. The record on disk</h2>
+<p><strong>Everything is a tab-separated text file in one directory, named by what it is, whose it is and its month. A file is appended to by the process that holds the port and by nobody else. There is no rotation code, because a row is written to the file for its own month.</strong></p>
+<p>The directory is <code>--logs</code>, or what <a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L1040-L1061"><code>state_dir</code></a> finds writable: <code>/var/lib/radbeeper</code>, then <code>/var/log/radbeeper</code>, then the user's own.</p>
+<table><thead><tr><th>File</th><th>What a row is</th><th>Written by</th></tr></thead><tbody><tr><td><code>cpm-&lt;serial&gt;-YYYY-MM.tsv</code></td><td>one counter's interval: counts, seconds, each average and its peak, <code>src</code>, <code>site</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L230-L255"><code>row</code></a> through <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L4317-L4334"><code>Logger::add</code></a> and <a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L1263-L1281"><code>Writer::write</code></a>; rows from the flash through <a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L637-L685"><code>merge</code></a></td></tr><tr><td><code>cpm-merged-YYYY-MM.tsv</code></td><td>the room's interval, with the counts of each tube beside it</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L166-L213"><code>merged_row</code></a> through <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L4456-L4499"><code>MergedLogger::add</code></a></td></tr><tr><td><code>temp-&lt;serial&gt;-YYYY-MM.tsv</code></td><td>a time and degrees Celsius</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L291-L301"><code>write_temp</code></a></td></tr><tr><td><code>spectrum-YYYY-MM.tsv</code></td><td>512 seconds of the room as a power for each period</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L405-L430"><code>write_spectrum</code></a></td></tr><tr><td><code>drum-day.tsv</code>, <code>drum-month.tsv</code></td><td>a finished day's or month's line of spectrum</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L385-L421"><code>keep</code></a>, on a thread, at start and when a day ends</td></tr><tr><td><code>random-&lt;serial&gt;-YYYY-MM.tsv</code> and <code>.hex</code></td><td>an emission and the counts it was drawn from</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/entropy.rs#L439-L462"><code>write_record</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/entropy.rs#L470-L483"><code>write_hex</code></a></td></tr><tr><td><code>random-&lt;serial&gt;-YYYY-MM.bin</code></td><td>the emission's raw seconds as a frame, chained to the one before</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/entropy.rs#L765-L773"><code>write_frame</code></a>; read back by <a href="https://github.com/vonglurt/radbeeper/blob/main/src/frames.rs#L61-L65"><code>Series</code></a></td></tr><tr><td><code>status</code></td><td>one line: what the service is doing</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L1073-L1079"><code>write_status</code></a></td></tr><tr><td><code>starts</code></td><td>one line a counter a start: what the backfill and the clock did</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L1092-L1099"><code>note_start</code></a></td></tr><tr><td><code>sock</code></td><td>the socket</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L200-L228"><code>Server::start</code></a></td></tr><tr><td><code>sites.tsv</code></td><td>where a counter has been</td><td>the Python program's <code>site</code> command; read here by <a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L1394-L1414"><code>read_sites</code></a></td></tr></tbody></table>
+<p><strong>Month rotation by construction.</strong> The name is made from the row's own time, so a month ending is not an event:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L263-L269"><code>src/log.rs</code>, lines 263 to 269</a></p>
+<pre><code class="language-rust">pub fn path(when: f64, directory: &amp;Path, serial: Option&lt;&amp;str&gt;) -&gt; PathBuf {
+    directory.join(format!(
+        "cpm-{}-{}.tsv",
+        serial.unwrap_or("unknown"),
+        clock::format(when, "%Y-%m")
+    ))
+}</code></pre>
+<p><code>Writer::write</code> asks for that path on every row and reopens when it differs from the file it holds. It reopens also when the inode under the path has changed, which is what a backfill's rename does to an appender.</p>
+<p><strong>One row per slot.</strong> A row's identity is the slot its time falls in, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L622-L624"><code>slot_of</code></a>: the time divided by the interval, floored. The live writer refuses a second row for a slot, and reads the last slot off the disk when it opens so a restart cannot write one either:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L1271-L1280"><code>src/log.rs</code>, lines 1271 to 1280</a></p>
+<pre><code class="language-rust">        let slot = slot_of(when, self.every);
+        if self.last_slot.map(|last| slot &lt;= last).unwrap_or(false) {
+            return Ok(false);
+        }
+        if let Some(f) = self.file.as_mut() {
+            writeln!(f, "{}", text)?;
+            f.flush()?;
+        }
+        self.last_slot = Some(slot);
+        Ok(true)</code></pre>
+<p><strong>Backfill.</strong> The counter records to its own flash whether or not anything is listening. At each start, before the readers run, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L4015-L4045"><code>backfill_at_start</code></a> measures the counter's clock against this machine's (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L216-L241"><code>Counter::clock_ahead</code></a>), reads the newest end of the flash (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L5374-L5400"><code>read_history_tail</code></a>, which uses <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L5322-L5366"><code>find_history_end</code></a> to bisect for the write pointer in a ring that has wrapped), and hands the bytes to <a href="https://github.com/vonglurt/radbeeper/blob/main/src/history.rs#L329-L411"><code>backfill</code></a>. That decodes them (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/history.rs#L241-L249"><code>samples</code></a>), drops anything from the future or from the slot being logged now, cuts them into rows of the live logger's shape, and folds them in with <a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L637-L685"><code>merge</code></a>. <code>merge</code> adds a row only to a slot that has none, so a live row is never replaced by one from the flash, and it writes a new file and renames it over the old one so an interrupted backfill leaves the old log whole. Then the counter's clock is set if it was out by more than a second.</p>
+<p>The count log's characters are fixed: <a href="the-log.html">The log</a> describes the format and section 8 how it is held to the Python program's.</p>
+<h2 id="5-the-spectra">5. The spectra</h2>
+<p><strong>Radioactive decay arrives by chance, and the spectrum of chance is flat. Every spectrum here is the same sum with different windows, held against what chance would put in a bin, so that 1.0 means nothing is arriving on a schedule. There are four of them, for four lengths of time.</strong></p>
+<table><thead><tr><th>Spectrum</th><th>Made from</th><th>Type or function</th><th>Reaches</th></tr></thead><tbody><tr><td>The running average</td><td>every whole second, averaged for as long as the program runs</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L988-L995"><code>Spectrum</code></a>, three at once in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L1121-L1123"><code>Ladder</code></a> or at the lengths in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/drum.rs#L24"><code>LADDER</code></a></td><td>periods up to 512 s, or up to nine hours</td></tr><tr><td>The live drum</td><td>the last 512 seconds, a row every 8</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L684-L696"><code>Trail</code></a>, rows of <a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L658-L666"><code>TrailRow</code></a></td><td>twelve minutes of rows</td></tr><tr><td>The day paper</td><td>a day of 30-second log rows</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L307-L329"><code>row</code></a> for the <code>Day</code> arm of <a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L57-L62"><code>Paper</code></a></td><td>two minutes to eight hours, a line a day</td></tr><tr><td>The month paper</td><td>a month of the log in five-minute sums</td><td>the same, for its <code>Month</code> arm</td><td>twenty minutes to ten days, a line a month</td></tr></tbody></table>
+<p><code>Spectrum</code> is Welch's method: the mean removed, a Hann taper, a radix-2 transform, half-overlapped windows averaged. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L1092-L1094"><code>Spectrum::chance_max</code></a> is how tall the tallest bin gets by luck for the number of averages behind it, and it is the line everything else is coloured against. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L453-L471"><code>Waterfall</code></a> is the first version of the drum, a whole transform a row; it is still in the file and its comment is where the levelling is explained, but nothing outside its own tests constructs one now.</p>
+<p><code>Trail</code> is what both front ends and the spectrum log use. A row is joined from several windows that end at the same second: every bin of the shortest, and from each longer window only the bins longer than the one before could hold. Those few bins are worked out by direct sums and not by a transform, and a row is worked out only when it is asked for (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L778-L794"><code>Trail::rows</code></a>), so a window handed eight hours of replay works out the rows on show and not three thousand on the way.</p>
+<p><strong><code>src/drum.rs</code> is the shared paper.</strong> It holds no state. It says where a period stands across the paper, how hot a power is and how wide the pen is, in plain numbers, so the terminal and the window are two ways of putting ink where it says. The axis is cut into stretches at the windows' lengths (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/drum.rs#L71-L94"><code>stretches</code></a>) because the long periods have few bins and would otherwise take most of the width:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/drum.rs#L98-L103"><code>src/drum.rs</code>, lines 98 to 103</a></p>
+<pre><code class="language-rust">pub fn place(axis: &amp;[Stretch], period: f64) -&gt; Option&lt;f32&gt; {
+    let s = axis.iter().find(|s| period &lt;= s.long &amp;&amp; period &gt;= s.short)?;
+    let span = (s.long / s.short).ln();
+    let t = if span &gt; 0.0 { ((s.long / period).ln() / span) as f32 } else { 0.0 };
+    Some(s.left + t.clamp(0.0, 1.0) * (s.right - s.left))
+}</code></pre>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/drum.rs#L118-L121"><code>shade_of</code></a> turns a power into one of 64 shades by its logarithm against the luck line, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/drum.rs#L139-L160"><code>heat</code></a> gives a shade its colour as three numbers and no colour type of anybody's, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/drum.rs#L164-L166"><code>pen</code></a> its width, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/drum.rs#L206-L227"><code>front_row</code></a> joins the hours-long averages into the row at the front, and <a href="https://github.com/vonglurt/radbeeper/blob/main/src/drum.rs#L248-L251"><code>strength</code></a> says how strongly a whole row is inked.</p>
+<p><strong><code>src/longdrum.rs</code> makes the long papers from the count log</strong>, so they exist for every day there is a log for, including the days before the code was written. <a href="the-drum-spectrogram.html">The drum spectrogram</a> and <a href="the-monthly-record.html">The monthly record</a> are the reports. The steps:</p>
+<table><thead><tr><th>Step</th><th>Function</th><th>What it does</th></tr></thead><tbody><tr><td>Read</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L135-L161"><code>Counts::load</code></a></td><td>every counter's rows as (middle of the interval, counts, seconds)</td></tr><tr><td>Bin</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L183-L216"><code>Counts::binned</code></a></td><td>counts a second in bins of 30 s or 300 s; <code>None</code> where nobody counted</td></tr><tr><td>Transform</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L238-L295"><code>spectrum_of</code></a></td><td>mean off, taper on, each power against the scatter, folded into at most 192 bands</td></tr><tr><td>One line</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L307-L329"><code>row</code></a></td><td>a <a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L110-L124"><code>LongRow</code></a>; <code>None</code> if under a quarter of the span was counted</td></tr><tr><td>Keep</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L385-L421"><code>keep</code></a></td><td>appends each finished line to <code>drum-day.tsv</code> or <code>drum-month.tsv</code>, once</td></tr><tr><td>Show</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L448-L479"><code>rows</code></a></td><td>the newest lines, kept ones from the file and the rest from the counts; empty spans closed up</td></tr><tr><td>Share the room</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L492-L504"><code>share</code></a></td><td>how many lines the live drum, the day paper and the month paper each get</td></tr></tbody></table>
+<p>The slowest period a line is asked about is one that comes round three times in it (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L51"><code>SLOWEST</code></a>); once or twice is a drift and not a rhythm.</p>
+<p><strong>The temperature has a drum too.</strong> <a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L915-L979"><code>temp_drum</code></a> lays ten days down a line a day on one scale and one reference, with a track worth the middle one of the days' own ranges, so an ordinary day stays inside its track.</p>
+<h2 id="6-the-two-front-ends-over-one-library">6. The two front ends over one library</h2>
+<p><strong>The terminal monitor and the window draw the same charts from the same arithmetic. What is shared is the arithmetic; each has its own state loop, its own layout and its own way of filling in the hours before it was opened.</strong></p>
+<table><thead><tr><th></th><th>Shared, in the library</th><th>Terminal monitor, <code>src/main.rs</code></th><th>Window, <code>gui/src/main.rs</code></th></tr></thead><tbody><tr><td>The stream</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L449-L461"><code>Client</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L113-L141"><code>Event</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2250-L2265"><code>Feed::poll</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2023-L2043"><code>Tick</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4379-L4906"><code>feed</code></a>, on its own thread</td></tr><tr><td>Averages</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L12-L23"><code>Windows</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1990-L1992"><code>mean_cpm</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4349-L4351"><code>mean_of</code></a></td></tr><tr><td>The counts strip</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L1270-L1338"><code>tiers_with</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L1476-L1559"><code>tiers_arrivals</code></a></td><td>bars of block characters in <code>watch</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L3686-L3866"><code>Chart::cascade</code></a></td></tr><tr><td>The live drum</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L684-L696"><code>Trail</code></a>, <code>src/drum.rs</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L584-L624"><code>draw_drum</code></a> on a <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L319-L323"><code>Paper</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L3916-L4029"><code>Chart::trail</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4087-L4230"><code>Chart::spectrum</code></a></td></tr><tr><td>The long papers</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L448-L479"><code>rows</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L845-L878"><code>draw_long</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L710-L734"><code>long_axis</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L3135-L3247"><code>Chart::long_paper</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L296-L309"><code>long_ends</code></a></td></tr><tr><td>The temperature</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L915-L979"><code>temp_drum</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L310-L345"><code>read_temps</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1343-L1400"><code>draw_temp_drum</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L3343-L3365"><code>Chart::temp_paper</code></a></td></tr><tr><td>Sharing the height</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L492-L504"><code>share</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1024-L1062"><code>drum_rooms</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L165-L175"><code>regions</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L411-L416"><code>papers</code></a></td></tr><tr><td>Keys</td><td></td><td><code>t</code>, <code>d</code>, <code>m</code>, <code>q</code> in <code>watch</code></td><td>the same in <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L1651-L1698"><code>App::subscription</code></a>, and clicks in <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L3037-L3057"><code>Chart::pressed</code></a></td></tr></tbody></table>
+<p><strong>The terminal monitor</strong> is one function, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2387-L3429"><code>watch</code></a>, of 1,043 lines. It owns the screen through <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L126-L128"><code>Screen</code></a> (raw mode, restored on drop), wakes ten times a second for the keys, and redraws the whole screen into one string on every sample. Lines are drawn on a <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L319-L323"><code>Paper</code></a>, a sheet of Braille dots described in section 9. The colour depth is read from the terminal's own environment (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L212-L222"><code>depth_of</code></a>) and the same pen is written as 24-bit, 256-colour or eight-colour escapes (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L264-L270"><code>ink</code></a>).</p>
+<p><strong>The window</strong> is an iced application. Its feed thread holds all the state that changes with a sample; the interface thread holds only the latest <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L1428-L1485"><code>Snapshot</code></a>, the needle's position (<a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L1377-L1392"><code>Meters</code></a>, sent twelve times a second on its own message) and what is open. The charts are one canvas program, <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L2833-L2879"><code>Chart</code></a>. Its <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L2894-L2909"><code>Kept</code></a> caches the live drum, the temperature drum and the long papers as geometry and clears each cache only when the numbers it was drawn from change, because the software renderer in a virtual machine notices five thousand lines redrawn twelve times a second to move a needle.</p>
+<p><strong>Filling from the log.</strong> The server's replay reaches back only as far as the server has been up. Both front ends fill the stretch before it from the count log, and each does it its own way:</p>
+<table><thead><tr><th></th><th>Terminal monitor</th><th>Window</th></tr></thead><tbody><tr><td>Reads</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1084-L1106"><code>log_rows</code></a>: one counter's file for this month and last</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L135-L161"><code>Counts::load</code></a>: every counter's file in the directory</td></tr><tr><td>Makes seconds with</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1130-L1154"><code>prefill_seconds</code></a>: rows laid end to end back from the first sample</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L183-L216"><code>Counts::binned</code></a> into 30 s bins, then <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L472-L487"><code>seconds_from_log</code></a></td></tr><tr><td>Closes a gap at the join of</td><td>600 s (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1077"><code>PREFILL_JOIN</code></a>)</td><td>4 bins, 120 s (<a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L452"><code>FILL_JOIN</code></a>)</td></tr><tr><td>Stops at a hole of</td><td>90 s (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1078"><code>PREFILL_HOLE</code></a>)</td><td>one empty bin</td></tr><tr><td>Reaches back</td><td>8 hours, or the longest span if longer (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1076"><code>PREFILL_REACH</code></a>)</td><td>45,056 s (<a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L451"><code>FILL_REACH</code></a>)</td></tr><tr><td>With several counters</td><td>fills each counter's averages; not the strip</td><td>fills nothing</td></tr><tr><td>Bars finer than a log row</td><td>emptied by <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1160-L1172"><code>blank_fine</code></a></td><td>emptied by <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L493-L505"><code>blank_fine</code></a></td></tr></tbody></table>
+<p>Both deal a row's counts over its seconds as evenly as whole numbers go, so an average of a row or longer holds what was counted; neither gives those seconds to the spectrum, the drum or the entropy pool. The terminal's version, where it is called:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2710-L2714"><code>src/main.rs</code>, lines 2710 to 2714</a></p>
+<pre><code class="language-rust">                    let per: Vec&lt;Vec&lt;u32&gt;&gt; = id
+                        .counters
+                        .iter()
+                        .map(|c| prefill_seconds(&amp;log_rows(dir, &amp;c.serial_no, when, reach), when, reach))
+                        .collect();</code></pre>
+<h2 id="7-the-pages">7. The pages</h2>
+<p><strong>Four generators write static pages from the log directory and the documents. Two of them exist twice, once in Rust and once in Python, and are held to each other byte for byte.</strong></p>
+<table><thead><tr><th>Page</th><th>Rust</th><th>Python</th><th>Pinned</th></tr></thead><tbody><tr><td>The report (<code>index.html</code> or <code>monitor.html</code>) and <code>random.html</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/export.rs#L2421-L2540"><code>export</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/export.rs#L997-L1536"><code>render_html</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/export.rs#L1933-L2399"><code>render_random_html</code></a></td><td><code>cmd_export</code> in <code>radbeeper</code></td><td>yes, by <code>TestTheTwoExportsWriteTheSamePages</code></td></tr><tr><td>The frame browser</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/browser.rs#L62-L110"><code>write_pages</code></a>, <code>export --frames-page</code></td><td>none</td><td>no</td></tr><tr><td>The drums page, <code>drums.html</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longpage.rs#L796-L818"><code>write_page</code></a>, <code>export --drums-page</code></td><td>none</td><td>no</td></tr><tr><td>The site: landing page and every document in <code>docs/</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/site.rs#L1082-L1193"><code>build</code></a>, <code>radbeeper pages</code></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/tools/landing.py#L599-L670"><code>main</code></a></td><td>yes, by <code>TestTheTwoSiteGeneratorsWriteTheSamePages</code></td></tr></tbody></table>
+<p><code>src/export.rs</code> has no plotting library; the charts are SVG written as strings (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/export.rs#L647-L744"><code>svg_plot</code></a>). Matching the Python to the byte took the same float arithmetic in the same order, <code>libm</code> calls where Python calls them, and CPython's compensated <code>sum</code>; the file's head lists them.</p>
+<p><code>src/longpage.rs</code> draws the day paper, the month paper and the temperature drum as inline SVG with no script (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/longpage.rs#L388-L478"><code>long_svg</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/longpage.rs#L515-L601"><code>temp_svg</code></a>), from what <a href="https://github.com/vonglurt/radbeeper/blob/main/src/longpage.rs#L96-L121"><code>gather</code></a> reads. It has no Python half because the long drums have none, which is why it is a flag on <code>export</code> and not part of the pinned page.</p>
+<p><code>src/site.rs</code> is a Markdown renderer written by hand over the subset the documents use (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/site.rs#L382-L579"><code>render</code></a>), with no regular expressions because the crate has no regex dependency. <code>tools/landing.py</code> is the same renderer in standard-library Python (<a href="https://github.com/vonglurt/radbeeper/blob/main/tools/landing.py#L117-L252"><code>render</code></a>). <a href="https://github.com/vonglurt/radbeeper/blob/main/src/serve.rs#L176-L220"><code>run</code></a> is a small static file server for looking at the result, <code>radbeeper preview</code>.</p>
+<p><strong>The robot.</strong> <code>.github/workflows/pages.yml</code> rebuilds the published site when logs, documents or the generators are pushed. It uses the Python for the report and the site, and builds the Rust for the one page only the Rust can write:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/.github/workflows/pages.yml#L90-L104"><code>.github/workflows/pages.yml</code>, lines 90 to 104</a></p>
+<pre><code class="language-yaml">      - name: Build the counter's report from logs/
+        run: python3 radbeeper export --logs logs -o monitor.html
+
+      # AFTER THE PYTHON'S REPORT AND NEVER OVER IT: `-o` points at the runner's
+      # temporary directory, so the only file this step leaves in the checkout
+      # is drums.html. It is written even for a fork with no logs yet, saying
+      # there is no record, because the landing page links to it either way.
+      - name: Build the day and month drums and the temperature from logs/
+        run: |
+          cargo run --release --locked -- export --logs logs \
+            -o "$RUNNER_TEMP/monitor.html" \
+            --drums-page --drums-output drums.html
+
+      - name: Build the landing page and the lab reports from the documents
+        run: python3 tools/landing.py</code></pre>
+<p>It then commits <code>index.html</code>, <code>monitor.html</code>, <code>drums.html</code> and the documents' pages back to <code>main</code>.</p>
+<h2 id="8-how-it-is-kept-honest">8. How it is kept honest</h2>
+<p><strong>Four kinds of check: unit tests beside the code, a fake counter on a pseudo-terminal that the real binary is run against, a comparison of the Rust's output with the Python's character for character, and made-up logs in the real format for the things that take a month to happen.</strong></p>
+<table><thead><tr><th>Check</th><th>Where</th><th>What it proves</th></tr></thead><tbody><tr><td>Unit tests beside the code</td><td>a <code>mod tests</code> at the foot of each <code>src/*.rs</code>; 261 <code>#[test]</code> functions by a count of the attribute, and 34 more in <code>gui/src/main.rs</code></td><td>arithmetic, layout arithmetic, the wire format's parsing, the Braille paper's dots</td></tr><tr><td>The fake counter</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/tests/fake_gmc.py#L87-L260"><code>FakeGMC</code></a></td><td>speaks the GMC protocol on a pty: heartbeat, flash, clock, thermometer</td></tr><tr><td>The port, end to end</td><td><code>tests/test_serial.py</code></td><td>identification, the lock, a killed session's leftover stream, the monitor's screen</td></tr><tr><td>The thermometer</td><td><code>tests/test_temp.py</code>, on <a href="https://github.com/vonglurt/radbeeper/blob/main/tests/test_temp.py#L53-L124"><code>TempCase</code></a></td><td>the service publishes exactly the counts the fake sent, in order, while being asked every second</td></tr><tr><td>Rust against Python</td><td><code>tests/test_differential.py</code> with <code>examples/format_oracle.rs</code></td><td>the log row, <code>%g</code>, the stamp, the flash decoder, the emission digest, the report pages, the site</td></tr><tr><td>The frame format</td><td><code>tests/frames_fixture.rs</code>, <code>tests/test_frames_js.py</code>, <code>tests/test_browser_js.py</code></td><td>the binary frames read the same in Rust and in the page's JavaScript</td></tr><tr><td>Made-up logs</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/sample.rs#L76-L107"><code>counts</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/src/sample.rs#L115-L149"><code>temps</code></a>, <code>examples/sample_logs.rs</code></td><td>a month of counts with a twenty-minute rhythm laid over decay, so a day line can be tested without waiting a day</td></tr></tbody></table>
+<p>The fake counter writes down every count it sends, and can be told to answer the temperature after any delay, to answer 85.0 first, to send a second of counts ahead of every answer, or to send its stream without the flag bit. The thermometer's test is one assertion over that record:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/tests/test_temp.py#L109-L114"><code>tests/test_temp.py</code>, lines 109 to 114</a></p>
+<pre><code class="language-python">    def assert_every_second_is_the_counters(self, counts):
+        self.assertGreater(len(counts), 10, "the service read almost nothing")
+        sent = list(self.dev.sent)
+        self.assertEqual(
+            counts, sent[:len(counts)],
+            "what was published is not what the counter sent, second for second")</code></pre>
+<p><code>tests/test_temp.py</code> runs it with the answer 0.31, 0.55, 0.85 and 1.3 seconds late, the last two later than the wait and later than the next second.</p>
+<p>The differential test builds <code>examples/format_oracle.rs</code>, which prints what the library would write for a directive on standard input, and compares each line with what the Python produces for the same input:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/tests/test_differential.py#L78-L83"><code>tests/test_differential.py</code>, lines 78 to 83</a></p>
+<pre><code class="language-python">    def compare(self, cases):
+        """cases: [(directive line, the string Python produces)]"""
+        got = self.rust([d for d, _ in cases])
+        self.assertEqual(len(got), len(cases))
+        for (directive, want), mine in zip(cases, got):
+            self.assertEqual(mine, want, "on %r" % directive)</code></pre>
+<p><code>examples/site_oracle.rs</code> is the same idea for the Markdown renderer, and <code>examples/long_drum.rs</code> prints the long papers as plain text for looking at a real record over ssh.</p>
+<p>The continuous integration is <code>.github/workflows/rust.yml</code>: a build with warnings as errors, <code>cargo test</code>, two groups of Clippy lints, <code>cargo package</code>, the Python suite, and <code>cargo audit</code> over both lock files; a second job builds with the oldest toolchain the manifest promises. The review below says what it does not cover.</p>
+<h2 id="9-techniques-worth-naming">9. Techniques worth naming</h2>
+<p><strong>Exact-length reads with a deadline, on a protocol with no framing.</strong> Every reply from the counter is a fixed number of raw bytes. The only way to stay in step is to ask for exactly that many and stop at a deadline. A conversation flushes the input first; the stream never does.</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L167-L172"><code>src/counter.rs</code>, lines 167 to 172</a></p>
+<pre><code class="language-rust">    fn ask(&amp;self, cmd: &amp;[u8], want: usize) -&gt; Vec&lt;u8&gt; {
+        self.port.flush_input();
+        let _ = self.port.write_all(cmd);
+        self.port
+            .read_exact_or_timeout(want, Duration::from_millis(1000))
+    }</code></pre>
+<p>Where a reply runs past what was asked for (both GMC-320s answer a 2,048-byte flash read with 2,049), a flush is not enough, because the spare byte is still in flight. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/serial.rs#L180-L193"><code>Serial::drain</code></a> reads until the line has been quiet for 20 ms. The comment in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/counter.rs#L274-L333"><code>Counter::read_history</code></a> is the account of the corrupt flash that turned out to be this.</p>
+<p><strong>The flag-bit discriminator.</strong> What a pair of bytes is, is decided by what it is. The excerpt is in section 3. The stream's own top bit separates a second of counts from the head of an answer, and a stream that does not carry the bit is never asked.</p>
+<p><strong>Replay on attach.</strong> A client starts complete: the greeting, the ring, the rows, the temperatures, then <code>live</code>. The excerpt is in section 2. The replay is written blocking with a five-second deadline and live traffic is non-blocking, so a client that is reading gets all of it and one that is not costs the counter nothing.</p>
+<p><strong>One row per slot.</strong> A row's identity is <code>floor(time / interval)</code>. The live writer, the restart and the backfill's merge all refuse a second row for a slot, which is what lets a flash download be folded into a log that was being written live. The excerpt is in section 4.</p>
+<p><strong>Dealing a log row across bins.</strong> A row is thirty of the counter's seconds, which is a little over thirty of ours, so rows dropped whole into thirty-second bins by their middles leave an empty bin every quarter of an hour. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L183-L216"><code>Counts::binned</code></a> gives each bin the share of the row that lies in it:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L196-L212"><code>src/longdrum.rs</code>, lines 196 to 212</a></p>
+<pre><code class="language-rust">        for &amp;(mid, counts, seconds) in &amp;self.rows[from..] {
+            let (a, b) = (mid - seconds / 2.0, mid + seconds / 2.0);
+            if a &gt;= end {
+                break;
+            }
+            if b &lt;= start {
+                continue;
+            }
+            let first = (((a - start) / bin).floor().max(0.0)) as usize;
+            let last = ((((b - start) / bin).ceil()) as usize).min(n);
+            for (k, cell) in sums.iter_mut().enumerate().take(last).skip(first) {
+                let (lo, hi) = (start + k as f64 * bin, start + (k + 1) as f64 * bin);
+                let share = (b.min(hi) - a.max(lo)).max(0.0);
+                cell.0 += counts * share / seconds;
+                cell.1 += share;
+            }
+        }</code></pre>
+<p>A bin is counted only when at least half of it was covered.</p>
+<p><strong>Folding bands by the mean.</strong> A day has 720 periods between two minutes and itself and the paper has 192 places. The loudest of the periods that share a place is high by construction, and a row of those is a wall. Each band is the mean power of its periods, at the geometric mean of their periods, and a band no period fell in is left out:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L289-L293"><code>src/longdrum.rs</code>, lines 289 to 293</a></p>
+<pre><code class="language-rust">    let bands = sums
+        .iter()
+        .filter(|c| c.2 &gt; 0)
+        .map(|c| ((c.1 / c.2 as f64).exp() as f32, (c.0 / c.2 as f64) as f32))
+        .collect();</code></pre>
+<p><strong>Braille paper with hidden-line removal.</strong> A Braille character is two dots across and four down, so a terminal cell is eight places for ink. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L319-L323"><code>Paper</code></a> is a grid of optional <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L305-L309"><code>Dot</code></a>s; <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L407-L428"><code>Paper::cell</code></a> packs eight of them into one character and gives it the colour of the dot with the highest rank. The drum is drawn back to front, and each row first rubs out everything from its own line down to its baseline, so a row in front hides what is behind it. That is in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L376-L403"><code>Paper::trace</code></a>:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L393-L400"><code>src/main.rs</code>, lines 393 to 400</a></p>
+<pre><code class="language-rust">            if let Some(base) = hide_to {
+                for yy in top..=base.max(foot) {
+                    self.clear(x, yy);
+                }
+            }
+            for yy in top..=foot {
+                self.set(x, yy, dot);
+            }</code></pre>
+<p><strong>A PNG written by hand.</strong> The window's <code>--shot</code> writes a picture of itself with no image dependency. A PNG's pixels are a zlib stream, and zlib allows blocks that are stored as they stand, so <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4265-L4311"><code>png_of</code></a> is the pixels with a header and three checksums (<a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4314-L4324"><code>crc32</code></a>, <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4327-L4340"><code>adler32</code></a>):</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4279-L4290"><code>gui/src/main.rs</code>, lines 4279 to 4290</a></p>
+<pre><code class="language-rust">    let mut z = vec![0x78, 0x01];
+    let mut blocks = raw.chunks(65535).peekable();
+    if blocks.peek().is_none() {
+        z.extend_from_slice(&amp;[1, 0, 0, 0xff, 0xff]);
+    }
+    while let Some(block) = blocks.next() {
+        z.push(blocks.peek().is_none() as u8);
+        z.extend_from_slice(&amp;(block.len() as u16).to_le_bytes());
+        z.extend_from_slice(&amp;(!(block.len() as u16)).to_le_bytes());
+        z.extend_from_slice(block);
+    }
+    z.extend_from_slice(&amp;adler32(&amp;raw).to_be_bytes());</code></pre>
+<p><strong>Byte-for-byte differential testing.</strong> The log format and two sets of pages each have two implementations, and the test is that they write the same characters, not equivalent ones. The excerpt is in section 8. It is what made a port one piece at a time safe, and finding 7 of the review says what it now costs.</p>
+<hr>
+<h1 id="part-two-a-software-architecture-review">Part two: a software architecture review</h1>
+<p><strong>The process design is right and the record's rules are right. The weaknesses are in how the code is divided: three copies of the loop that consumes the stream, two front ends that have begun to disagree, a reference implementation whose reason for existing has changed, and several failures that are swallowed.</strong></p>
+<p>Each finding below gives the evidence in the code, a recommendation and a rough size: small is an afternoon, medium is a few days, large is a week or more.</p>
+<h2 id="what-is-sound">What is sound</h2>
+<p><strong>One reader, many consumers.</strong> The lock is taken before the line settings are touched, the server never reads from a client, and the window cannot open a port because its crate has no code for one. Live writes to clients are non-blocking, so no client can stop the logger.</p>
+<p><strong>The record's invariants.</strong> One row per slot, a file per counter per month, a merge that never replaces a live row and renames a whole file into place, columns matched by name and not by position. These are few, they are stated where they are enforced, and the tests exercise them.</p>
+<p><strong>Counts and everything else are kept apart.</strong> A temperature goes to its own file and its own line. The merged room is a second file beside the per-counter files, with the per-tube counts in it so it can be taken apart again. The pinned count log was not touched to add either.</p>
+<p><strong>The arithmetic is in the library and has no opinion about drawing.</strong> <code>src/drum.rs</code> returns fractions and three floats, <code>src/analysis.rs</code> returns numbers, and both front ends and the page use them.</p>
+<p><strong>The comments record why.</strong> Nearly every non-obvious line has the incident that put it there, with a date. A reviewer can check a claim against the code, which is how most of what follows was found.</p>
+<h2 id="the-findings">The findings</h2>
+<h3 id="1-the-stream-is-consumed-in-three-hand-written-loops">1. The stream is consumed in three hand-written loops</h3>
+<p><strong>This is a real problem, and it is the root of several others.</strong></p>
+<p>The service, the terminal monitor and the window each contain the code that turns samples into a room's state. The whole-second sum for the spectrum, <code>sec_bin</code> and <code>sec_sum</code>, is written out three times: in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L3445-L3954"><code>service</code></a>, in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L2387-L3429"><code>watch</code></a> and in <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4379-L4906"><code>feed</code></a>. So is the handling of a counter joining, a counter going quiet, and the rule that the replay is not poured into the entropy pool. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L1990-L1992"><code>mean_cpm</code></a> and <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4349-L4351"><code>mean_of</code></a> are the same three lines. <code>STRIP_KEEP</code> is defined in both files with the same value.</p>
+<p>The copies have already drifted. The join tolerances of the two prefills in section 6 are 600 seconds and 120: after a service has been stopped for five minutes, the terminal fills its averages from the log and the window does not. The long papers' luck line, which decides where the pen turns from green to hot, is 5.0 in the window (<a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L283"><code>LONG_LUCK</code></a>) and on the page (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/longpage.rs#L69"><code>LUCK</code></a>), and in the terminal it is <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L787-L789"><code>long_luck</code></a>, which is <code>chance_max_of(192, 1.0)</code> and comes to about 7.7 (1 + √(2 × ln 191) + 2 × ln 191 / 3). The same band at six times chance is hot in the window and green in the terminal.</p>
+<p><em>Recommendation.</em> Put one type in the library, fed <code>broker::Event</code>s, that owns the windows for each counter and the room, the whole-second sum, the ladder, the trail, the arrival strip and the prefill, and gives each front end a read-only view. The service can use the same type for the parts it shares. Each front end then keeps only layout and ink. <em>Medium.</em> The existing unit tests of both prefills become tests of one.</p>
+<h3 id="2-srcmainrs-and-guisrcmainrs-are-too-large-and-the-seams-are-visible">2. <code>src/main.rs</code> and <code>gui/src/main.rs</code> are too large, and the seams are visible</h3>
+<p><strong>A real problem for navigation and review, not for correctness.</strong> <code>src/main.rs</code> is 7,586 lines in one module; <code>watch</code> is 1,043 lines, <code>service</code> 510, <code>main</code> 439. In the window, <code>App::view</code> is 952 lines and <code>feed</code> 528.</p>
+<p>The file already falls into parts with little between them:</p>
+<table><thead><tr><th>Lines of <code>src/main.rs</code></th><th>What</th><th>Where it could live</th></tr></thead><tbody><tr><td>54 to 1,620</td><td>the terminal's drawing: digits, <code>Screen</code>, colour depth, <code>Paper</code>, the drums, the thermometers, the table</td><td>a <code>tui</code> module of the binary</td></tr><tr><td>1,620 to 2,345</td><td><code>Tube</code>, <code>Bank</code>, <code>Prober</code>, <code>Feed</code>, <code>rejoin</code>: owning ports</td><td>the library, with <code>counter.rs</code> and <code>serial.rs</code></td></tr><tr><td>2,387 to 3,429</td><td><code>watch</code></td><td>the binary, much shorter after finding 1</td></tr><tr><td>3,445 to 4,055</td><td><code>service</code>, <code>while_serving</code>, <code>backfill_at_start</code></td><td>the library, as a <code>collect</code> module</td></tr><tr><td>4,286 to 4,600</td><td><code>Logger</code>, <code>MergedLogger</code></td><td>the library, beside <code>log::Writer</code></td></tr><tr><td>4,058 to 4,270 and 4,769 to 5,720</td><td>the one-shot commands</td><td>a <code>commands</code> module of the binary</td></tr><tr><td>6,250 to 6,546</td><td><code>hotplug</code> and finding a terminal</td><td>a module of the binary</td></tr></tbody></table>
+<p><code>counter.rs</code> and <code>serial.rs</code> being outside the library is deliberate for the window, but it also means nothing outside the binary can test the reader thread: <code>Bank::spawn</code>, where the temperature incident happened, has no unit test and is reached only through the Python tests against the fake counter. Moving them into the library behind the existing API does not give the window a port; it still has to choose to call it.</p>
+<p>Three smaller things in the same vein. The comment at the head of <code>src/main.rs</code> describes a program that no longer exists:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L6-L9"><code>src/main.rs</code>, lines 6 to 9</a></p>
+<pre><code class="language-rust">// Everything that writes the log format -- service, backfill, export, site,
+// random, hotplug -- is in the one-file Python program in the same repository
+// and stays there while that format is still moving. Asking this binary for
+// one of them says so rather than pretending.</code></pre>
+<p>The service, the backfill, the export, the site generator and hotplug are all in the Rust now. <code>probe</code>'s lines for a counter are printed by four separate blocks, two in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L4204-L4267"><code>probe_cmd</code></a> and two in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L5793-L6231"><code>main</code></a>. And <a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L453-L471"><code>Waterfall</code></a> is constructed only by its own tests.</p>
+<p><em>Recommendation.</em> Split along the table, drawing first because it has the fewest ties. Correct the head comment. <em>Medium</em>, mechanical, and safe because the tests move with the code.</p>
+<h3 id="3-the-window-has-private-copies-of-helpers-the-library-now-has">3. The window has private copies of helpers the library now has</h3>
+<p><strong>Real, small, and the easiest of the duplications to remove.</strong> <code>src/longpage.rs</code> needed the window's axis and pen arithmetic and could not import it from a binary crate, so it copied it and says so in its comments. The window still has its own:</p>
+<table><thead><tr><th>Helper</th><th>Window</th><th>Library copy</th></tr></thead><tbody><tr><td>The ends of a long paper's axis</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L296-L309"><code>long_ends</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longpage.rs#L128-L140"><code>long_ends</code></a></td></tr><tr><td>Where a period stands on it</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L314-L322"><code>long_place</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longpage.rs#L144-L152"><code>long_place</code></a></td></tr><tr><td>A period in letters</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L326-L333"><code>period_name</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longpage.rs#L155-L162"><code>period_name</code></a></td></tr><tr><td>The periods named along the head</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L337-L351"><code>long_ticks</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longpage.rs#L166-L180"><code>long_ticks</code></a></td></tr><tr><td>The temperature pen's shade</td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L624-L629"><code>temp_shade</code></a></td><td><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longpage.rs#L186-L191"><code>temp_shade</code></a></td></tr></tbody></table>
+<p>The bodies are the same today; <code>long_ends</code> differs only in taking <code>&amp;[Option&lt;LongRow&gt;]</code>. The terminal has a third version of the axis in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L710-L734"><code>long_axis</code></a>.</p>
+<p><em>Recommendation.</em> Move the five to where they belong (<code>longdrum</code> for the axis, <code>drum</code> for the shade), delete the window's and the page's copies, and have the terminal use the same ends. Put the luck line there too, once. <em>Small.</em></p>
+<h3 id="4-the-long-drums-pool-counters-of-different-sensitivity">4. The long drums pool counters of different sensitivity</h3>
+<p><strong>A real problem when two counters are not alike, and the bench's are not.</strong></p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L135-L161"><code>Counts::load</code></a> reads every counter's rows into one list, and <a href="https://github.com/vonglurt/radbeeper/blob/main/src/longdrum.rs#L183-L216"><code>Counts::binned</code></a> divides the summed counts by the summed seconds. The comment calls the result "the room's rate for one tube however many were listening". That holds only if every tube counts the room at the same rate. If one reads 20 counts a minute and the other 40, the pooled figure is 30 while both listen and 20 or 40 when one is away, so a counter joining or leaving is a step in the series the transform is given. The scatter that powers are held against is taken from neighbouring differences and hardly sees a single step, so the step's power is not normalised away; it lands in the long-period bands.</p>
+<p>The effect on a line's content is already recorded: the commit of 16 November that relaxed the sample month's test (ed91831) notes that through the week a second tube counts beside the first, the first tube's twenty-minute rhythm is half as deep in the pooled rate and its power a quarter.</p>
+<p>The live spectrum has the same shape of problem. The service, the monitor and the window all feed the whole second <em>summed</em> across counters to the ladder and the trail, so one of two counters going quiet halves the series. The averages were moved to tube-seconds for exactly this reason (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/analysis.rs#L120-L123"><code>Windows::mean</code></a>); the spectrum's input was not.</p>
+<p><em>Recommendation.</em> Make a line per counter and pool the <em>spectra</em>, or divide each counter's rate by its own long mean before pooling so that every tube reads 1.0 on an ordinary day. For the live drum, feed the mean of the counters answering, not the sum. <em>Medium</em>, and the kept lines in <code>drum-day.tsv</code> would need writing again, which <code>keep</code> can do because the count log is the record.</p>
+<h3 id="5-failures-to-write-the-record-are-swallowed-or-end-the-service-with-a-success-code">5. Failures to write the record are swallowed, or end the service with a success code</h3>
+<p><strong>Real, and cheap to fix.</strong> What happens when the log directory cannot be written depends on which file, and none of it is loud.</p>
+<p>The count log is the one failure that stops the service, and it stops it by leaving the loop:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L3926-L3937"><code>src/main.rs</code>, lines 3926 to 3937</a></p>
+<pre><code class="language-rust">        match loggers[who].add(when, counts, &amp;averages) {
+            Ok(Some(line)) =&gt; {
+                if let Some(s) = srv.as_mut() {
+                    s.publish_row(who, &amp;line);
+                }
+            }
+            Ok(None) =&gt; {}
+            Err(e) =&gt; {
+                eprintln!("radbeeper: could not write the log -- {}", e);
+                break;
+            }
+        }</code></pre>
+<p>After the loop the function writes <code>stopped</code> to the status file and returns 0. A supervisor sees a clean exit. The same code is returned for "no counter is plugged in". If <code>--logs</code> names a directory that cannot be written, the service runs for about one interval, says so on stderr and exits 0; <a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L1040-L1061"><code>state_dir</code></a> probes for a writable directory only when <code>--logs</code> is not given.</p>
+<p>Other writes fail silently:</p>
+<table><thead><tr><th>Write</th><th>What happens on failure</th></tr></thead><tbody><tr><td>The emission's audit record</td><td>ignored: <code>let _ = entropy::write_record(...)</code>, and the hex is still published to every client</td></tr><tr><td>The status file</td><td>ignored in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/log.rs#L1073-L1079"><code>write_status</code></a></td></tr><tr><td>The last short row at shutdown</td><td>ignored in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L4339-L4345"><code>Logger::finish</code></a></td></tr><tr><td>A backfill's merge</td><td>ignored: <a href="https://github.com/vonglurt/radbeeper/blob/main/src/history.rs#L329-L411"><code>backfill</code></a> counts only the files whose merge returned <code>Ok</code>, so an unwritable log reads as "0 added"</td></tr><tr><td>The socket</td><td>reported once and carried on without, by design</td></tr><tr><td>The temperature, the spectrum row, a frame</td><td>one line on stderr, and carried on</td></tr></tbody></table>
+<p>The emission is the sharpest of these, because the rule in <code>src/broker.rs</code> is that a published line is always the one in the file:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/main.rs#L3914-L3919"><code>src/main.rs</code>, lines 3914 to 3919</a></p>
+<pre><code class="language-rust">            let _ = entropy::write_record(&amp;dir, &amp;record, serial, suspect);
+            if let Some(f) = frame.as_ref() {
+                if let Err(e) = entropy::write_frame(&amp;dir, f, serial) {
+                    eprintln!("radbeeper: could not write the frame -- {}", e);
+                }
+            }</code></pre>
+<p><em>Recommendation.</em> Exit non-zero when the count log cannot be written. Do not publish an emission whose record was not written. Have <code>backfill</code> return the merge's error. Check that <code>--logs</code> is writable at start and say so then. <em>Small.</em></p>
+<h3 id="6-the-continuous-integration-is-red-and-it-does-not-build-the-window">6. The continuous integration is red, and it does not build the window</h3>
+<p><strong>Real.</strong> The <code>rust</code> workflow has failed on the pushes of 16 November at its last step, and the failure is in the window's dependency tree, not in anything this repository wrote. On the run for commit cf8eb39 <code>cargo audit</code> in <code>gui/</code> reported <code>zvariant</code> and <code>zvariant_derive</code> as unmaintained, <code>rustix</code> 1.1.5 as unsound, and two yanked crates, none of them among the three advisories the step already ignores:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/.github/workflows/rust.yml#L105-L112"><code>.github/workflows/rust.yml</code>, lines 105 to 112</a></p>
+<pre><code class="language-yaml">      - name: No known advisories against anything this builds
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --deny warnings
+          cd gui &amp;&amp; cargo audit --deny warnings \
+            --ignore RUSTSEC-2024-0436 \
+            --ignore RUSTSEC-2026-0192 \
+            --ignore RUSTSEC-2026-0253</code></pre>
+<p>Two consequences. A workflow that is red on every push stops carrying information: every earlier step passed on that run, and a real failure in one of them would look the same from the commit list. And the step is the only thing in the workflow that touches <code>gui/</code> at all. Nothing compiles the window in CI and nothing runs its 34 tests; the workflow's <code>paths</code> filter does not include <code>gui/**</code>, so a push that changes only the window does not start it.</p>
+<p><em>Recommendation.</em> Move the audit of <code>gui/</code> to a job of its own that may fail without failing the build (or runs on a schedule), update <code>rustix</code>, and add the new advisories to the ignored list with the reason beside each as the existing three have. Add a job that runs <code>cargo build</code> and <code>cargo test</code> in <code>gui/</code>, and add <code>gui/**</code> to the paths. <em>Small.</em></p>
+<h3 id="7-the-python-program-what-it-still-owns-and-what-the-pin-costs">7. The Python program: what it still owns, and what the pin costs</h3>
+<p><strong>The pin was the right tool for the port. The port is over, and the stated reason for keeping the second generators no longer holds.</strong></p>
+<p>The Python file says at its head that it is deprecated and the Rust is the implementation. It still owns two commands the Rust does not have: <code>site</code> (<a href="https://github.com/vonglurt/radbeeper/blob/main/radbeeper#L3139-L3194"><code>cmd_site</code></a>), which writes <code>sites.tsv</code>, and <code>recompute</code> (<a href="https://github.com/vonglurt/radbeeper/blob/main/radbeeper#L3099-L3135"><code>cmd_recompute</code></a>), which fills long-window columns in an old log. The Rust refuses <code>site</code> by name. It does not know <code>recompute</code> at all, and because an unknown command falls through to the code that opens a counter, <code>radbeeper recompute</code> beside a running service answers "port busy" and not "unknown command". The Python has no socket, no temperature and no long drums.</p>
+<p>The pin's costs are concrete:</p>
+<table><thead><tr><th>Cost</th><th>Evidence</th></tr></thead><tbody><tr><td>A second copy of the report generator</td><td><code>src/export.rs</code>, 2,811 lines, written to reproduce CPython's float behaviour</td></tr><tr><td>A second copy of the Markdown renderer</td><td><code>src/site.rs</code>, 1,348 lines, against <code>tools/landing.py</code>, 660</td></tr><tr><td>The test that holds them</td><td><code>tests/test_differential.py</code>, 1,510 lines</td></tr><tr><td>Features that could not go where they belong</td><td>the temperature is a separate file because the count row's characters are pinned; the drums and the frame browser are separate pages because the pinned page cannot grow</td></tr><tr><td>Every change to a pinned page is made twice</td><td>the front page's edit of 16 November 2026 was 28 lines added and 14 removed in <code>src/site.rs</code>, and the same in <code>tools/landing.py</code></td></tr></tbody></table>
+<p>The reason given in <code>src/site.rs</code> for keeping <code>tools/landing.py</code> is that the workflow can then rebuild the site "with no toolchain at all". The workflow now runs <code>cargo run --release</code> for the drums page (the excerpt in section 7), so it needs the toolchain anyway.</p>
+<p><em>Recommendation.</em> Decide the end state and write it down. One that keeps what the pin bought: freeze the log format against a small set of golden files made once from the Python, have the workflow build every page with the Rust binary it already compiles, port <code>site</code> and <code>recompute</code> (both small), and retire the Python export and <code>tools/landing.py</code>. The report page is then free to carry the drums and the temperature. <em>Medium to large</em>, mostly deletion, and it should follow finding 6 so the change is made under a green build.</p>
+<h3 id="8-the-socket-protocol-has-a-version-and-no-capabilities">8. The socket protocol has a version and no capabilities</h3>
+<p><strong>A real gap, small today.</strong> The rule in <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L34"><code>PROTOCOL</code></a>, that a line may be added without a bump and an unknown line is skipped, is sound and has worked: the <code>t</code> line was added that way. Three things it does not cover.</p>
+<p>A client cannot tell what a server will never send. A monitor attached to a service started with <code>--no-temp</code>, or to another monitor that holds the port, sees no <code>t</code> line and cannot say whether the temperature is not asked or has not come yet. The greeting carries the spans and not the log interval, so the window assumes it: <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4866"><code>every: log::DEFAULT_LOG_EVERY</code></a> is what places the log-row ticks on the counts, whatever <code>--log-every</code> the service was given.</p>
+<p>A version mismatch is indistinguishable from nobody serving. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L472-L504"><code>Client::connect</code></a> returns <code>None</code> for a greeting whose number is not exactly its own:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L481-L484"><code>src/broker.rs</code>, lines 481 to 484</a></p>
+<pre><code class="language-rust">        let f: Vec&lt;&amp;str&gt; = line.trim_end().split('\t').collect();
+        if f.len() &lt; 4 || f[0] != "hello" || f[1].parse::&lt;u32&gt;().ok()? != PROTOCOL {
+            return None;
+        }</code></pre>
+<p><code>Feed::open</code> then tries the port, finds it locked, and prints "port busy". The message does mention a build from before the stream existed, but the program knew the real reason and did not say it.</p>
+<p>The replay ring is shared. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/broker.rs#L46"><code>RING</code></a> is 30,000 samples in all, and its comment says a client's 30,000-second window is full if the service has been up that long. With two counters the ring holds 15,000 seconds of each.</p>
+<p><em>Recommendation.</em> Add one optional greeting line of <code>key=value</code> words (the log interval, whether the temperature is asked, the server's version) that old clients skip. Return a distinct error from <code>connect</code> for a wrong version. Size the ring by counter. <em>Small.</em></p>
+<h3 id="9-only-the-service-asks-the-temperature">9. Only the service asks the temperature</h3>
+<p><strong>Real for anyone who runs <code>watch</code> without a service.</strong> A <code>watch</code> that holds the port logs counts, backfills, writes emissions and exports pages, but its bank's <code>temp_every</code> is <code>None</code>, and <code>watch</code> has no call to <code>log::write_temp</code>. On such a machine the thermometer is empty and no temperature file is written. The reason given in the code is that a monitor holds a port only while a window is open. That argues against relying on it for a continuous record; it does not argue against recording while it is open, which is what it does for the counts.</p>
+<p><em>Recommendation.</em> Let a monitor that owns the port and is logging ask at the same interval and write the same file. The reader thread already does the asking; <code>watch</code> needs the setting and the write. <em>Small.</em></p>
+<h3 id="10-the-fill-from-the-log-works-for-one-counter">10. The fill from the log works for one counter</h3>
+<p><strong>Real, and a consequence of finding 1.</strong> The window fills nothing when more than one counter is attached:</p>
+<p><a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L4546-L4550"><code>gui/src/main.rs</code>, lines 4546 to 4550</a></p>
+<pre><code class="language-rust">                                    if tubes == 1 {
+                                        let log = longdrum::Counts::load(&amp;dir, when - FILL_REACH, when);
+                                        let bin = longdrum::DAY_BIN;
+                                        let bins = log.binned(when - FILL_REACH, when, bin);
+                                        let seconds = seconds_from_log(&amp;bins, bin as usize, FILL_JOIN);</code></pre>
+<p>The terminal fills each counter's averages but not the strip. And the window's fill, when it runs, reads every counter's file in the directory through <code>Counts::load</code>, including the files of a counter that is not attached now, and pools them as finding 4 describes.</p>
+<p><em>Recommendation.</em> One fill in the shared type of finding 1, by counter, from that counter's own file. <em>Small once finding 1 is done.</em></p>
+<h3 id="11-the-stream-has-no-way-back-into-step">11. The stream has no way back into step</h3>
+<p><strong>This is an inference from the code; it has not been seen to happen.</strong> <code>Counter::next_raw</code> reads two bytes and takes them for a second. If a single byte is ever lost on the line, every pair after it is the low byte of one second and the high byte of the next, and nothing in the reader looks for that. Before 16 November there was nothing to look with. Now there is: on a stream that has always carried <code>STREAM_FLAG</code>, a pair without it when no temperature answer is owed is, by the reader's own reasoning, not a second of counts. Today that case sets <code>marked = false</code>, stops asking the temperature, and sends the pair on as a count. A misaligned pair made of a low byte of 1 and a high byte of <code>0x80</code> would be logged as 384 counts in a second.</p>
+<p><em>Recommendation.</em> In that case, do not count the pair; drop one byte, and require the flag on the next few pairs before counting again. Add a fake-counter test that swallows one byte. <em>Small.</em> Whether a real adapter ever drops a byte is not known, and the cost of handling it is low.</p>
+<h3 id="12-the-thread-model-is-simple-and-one-invariant-rests-on-a-comment">12. The thread model is simple, and one invariant rests on a comment</h3>
+<p><strong>Mostly sound.</strong> In the service: the main thread owns the server, the windows, the pools and the loggers; one reader thread per counter and the prober's threads send on channels; a flash download for a counter plugged in later runs on its own thread and hands the counter back on a channel; <code>keep</code> runs on a thread that only reads the count log and appends to its own files. The only shared state is each <code>Arc&lt;Counter&gt;</code>, an <code>AtomicBool</code> for the stop signal and a <code>OnceLock</code> for one setting. In the window, the feed thread owns the state and the interface gets immutable snapshots and <code>Arc</code>s.</p>
+<p>Two things to know. The rule that no conversation happens on a port while its reader runs is what <code>Bank::start</code> exists for, and its comment records that breaking it put 16,383 counts a second into the log twice. It is kept by the order of calls. <code>Bank::live</code> hands out the <code>Arc&lt;Counter&gt;</code> to any caller at any time, and every method of <code>Counter</code> takes <code>&amp;self</code>. And the release profile sets <code>panic = "abort"</code>, so a panic on any thread, including the <code>keep</code> thread or a prober, ends the service. The comments in <code>service</code> record one panic that did, an index out of bounds seven minutes after a second counter joined. Whether the init script restarts it is in the Copal repository and was not checked.</p>
+<p><em>Recommendation.</em> Make the reader own its <code>Counter</code> while it runs, and give the bank a handle that can only stop it; a conversation then needs the counter back, and the type system keeps the rule. <em>Medium</em>, and it fits the move in finding 2.</p>
+<h3 id="13-what-the-tests-do-not-reach">13. What the tests do not reach</h3>
+<p><strong>The window's drawing and its clicks are untested.</strong> The window's 34 tests cover the arithmetic under the drawing: where regions fall, what a pen's shade is, the PNG writer, the needle's ballistics, <code>seconds_from_log</code>. None constructs a <code>Chart</code>. The test named for clicks exercises <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L669-L678"><code>next_open</code></a>, the rule for which drum opens next; <a href="https://github.com/vonglurt/radbeeper/blob/main/gui/src/main.rs#L3037-L3057"><code>Chart::pressed</code></a>, which maps a point to a message, and <code>Chart::draw</code> are not called by any test. The pictures were checked by eye, with <code>--shot</code>.</p>
+<p><strong>A timezone dependence was found on 16 November, by CI and not by a local run.</strong> The sample month's test asked every whole day for six times chance at twenty minutes. Cut at Pacific midnight every day cleared six; cut at UTC's one day read 4.95. Every machine the tests had been run on was on the bench's clock. The fix was to ask for three, and the commit records the suite passing under six zones.</p>
+<p>The cause is structural and worth stating once. <a href="https://github.com/vonglurt/radbeeper/blob/main/src/clock.rs#L73-L75"><code>stamp</code></a> writes local wall-clock time with no offset, and <a href="https://github.com/vonglurt/radbeeper/blob/main/src/clock.rs#L131-L133"><code>parse_stamp</code></a> reads it back in the reader's zone. A day is cut at local midnight (<a href="https://github.com/vonglurt/radbeeper/blob/main/src/clock.rs#L67-L70"><code>day_start</code></a>). So the same log gives different day lines on machines in different zones, the published pages are built by a workflow that sets no timezone, on a runner that need not be in the zone the log was written in, and the hour that repeats when the clocks go back is ambiguous in the per-counter log. The merged log carries a <code>unix</code> column for this reason; the per-counter log cannot, because its characters are pinned.</p>
+<p><em>Recommendation.</em> Run the Rust tests in CI under two zones, one of them not UTC. For the window, a test that builds a <code>Chart</code> from a fixed <code>Snapshot</code>, calls <code>pressed</code> at the centre of each tile and thermometer, and checks the message, needs no renderer. A golden picture through the software renderer and <code>png_of</code> is possible but is <em>medium</em>; the click test is <em>small</em>. The offset in the per-counter log belongs with finding 7.</p>
+<h3 id="14-the-850-sentinel-and-the-flag-bit-rest-on-two-units">14. The 85.0 sentinel and the flag bit rest on two units</h3>
+<p><strong>Not a problem as built; a known limit.</strong> <code>decode_temp</code> refuses exactly <code>55 00 00</code> and nothing near it, and a counter is asked again a few times and then at the ordinary spacing, so a firmware that rests at some other value would log that value. The flag-bit assumption is guarded at run time and fails safe: a stream without the bit is not asked. What is not guarded is a firmware that sets the bit on its seconds but answers in more than four bytes, or whose answer is preceded by something else. The fake counter encodes what the two units on the bench do, so the tests prove the reader against the belief and not against other hardware. <a href="the-thermometer.html">The thermometer</a> says this in its own section 8.</p>
+<p><em>Recommendation.</em> Nothing to build. When a third firmware is on the bench, run the forty-second mid-stream test from that report against it before trusting its temperature file, and record the result there.</p>
+<h2 id="what-to-do-first">What to do first</h2>
+<table><thead><tr><th>Order</th><th>What</th><th>Finding</th><th>Size</th></tr></thead><tbody><tr><td>1</td><td>Make CI green: audit of <code>gui/</code> in its own job; build and test the window in CI</td><td>6</td><td>small</td></tr><tr><td>2</td><td>Exit non-zero when the count log cannot be written; do not publish an emission that was not recorded; surface the backfill's merge error</td><td>5</td><td>small</td></tr><tr><td>3</td><td>Move the five long-paper helpers and the luck line into the library; one value for both front ends and the page</td><td>3, 1</td><td>small</td></tr><tr><td>4</td><td>Per-counter ring; a capabilities line in the greeting; a distinct error for a wrong protocol number</td><td>8</td><td>small</td></tr><tr><td>5</td><td>Resynchronise the stream on a pair without the flag; let a logging monitor ask the temperature</td><td>11, 9</td><td>small</td></tr><tr><td>6</td><td>One room-state type in the library, with one fill from the log, by counter</td><td>1, 10</td><td>medium</td></tr><tr><td>7</td><td>Stop pooling counters before the transform, on the long papers and the live drum</td><td>4</td><td>medium</td></tr><tr><td>8</td><td>Split <code>src/main.rs</code>; move the port and the collectors into the library; the reader owns its counter</td><td>2, 12</td><td>medium</td></tr><tr><td>9</td><td>Decide the Python's end state; build every page with the Rust; retire the second generators</td><td>7</td><td>medium to large</td></tr><tr><td>10</td><td>A click test for the window; the Rust tests under a second timezone</td><td>13</td><td>small</td></tr></tbody></table>
+<p>The first five are independent of each other and of everything after them. Six should come before eight, because it removes most of what makes <code>watch</code> and <code>feed</code> long.</p>
+<h2 id="what-was-not-verified">What was not verified</h2>
+<ul><li><strong>No test suite was run and no binary was built.</strong> This was written from reading the code at commit cf8eb39. The one thing run was this document itself, through both site generators on a scratch copy; they wrote the same page.</li><li><strong>The CI result</strong> is from the log of the run on GitHub for that commit, read on 16 November; earlier runs were not read beyond their status.</li><li><strong>The init script and the hotplug rule</strong> are in the Copal repository. Whether a service that exits is restarted was not checked.</li><li><strong>Finding 11</strong> is reasoning about a lost byte. No log was searched for evidence that it has happened.</li><li><strong>Finding 4's size of effect</strong> on real logs was not measured; the evidence is the arithmetic of <code>binned</code> and the commit message cited.</li><li><strong>The test counts</strong> in section 8 are counts of the <code>#[test]</code> attribute and of <code>def test</code> lines, not of tests seen to pass.</li></ul>
+<hr>
+<h2 id="see-also">See also</h2>
+<ul><li><a href="the-stream.html">The stream</a>: the socket, the replay and the window's layout, at length.</li><li><a href="the-thermometer.html">The thermometer</a>: the temperature question, the incident and the proof.</li><li><a href="the-log.html">The log</a>: the count log's format.</li><li><a href="the-drum-spectrogram.html">The drum spectrogram</a> and <a href="the-monthly-record.html">The monthly record</a>: the spectra.</li><li><a href="the-chain-of-custody.html">The chain of custody</a>: the frames and their links.</li><li><a href="reference.html">Reference</a>: every command and option.</li></ul>
+<p><a href="../index.html">← back to the overview</a></p>
+</main></div>
+<footer><div class="wrap"><ul class="nav"><li><a href="../index.html">Overview</a></li><li><a href="../monitor.html">Live report</a></li><li><a href="reading-the-drum-spectrogram.html">Drum spectrogram</a></li><li><a href="technical-description.html">How it works</a></li><li><a href="index.html">Lab reports</a></li><li><a href="https://github.com/vonglurt/radbeeper">GitHub</a></li><li><a href="https://crates.io/crates/radbeeper">crates.io</a></li></ul>
+<p>RadBeeper &mdash; MIT. Copyright &copy; 2026 Paul Richeson.
+Designed and maintained for <a href="https://github.com/vonglurt/copal">Copal Linux</a>, a distillation of
+Alpine Linux, which is also its development environment.
+<a href="index.html">Lab reports</a> &middot;
+<a href="https://github.com/vonglurt/radbeeper">Source</a> &middot;
+<a href="https://crates.io/crates/radbeeper">crates.io</a></p>
+</div></footer>
+</body>
+</html>
