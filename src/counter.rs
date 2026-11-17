@@ -515,6 +515,34 @@ fn identify(path: &str, baud: Option<u32>) -> Result<Option<Counter>, OpenError>
     Ok(None)
 }
 
+/// How to stop whatever radbeeper is holding the port, in words that can be
+/// typed on the machine this is running on.
+///
+/// THE WORDS FOLLOW THE MACHINE. On Copal and Alpine the holder is the boot
+/// service and `rc-service` is how it is stopped; that line was printed
+/// everywhere, and on a Mac it names a program that does not exist. There
+/// the holder is a service an app started or one somebody ran by hand, and
+/// it is stopped by name.
+pub fn stop_hint() -> &'static str {
+    if cfg!(target_os = "linux") {
+        "doas rc-service radbeeper stop"
+    } else {
+        "pkill -f 'radbeeper.* service'   (it stops the logging until one is started again)"
+    }
+}
+
+/// What to do when there is no counter, for the same reason: one line a
+/// person can act on, after the lines that say what was looked for.
+pub fn next_step() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Plug the counter in with its own USB cable and switch it on, then open RadBeeper \
+         again or run this again. A charge-only cable shows nothing."
+    } else {
+        "Plug the counter in with its own USB cable and switch it on, then run this again. \
+         `radbeeper probe` says which of four things is wrong."
+    }
+}
+
 /// The model out of a firmware string.
 ///
 /// A FREE FUNCTION, because `probe` can now learn what the counter is from the
@@ -608,7 +636,12 @@ pub fn find(device: Option<&str>, baud: Option<u32>) -> Result<Counter, NotFound
         }
         return Err(NotFound {
             reason: "no serial device is present".into(),
-            detail: "Nothing matching /dev/ttyUSB* or /dev/ttyACM*.".into(),
+            detail: if cfg!(target_os = "macos") {
+                "Nothing matching /dev/cu.usbserial*."
+            } else {
+                "Nothing matching /dev/ttyUSB* or /dev/ttyACM*."
+            }
+            .into(),
             busy: false,
         });
     }
@@ -638,8 +671,9 @@ fn find_in(ports: &[String], baud: Option<u32>, mut busy: Vec<String>) -> Result
                  one-shot that wants the port to itself -- a `random`, a\n\
                  `backfill`, a `log pull` -- or a build from before the stream\n\
                  existed. Wait for it with --wait, or:\n\
-                 doas rc-service radbeeper stop",
-                busy.join(", ")
+                 {}",
+                busy.join(", "),
+                stop_hint()
             ),
             busy: true,
         });

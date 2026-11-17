@@ -821,7 +821,10 @@ class TestTheRustWaitsForABusyPort(unittest.TestCase):
             dev.stop()
         self.assertEqual(out.returncode, 1)
         self.assertIn("Waited 2s", out.stderr)
-        self.assertIn("rc-service radbeeper stop", out.stderr)
+        # In this machine's words: the boot service on Linux, the process by
+        # name anywhere else.
+        self.assertIn("rc-service radbeeper stop" if sys.platform.startswith("linux")
+                      else "pkill -f 'radbeeper.* service'", out.stderr)
 
     def test_a_missing_device_is_not_waited_on(self):
         # Waiting fixes a locked port and nothing else. A counter that is not

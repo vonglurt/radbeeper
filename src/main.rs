@@ -3469,8 +3469,16 @@ fn service(spans: &[f64], every: f64, duration: Option<f64>,
                         println!("    {}", line);
                     }
                     println!("    status: {}", path.display());
-                    println!("    it will look again at the next boot, or when you \
-                              run: rc-service radbeeper start");
+                    // The retry, in this machine's words: a boot service has
+                    // a next boot and an rc-service; a Mac has neither.
+                    if cfg!(target_os = "linux") {
+                        println!("    it will look again at the next boot, or when you \
+                                  run: rc-service radbeeper start");
+                    } else {
+                        println!("    {}", counter::next_step());
+                        println!("    it looks again when it is next started: open RadBeeper, \
+                                  or run: radbeeper service");
+                    }
                     return 0;
                 }
                 if !waiting {
@@ -4254,13 +4262,16 @@ fn probe_cmd(devices: &[String], baud: Option<u32>, dir: &Path, cpm_per_usvh: f6
             for line in e.detail.lines() {
                 eprintln!("    {}", line);
             }
+            if !e.busy {
+                eprintln!("    {}", counter::next_step());
+            }
         }
         return 1;
     }
     if shown > free.len() {
         println!();
         println!("battery and clock of a served counter need the port itself:");
-        println!("    doas rc-service radbeeper stop");
+        println!("    {}", counter::stop_hint());
         println!("radbeeper watch attaches to the service -- no handover needed");
     }
     0
@@ -6138,6 +6149,9 @@ fn main() {
                 for line in e.detail.lines() {
                     eprintln!("    {}", line);
                 }
+                if !e.busy {
+                    eprintln!("    {}", counter::next_step());
+                }
                 std::process::exit(1);
             }
         };
@@ -6184,7 +6198,7 @@ fn main() {
                     println!("held by    the radbeeper serving {}",
                              broker::socket_path(&dir).display());
                     println!("           battery and clock need the port itself:");
-                    println!("           doas rc-service radbeeper stop");
+                    println!("           {}", counter::stop_hint());
                     println!("reading    radbeeper watch  attaches to it -- no handover needed");
                     return;
                 }
@@ -6192,6 +6206,9 @@ fn main() {
             eprintln!("{}: {}", if e.busy { "port busy" } else { "no counter" }, e.reason);
             for line in e.detail.lines() {
                 eprintln!("    {}", line);
+            }
+            if !e.busy {
+                eprintln!("    {}", counter::next_step());
             }
             std::process::exit(1);
         }

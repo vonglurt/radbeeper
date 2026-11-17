@@ -1203,6 +1203,16 @@ fn main() -> iced::Result {
         .run()
 }
 
+/// The second thing the empty window says: how the counter gets read here.
+#[cfg(target_os = "linux")]
+const NO_COUNTER_HELP: &str =
+    "plug the counter in and switch it on \u{b7} then: doas rc-service radbeeper start, or radbeeper service";
+#[cfg(target_os = "macos")]
+const NO_COUNTER_HELP: &str =
+    "plug the counter in with its own USB cable and switch it on \u{b7} RadBeeper starts reading it within half a minute";
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+const NO_COUNTER_HELP: &str = "plug the counter in and switch it on \u{b7} then run: radbeeper service";
+
 /// The part of the window's settings that is the platform's own.
 ///
 /// Linux has the application id; a Mac's window has no such field, and the
@@ -1703,6 +1713,15 @@ impl App {
                 column![
                     text("no counter").size(30).color(self.skin.dim),
                     text(self.adrift.clone()).size(13).color(self.skin.dim),
+                    // WHAT TO DO ABOUT IT, because "nothing is serving a
+                    // socket" is a fact about the program and the person
+                    // has a counter in their hand. The window never opens
+                    // the port; something has to be reading the counter for
+                    // it to draw, and what starts that differs by machine.
+                    text(NO_COUNTER_HELP).size(13).color(self.skin.dim),
+                    text("this window picks the counter up by itself when something is reading it")
+                        .size(13)
+                        .color(self.skin.dim),
                 ]
                 .spacing(6)
                 .align_x(iced::Center),
