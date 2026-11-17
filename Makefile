@@ -386,32 +386,47 @@ menu:
 	@command -v update-desktop-database >/dev/null 2>&1 \
 	  && update-desktop-database -q "$(PREFIX)/share/applications" 2>/dev/null || true
 
-## app: RadBeeper.app, for a Mac: the window, the program, and a double click
-# BUILT FROM WHAT IS ALREADY BUILT, with the tools every Mac has: the icon is
-# the same drawing as the Linux one, turned into an .icns by qlmanage, sips
-# and iconutil. If any of the three is missing the app is made without an
-# icon and says so. Files are written over the ones already there and
-# nothing is taken away, so an app that is open is replaced at its next start.
+## app: two apps for a Mac: the window, and the monitor in a Terminal
+# TWO ICONS, BECAUSE THEY ARE TWO THINGS TO OPEN. RadBeeper.app is the
+# window. RadBeeper Monitor.app is the terminal program, for whoever would
+# sooner have that: it asks Terminal for a window and runs the monitor in
+# it. Each carries its own copy of the program, so either can be dragged to
+# another Mac alone, and each starts the service if nothing is serving -- see
+# packaging/RadBeeper.sh and packaging/watch.command.
+#
+# BUILT FROM WHAT IS ALREADY BUILT, with the tools every Mac has: each icon
+# is a drawing in packaging/ turned into an .icns by packaging/mkicns.sh. If
+# that fails the app is made without an icon and says so. Files are written
+# over the ones already there and nothing is taken away, so an app that is
+# open is replaced at its next start.
 APPDIR ?= /Applications
 APP = $(APPDIR)/RadBeeper.app
+MONAPP = $(APPDIR)/RadBeeper Monitor.app
 ICONTMP = target/icon
+APPVERSION = $$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 app: build gui-build
-	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources" $(ICONTMP)/radbeeper.iconset
+	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
 	@install -m 0755 packaging/RadBeeper.sh "$(APP)/Contents/MacOS/RadBeeper"
 	@install -m 0755 $(GUIBIN) "$(APP)/Contents/MacOS/radbeeper-gui"
 	@# NOT `radbeeper`: a Mac's disk does not tell RadBeeper from radbeeper,
 	@# and the program written under that name replaced the launcher beside it.
 	@install -m 0755 $(BIN) "$(APP)/Contents/MacOS/radbeeper-cli"
-	@sed "s/@VERSION@/$$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)/" \
+	@sed -e "s/@VERSION@/$(APPVERSION)/" -e "s/@NAME@/RadBeeper/" -e "s/@ID@/radbeeper/" \
+	  -e "s/@EXEC@/RadBeeper/" -e "s/@ICON@/radbeeper/" \
 	  packaging/Info.plist > "$(APP)/Contents/Info.plist"
-	@qlmanage -t -s 1024 -o $(ICONTMP) packaging/radbeeper.svg >/dev/null 2>&1 \
-	  && for s in 16 32 128 256 512; do \
-	       sips -z $$s $$s $(ICONTMP)/radbeeper.svg.png --out $(ICONTMP)/radbeeper.iconset/icon_$${s}x$${s}.png >/dev/null; \
-	       sips -z $$((s*2)) $$((s*2)) $(ICONTMP)/radbeeper.svg.png --out $(ICONTMP)/radbeeper.iconset/icon_$${s}x$${s}@2x.png >/dev/null; \
-	     done \
-	  && iconutil -c icns $(ICONTMP)/radbeeper.iconset -o "$(APP)/Contents/Resources/radbeeper.icns" \
-	  || echo "  no icon -- qlmanage, sips or iconutil would not make one"
+	@sh packaging/mkicns.sh packaging/radbeeper.svg "$(APP)/Contents/Resources/radbeeper.icns" $(ICONTMP) \
+	  || echo "  no icon for the window's app -- qlmanage, sips or iconutil would not make one"
 	@echo "installed $(APP) -- double click it, or: open '$(APP)'"
+	@mkdir -p "$(MONAPP)/Contents/MacOS" "$(MONAPP)/Contents/Resources"
+	@install -m 0755 packaging/RadBeeperMonitor.sh "$(MONAPP)/Contents/MacOS/RadBeeperMonitor"
+	@install -m 0755 packaging/watch.command "$(MONAPP)/Contents/MacOS/watch.command"
+	@install -m 0755 $(BIN) "$(MONAPP)/Contents/MacOS/radbeeper-cli"
+	@sed -e "s/@VERSION@/$(APPVERSION)/" -e "s/@NAME@/RadBeeper Monitor/" -e "s/@ID@/radbeeper-monitor/" \
+	  -e "s/@EXEC@/RadBeeperMonitor/" -e "s/@ICON@/radbeeper-monitor/" \
+	  packaging/Info.plist > "$(MONAPP)/Contents/Info.plist"
+	@sh packaging/mkicns.sh packaging/radbeeper-monitor.svg "$(MONAPP)/Contents/Resources/radbeeper-monitor.icns" $(ICONTMP) \
+	  || echo "  no icon for the monitor's app -- qlmanage, sips or iconutil would not make one"
+	@echo "installed $(MONAPP) -- the monitor, in a Terminal window"
 
 ## gui-shots: re-take both themes and the squeezed layout
 # Each theme is a fresh window: the panel reads the desktop's theme once, at

@@ -64,7 +64,7 @@ the window alone. Where the window goes:
 | | |
 |---|---|
 | **Copal, and any Linux desktop** | `radbeeper-gui` beside `radbeeper`, and a **RadBeeper** entry in the launcher. |
-| **macOS** | **RadBeeper.app** in `/Applications`. Double click it: it starts the logging if nothing is running, leaves it running when the window is closed, and opens the window. |
+| **macOS** | Two apps in `/Applications`. **RadBeeper** is the window. **RadBeeper Monitor** is the same counter in a Terminal window. Double click either: it starts the logging if nothing is running, leaves it running when you close it, and opens. |
 
 **The released version, on Linux:**
 
@@ -90,7 +90,7 @@ radbeeper-gui        # or the same counter in a window
 
 **The window needs the service running**: it draws what the service reads and
 never opens the port itself. On Copal the service starts at boot; on a Mac,
-RadBeeper.app starts it for you; anywhere else, start it first. The monitor
+either app starts it for you; anywhere else, start it first. The monitor
 reads the counter directly when no service is running.
 
 The monitor and the window can be opened and closed as often as you like. The

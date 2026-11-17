@@ -2,11 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleName</key><string>RadBeeper</string>
-	<key>CFBundleDisplayName</key><string>RadBeeper</string>
-	<key>CFBundleIdentifier</key><string>org.sdf.paulr.radbeeper</string>
-	<key>CFBundleExecutable</key><string>RadBeeper</string>
-	<key>CFBundleIconFile</key><string>radbeeper</string>
+	<key>CFBundleName</key><string>@NAME@</string>
+	<key>CFBundleDisplayName</key><string>@NAME@</string>
+	<key>CFBundleIdentifier</key><string>org.sdf.paulr.@ID@</string>
+	<key>CFBundleExecutable</key><string>@EXEC@</string>
+	<key>CFBundleIconFile</key><string>@ICON@</string>
 	<key>CFBundlePackageType</key><string>APPL</string>
 	<key>CFBundleShortVersionString</key><string>@VERSION@</string>
 	<key>CFBundleVersion</key><string>@VERSION@</string>
