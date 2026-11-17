@@ -190,7 +190,7 @@ description</a> has the rest.</p></div>
 <pre><code class="language-sh">git clone https://github.com/vonglurt/radbeeper &amp;&amp; cd radbeeper
 make install         # the program on PATH, and the window where the desktop looks for it</code></pre>
 <p>That one command installs both. The window is a second, larger build; if it does not build, the program is still installed and the reason is printed. <code>make install NOGUI=1</code> installs the program alone, and <code>make gui-install</code> the window alone. Where the window goes:</p>
-<table><tbody><tr><td><strong>Copal, and any Linux desktop</strong></td><td><code>radbeeper-gui</code> beside <code>radbeeper</code>, and a <strong>RadBeeper</strong> entry in the launcher.</td></tr><tr><td><strong>macOS</strong></td><td><strong>RadBeeper.app</strong> in <code>/Applications</code>. Double click it: it starts the logging if nothing is running, leaves it running when the window is closed, and opens the window.</td></tr></tbody></table>
+<table><tbody><tr><td><strong>Copal, and any Linux desktop</strong></td><td><code>radbeeper-gui</code> beside <code>radbeeper</code>, and a <strong>RadBeeper</strong> entry in the launcher.</td></tr><tr><td><strong>macOS</strong></td><td>Two apps in <code>/Applications</code>. <strong>RadBeeper</strong> is the window. <strong>RadBeeper Monitor</strong> is the same counter in a Terminal window. Double click either: it starts the logging if nothing is running, leaves it running when you close it, and opens.</td></tr></tbody></table>
 <p><strong>The released version, on Linux:</strong></p>
 <pre><code class="language-sh">cargo install radbeeper            # or a ready-made binary from the releases page</code></pre>
 <p><strong>On Copal</strong> the program is built from <code>~/code/radbeeper</code> and the service is set up to start at boot; <code>copal-build radbeeper</code> rebuilds it.</p>
@@ -201,7 +201,7 @@ make install         # the program on PATH, and the window where the desktop loo
 radbeeper service    # read and log every counter, and serve the others; leave it running
 radbeeper watch      # the monitor, in a terminal -- q to quit
 radbeeper-gui        # or the same counter in a window</code></pre>
-<p><strong>The window needs the service running</strong>: it draws what the service reads and never opens the port itself. On Copal the service starts at boot; on a Mac, RadBeeper.app starts it for you; anywhere else, start it first. The monitor reads the counter directly when no service is running.</p>
+<p><strong>The window needs the service running</strong>: it draws what the service reads and never opens the port itself. On Copal the service starts at boot; on a Mac, either app starts it for you; anywhere else, start it first. The monitor reads the counter directly when no service is running.</p>
 <p>The monitor and the window can be opened and closed as often as you like. The logging carries on underneath and does not miss a second.</p>
 <hr>
 <h2 id="the-log">The log</h2>
