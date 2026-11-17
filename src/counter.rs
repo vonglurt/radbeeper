@@ -157,6 +157,16 @@ pub fn decode_temp(r: &[u8]) -> TempAnswer {
     if r[0] == 85 && r[1] == 0 && r[2] == 0 {
         return TempAnswer::NotYet;
     }
+    // AND NEITHER IS MINUS NOUGHT. The +V4 Re 4.83 answered 00 00 01 AA --
+    // no degrees, no tenths, and the sign set -- seven times in its first
+    // 375 readings in service (2026-11-16), each between two readings of
+    // 26 C. There is no temperature below nought and equal to it. It was
+    // written to the log as -0.0 and passed on as the room's temperature
+    // before anybody looked. Like 85.0 it is the thermometer having nothing
+    // to give that time, and the next answer is real.
+    if r[0] == 0 && r[1] == 0 && r[2] != 0 {
+        return TempAnswer::NotYet;
+    }
     // Tenths as a whole number and ONE division, so 1A 01 is the double
     // nearest 26.1 and not a sum that lands one bit beside it.
     let v = (r[0] as f64 * 10.0 + r[1] as f64) / 10.0;
@@ -702,6 +712,14 @@ mod tests {
         // 85.1 would be a reading, absurd as it is: only the exact resting
         // value is refused.
         assert_eq!(decode_temp(&[0x55, 0x01, 0x00, 0xAA]), TempAnswer::Degrees(85.1));
+    }
+
+    #[test]
+    fn minus_nought_is_not_a_reading_either() {
+        assert_eq!(decode_temp(&[0x00, 0x00, 0x01, 0xAA]), TempAnswer::NotYet);
+        // Nought itself is a temperature, and so is a tenth below it.
+        assert_eq!(decode_temp(&[0x00, 0x00, 0x00, 0xAA]), TempAnswer::Degrees(0.0));
+        assert_eq!(decode_temp(&[0x00, 0x01, 0x01, 0xAA]), TempAnswer::Degrees(-0.1));
     }
 
     #[test]

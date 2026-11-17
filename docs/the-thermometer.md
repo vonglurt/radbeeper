@@ -70,6 +70,13 @@ established, and the handling does not depend on it. The exact answer 85.0 is
 treated as "not yet": it is never logged, and the question is put again two
 seconds later.
 
+There is a second one. In its first 375 readings in service the +V4 Re 4.83
+answered `00 00 01 AA` seven times: no degrees, no tenths, and the sign set,
+which decodes as minus nought. Each came between two readings of 26 °C. It
+was logged as `-0.0` until it was noticed on 16 November; it is now treated
+the same way as 85.0. Those seven rows are still in that counter's
+temperature log for the day.
+
 The +V4 Re 4.83 answered 85.0 once on 15 November. Asked again on 16 November
 it gave 25.7 °C, idle and mid-stream, every time.
 
