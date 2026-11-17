@@ -115,14 +115,31 @@ clippy:
 	$(CARGO) clippy --all-targets --locked \
 	  -- -D clippy::correctness -D clippy::suspicious
 
-## install: cargo install it, so `radbeeper` on PATH is the native one
+## install: the program on PATH, and the window where the desktop looks for it
+# ONE COMMAND INSTALLS WHAT A PERSON MEANS BY "RADBEEPER". It used to be the
+# program alone, and the window was a second command that somebody had to
+# know to ask for: on Copal there was no entry in the launcher, and on a Mac
+# nothing to double click, after an install that said it had succeeded. So
+# this installs the program and then the window with it -- `gui-install`,
+# which is the binary, the launcher's entry on Linux and RadBeeper.app on a
+# Mac.
+#
+# THE WINDOW IS ATTEMPTED, NOT REQUIRED. It is a second crate with a
+# graphics toolkit under it: a quarter of an hour to build on a small
+# machine, and no use at all on one with no screen. If it does not build the
+# program is still installed, the reason is printed, and on Linux the
+# launcher gets the monitor in a terminal in its place. NOGUI=1 does not try.
 install:
 	$(CARGO) install --path . --locked --force
 	@printf '  installed the native binary; `which radbeeper` says where\n'
-	@# A menu entry too, where there is a menu: the monitor in a terminal,
-	@# unless the window's own entry is already there. See `menu`.
-	@if [ "$$(uname -s)" != Darwin ] && [ ! -f "$(PREFIX)/share/applications/radbeeper-gui.desktop" ]; then \
-	  $(MAKE) --no-print-directory menu MENU=radbeeper-watch; fi
+	@if [ -n "$(NOGUI)" ]; then \
+	  echo "  NOGUI is set -- the window is not built"; false; \
+	else \
+	  $(MAKE) --no-print-directory gui-install; \
+	fi \
+	|| { [ -n "$(NOGUI)" ] || echo "  the window did not build -- the program is installed without it; make gui-install shows why"; \
+	     [ "$$(uname -s)" = Darwin ] || [ -f "$(PREFIX)/share/applications/radbeeper-gui.desktop" ] \
+	       || $(MAKE) --no-print-directory menu MENU=radbeeper-watch; }
 
 ## uninstall: remove it again
 uninstall:

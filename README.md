@@ -53,11 +53,13 @@ them. For the new parts, build from source.
 
 ```sh
 git clone https://github.com/vonglurt/radbeeper && cd radbeeper
-make install         # the program, on PATH; on Linux, a menu entry for the monitor
-make gui-install     # the window too
+make install         # the program on PATH, and the window where the desktop looks for it
 ```
 
-`make gui-install` puts the window where the desktop looks for it:
+That one command installs both. The window is a second, larger build; if it
+does not build, the program is still installed and the reason is printed.
+`make install NOGUI=1` installs the program alone, and `make gui-install`
+the window alone. Where the window goes:
 
 | | |
 |---|---|
