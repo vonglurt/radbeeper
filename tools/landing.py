@@ -278,9 +278,19 @@ h1{font-size:2.6rem;line-height:1.12;margin:0 0 .75rem;letter-spacing:-.02em}
 .badges li{font:.8rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
 border:1px solid var(--line);border-radius:999px;padding:.45rem .8rem;color:var(--dim)}
 .cta{display:flex;flex-wrap:wrap;gap:.6rem}
-.cta a{display:inline-block;text-decoration:none;border-radius:.4rem;
-padding:.6rem 1.1rem;font-weight:600;font-size:.95rem;border:1px solid var(--line)}
-.cta a.primary{background:var(--accent);color:var(--bg);border-color:var(--accent)}
+.cta a{display:inline-flex;align-items:center;justify-content:center;min-height:2.6rem;
+padding:.55rem 1.15rem;font:700 .82rem/1 ui-monospace,SFMono-Regular,Menlo,monospace;
+letter-spacing:.12em;text-transform:uppercase;text-decoration:none;color:var(--fg);
+border:1px solid var(--line);border-radius:999px;
+background:repeating-linear-gradient(180deg,rgba(255,255,255,.06) 0 1px,transparent 1px 3px),var(--card);
+box-shadow:inset 0 1px 0 rgba(255,255,255,.14),0 2px 6px rgba(0,0,0,.25);
+transition:transform .08s,filter .15s}
+.cta a:hover{filter:brightness(1.07)}
+.cta a:active{transform:translateY(1px)}
+.cta a.primary{color:#004712;text-shadow:0 1px 0 rgba(255,255,255,.55);border-color:#2c7a34;
+background:repeating-linear-gradient(180deg,rgba(255,255,255,.08) 0 1px,transparent 1px 3px),
+linear-gradient(180deg,#5fae66 0,#c4ffc8 5%,#9effa8 10%,#4fc95c 90%,#2c7a34 100%);
+box-shadow:inset 0 1px 0 rgba(255,255,255,.9),0 0 18px rgba(51,242,77,.45),0 2px 6px rgba(0,0,0,.35)}
 .facts{display:grid;gap:1rem;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));
 padding:2rem 0;border-bottom:1px solid var(--line)}
 .fact{background:var(--card);border:1px solid var(--line);border-radius:.5rem;padding:1rem 1.1rem}
@@ -370,22 +380,26 @@ def json_str(s):
 HERO = """<header class="hero"><div class="wrap">
 <p class="eyebrow">GQ GMC-320 Plus &middot; USB &middot; Linux</p>
 <h1>See what your Geiger counter is counting, and keep a record of it</h1>
-<p class="lede">Plug in a <strong>GQ GMC-320 Plus</strong>, switch it on, and
-RadBeeper finds it. It shows the reading at a glance, in a terminal or a
-window, logs it whether or not you are watching, and builds a web page you
-can publish. Its <strong>drum spectrogram</strong> shows whether anything is
-reaching the counter on a schedule, which radiation never does.</p>
+<p class="lede">RadBeeper reads a <strong>GQ GMC-320 Plus</strong> over USB.
+It shows the reading at a glance, in a terminal or a window, logs it every
+thirty seconds whether or not you are watching, and builds a web page you can
+publish. Its <strong>drum spectrogram</strong> shows whether anything is
+reaching the counter on a schedule, which radiation never does. And it reads
+the counter's <strong>thermometer</strong>, so a counter on a machine of a
+Copal fleet is that room's temperature sensor too.</p>
 <ul class="badges">
-<li>Free, MIT</li><li>One command to install</li><li>Terminal and window</li>
+<li>Free, MIT</li><li>USB</li><li>Terminal and window</li>
 <li>Alpine &amp; Copal Linux</li><li>One counter or several</li>
 </ul>
 <div class="cta">
-<a class="primary" href="#get-started">Get started</a>
-<a href="monitor.html">See a live counter's report</a>
+<a class="primary" href="#install">Install</a>
+<a href="docs/tour.html">A tour</a>
+<a href="monitor.html">Live report</a>
 <a href="drums.html">Days and months</a>
-<a href="docs/reading-the-drum-spectrogram.html">The drum spectrogram</a>
-<a href="docs/technical-description.html">How it works</a>
-<a href="%s">Source</a>
+<a href="docs/reading-the-drum-spectrogram.html">Drum spectrogram</a>
+<a href="docs/architecture.html">Architecture</a>
+<a href="docs/technical-description.html#the-lab-reports">Lab reports</a>
+<a href="%s">GitHub</a>
 </div>
 <picture class="drum">
 <source srcset="docs/screenshots/gui-drum-dark.gif" media="(prefers-color-scheme: dark)">

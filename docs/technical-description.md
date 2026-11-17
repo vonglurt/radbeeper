@@ -395,6 +395,8 @@ properly, with the arithmetic, the failures that shaped it, and the prior art.
 | [The cascade strip](cascade.md) | chained dyadic time compression: its invariants, its arithmetic, the prior art from RRDtool to exponential histograms, and what to call it |
 | [The spectrum](the-spectrum.md) | why flat is the good answer, how windows are accumulated, and why a peak is not called on sigma alone |
 | [The drum spectrogram](the-drum-spectrogram.md) | the trail over the window's spectrum: a row every 8 seconds, joined from the spectrum's three windows, laid up the panel like a seismograph's paper; the thermal pen, the gain that sets its own top, the flow from the port to the pixel, and how long a ridge luck draws |
+| [The architecture](architecture.md) | the whole program top down, with excerpts and links to the code on main, and a review of the design |
+| [A user experience review](user-experience-review.md) | installing and using it, command by command and screen by screen, with what to fix first |
 | [The thermometer](the-thermometer.md) | the counter's temperature asked in the middle of its count stream: the 85.0 that is not a reading, the proof that no count is lost, the temperature file, and `radbeeper now` |
 | [Random numbers out of decay](the-random.md) | where the bits come from, three ways this is normally done wrong, and why the model was replaced by a measurement |
 | [Running it](running-it.md) | the boot service, one log directory two programs can both write, and publishing without a build step |
